@@ -120,6 +120,54 @@ class SpeechStyleDetectorTests(unittest.TestCase):
             self.detector.classify_and_observe("new", -31.0),
         )
 
+    def test_a_stable_gain_shift_eventually_becomes_the_new_normal(self):
+        for style, shifted in (
+            (SHOUT_STYLE, (-11.0, -10.5, -11.5, -10.0, -11.0)),
+            (WHISPER_STYLE, (-31.0, -30.5, -31.5, -30.0, -31.0)),
+        ):
+            with self.subTest(style=style):
+                detector = SpeechStyleDetector()
+                for variation in (-1.0, 0.5, 0.0):
+                    detector.classify_and_observe("mira", -20.0 + variation)
+
+                observed = [
+                    detector.classify_and_observe("mira", level)
+                    for level in shifted
+                ]
+
+                self.assertEqual([style] * 4 + [NORMAL_STYLE], observed)
+                self.assertEqual(
+                    NORMAL_STYLE,
+                    detector.classify_and_observe("mira", shifted[-1]),
+                )
+
+    def test_one_normal_utterance_cancels_a_possible_gain_shift(self):
+        self._calibrate("mira")
+        for level in (-11.0, -10.5, -11.5, -10.0):
+            self.assertEqual(
+                SHOUT_STYLE,
+                self.detector.classify_and_observe("mira", level),
+            )
+
+        self.assertEqual(
+            NORMAL_STYLE,
+            self.detector.classify_and_observe("mira", -20.0),
+        )
+        for level in (-11.0, -10.5, -11.5, -10.0):
+            self.assertEqual(
+                SHOUT_STYLE,
+                self.detector.classify_and_observe("mira", level),
+            )
+
+    def test_retain_forgets_speakers_outside_the_current_roster(self):
+        self._calibrate("mira")
+        self._calibrate("drex")
+
+        self.detector.retain(("drex",))
+
+        self.assertNotIn("mira", self.detector._speakers)
+        self.assertIn("drex", self.detector._speakers)
+
     def test_forget_restarts_calibration(self):
         self._calibrate("mira")
         self.assertEqual(

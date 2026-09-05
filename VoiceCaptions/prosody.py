@@ -28,6 +28,7 @@ SHOUT_STYLE: Final[str] = "shout"
 _SAMPLE_MAX = 32_768.0
 _FRAME_SAMPLES = 320  # 20 ms at the pipeline's fixed 16 kHz sample rate.
 _MIN_DBFS = -96.0
+_BASELINE_WINDOW = 12
 
 
 def speech_level_dbfs(pcm: bytes | bytearray | memoryview) -> float | None:
@@ -77,7 +78,11 @@ def speech_level_dbfs(pcm: bytes | bytearray | memoryview) -> float | None:
 
 @dataclass(slots=True)
 class _SpeakerBaseline:
-    levels: deque[float] = field(default_factory=lambda: deque(maxlen=12))
+    levels: deque[float] = field(
+        default_factory=lambda: deque(maxlen=_BASELINE_WINDOW)
+    )
+    shifted_style: str | None = None
+    shifted_levels: list[float] = field(default_factory=list)
 
 
 class SpeechStyleDetector:
@@ -91,12 +96,25 @@ class SpeechStyleDetector:
         shout_delta_db: float = 8.0,
         bootstrap_whisper_dbfs: float = -46.0,
         bootstrap_shout_dbfs: float = -7.0,
+        rebase_after_samples: int = 5,
+        rebase_max_spread_db: float = 3.0,
         maximum_speakers: int = 64,
     ) -> None:
-        if minimum_baseline_samples < 1:
-            raise ValueError("minimum_baseline_samples must be positive")
+        if not 1 <= minimum_baseline_samples <= _BASELINE_WINDOW:
+            raise ValueError(
+                "minimum_baseline_samples must fit the baseline window"
+            )
         if whisper_delta_db >= 0 or shout_delta_db <= 0:
             raise ValueError("relative thresholds must straddle zero")
+        if rebase_after_samples < 3 or rebase_after_samples > _BASELINE_WINDOW:
+            raise ValueError("rebase_after_samples must be between 3 and 12")
+        if (
+            isinstance(rebase_max_spread_db, bool)
+            or not isinstance(rebase_max_spread_db, (int, float))
+            or not math.isfinite(rebase_max_spread_db)
+            or rebase_max_spread_db <= 0
+        ):
+            raise ValueError("rebase_max_spread_db must be positive")
         if maximum_speakers < 1:
             raise ValueError("maximum_speakers must be positive")
         self.minimum_baseline_samples = minimum_baseline_samples
@@ -104,8 +122,49 @@ class SpeechStyleDetector:
         self.shout_delta_db = float(shout_delta_db)
         self.bootstrap_whisper_dbfs = float(bootstrap_whisper_dbfs)
         self.bootstrap_shout_dbfs = float(bootstrap_shout_dbfs)
+        self.rebase_after_samples = rebase_after_samples
+        self.rebase_max_spread_db = float(rebase_max_spread_db)
         self.maximum_speakers = maximum_speakers
         self._speakers: dict[str, _SpeakerBaseline] = {}
+
+    def _observe_shift(
+        self,
+        baseline: _SpeakerBaseline,
+        style: str,
+        level: float,
+    ) -> bool:
+        """Return true after a stable run proves the input gain moved.
+
+        One loud or quiet utterance remains emphasis and never changes the
+        normal reference. A run of tightly clustered outliers is different:
+        that is also the shape of a microphone gain or Discord normalization
+        change, so the detector eventually adopts it as the new reference.
+        """
+
+        candidate = baseline.shifted_levels
+        if (
+            baseline.shifted_style != style
+            or (
+                candidate
+                and max(max(candidate), level) - min(min(candidate), level)
+                > self.rebase_max_spread_db
+            )
+        ):
+            baseline.shifted_style = style
+            candidate.clear()
+        candidate.append(level)
+        if len(candidate) < self.rebase_after_samples:
+            return False
+        baseline.levels.clear()
+        baseline.levels.extend(candidate)
+        baseline.shifted_style = None
+        candidate.clear()
+        return True
+
+    @staticmethod
+    def _clear_shift(baseline: _SpeakerBaseline) -> None:
+        baseline.shifted_style = None
+        baseline.shifted_levels.clear()
 
     def classify_and_observe(self, speaker_id: str, level_dbfs: float | None) -> str:
         """Classify one new utterance and update the bounded normal baseline."""
@@ -133,16 +192,38 @@ class SpeechStyleDetector:
             reference = float(statistics.median(baseline.levels))
             difference = level - reference
             if difference <= self.whisper_delta_db:
-                return WHISPER_STYLE
+                style = WHISPER_STYLE
+                return (
+                    NORMAL_STYLE
+                    if self._observe_shift(baseline, style, level)
+                    else style
+                )
             if difference >= self.shout_delta_db:
-                return SHOUT_STYLE
+                style = SHOUT_STYLE
+                return (
+                    NORMAL_STYLE
+                    if self._observe_shift(baseline, style, level)
+                    else style
+                )
         else:
             if level <= self.bootstrap_whisper_dbfs:
-                return WHISPER_STYLE
+                style = WHISPER_STYLE
+                return (
+                    NORMAL_STYLE
+                    if self._observe_shift(baseline, style, level)
+                    else style
+                )
             if level >= self.bootstrap_shout_dbfs:
-                return SHOUT_STYLE
+                style = SHOUT_STYLE
+                return (
+                    NORMAL_STYLE
+                    if self._observe_shift(baseline, style, level)
+                    else style
+                )
 
-        # Styled outliers do not drag the normal reference toward themselves.
+        # A normal sample ends a possible gain-shift run and updates the
+        # rolling reference.
+        self._clear_shift(baseline)
         baseline.levels.append(level)
         return NORMAL_STYLE
 
@@ -150,6 +231,14 @@ class SpeechStyleDetector:
         """Drop one speaker's derived baseline when their session ends."""
 
         self._speakers.pop(speaker_id, None)
+
+    def retain(self, speaker_ids: tuple[str, ...]) -> None:
+        """Drop baselines for speakers outside an authoritative roster."""
+
+        retained = set(speaker_ids)
+        for speaker_id in tuple(self._speakers):
+            if speaker_id not in retained:
+                self._speakers.pop(speaker_id, None)
 
     def clear(self) -> None:
         self._speakers.clear()

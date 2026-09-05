@@ -33,7 +33,8 @@ class CaptionWorkerImageTests(unittest.TestCase):
         for source in (
             "GuildHub/host.py", "GuildHub/worker_health.py",
             "GuildHub/quick_chat_worker.py", "VoiceCaptions/coordinator.py",
-            "VoiceCaptions/stt/vocabulary.py", "VoiceCaptions/discord_adapter/src/",
+            "VoiceCaptions/prosody.py", "VoiceCaptions/stt/vocabulary.py",
+            "VoiceCaptions/discord_adapter/src/",
         ):
             self.assertIn(source, self.dockerfile)
         self.assertRegex(self.dockerfile, r"(?m)^USER vemalsears$")

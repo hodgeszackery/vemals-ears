@@ -62,6 +62,7 @@ VEMALS_EARS_MEMBER_APP_FILES = (
     "VoiceCaptions/member_overlay.py",
     "VoiceCaptions/overlay.py",
     "VoiceCaptions/placement.py",
+    "VoiceCaptions/prosody.py",
     "VoiceCaptions/settings.py",
     "VoiceCaptions/speaker_directory.py",
     *VEMALS_EARS_CLIENT_FILES,

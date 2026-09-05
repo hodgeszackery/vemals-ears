@@ -37,7 +37,7 @@ from .settings import default_consent_state_path, default_mapping_state_path
 CONSENT_STATE_PATH_ENV = "CAPTIONS_CONSENT_STATE_PATH"
 MAPPING_STATE_PATH_ENV = "CAPTIONS_MAPPING_STATE_PATH"
 from .events import CaptionEvent, ProtocolEvent, SessionEvent
-from .prosody import SpeechStyleDetector, speech_level_dbfs
+from .prosody import NORMAL_STYLE, SpeechStyleDetector, speech_level_dbfs
 from .stt import AudioSegment, TranscriptResult, TranscriptionService
 from .stt.vocabulary import apply_pronunciations
 from .stt.contracts import (
@@ -1084,6 +1084,8 @@ class VoiceCaptionCoordinator:
         # Keyed by global_sequence, which is unique across every speaker.
         self._parts: dict[int, _SegmentParts] = {}
         self._speech_styles = SpeechStyleDetector()
+        self._speech_style_speakers: set[str] | None = None
+        self._speech_style_suppressed: set[str] = set()
         self._failure: CoordinatorError | None = None
         self._failure_event = asyncio.Event()
         self._closed = False
@@ -1151,10 +1153,34 @@ class VoiceCaptionCoordinator:
                 self._adapter_ready = True
             if envelope.event_type in _VOICE_STATE_TYPES:
                 self._report_voice_state(envelope.event_type)
+            if envelope.event_type in {
+                "consent.declined",
+                "consent.forgotten",
+            }:
+                user_id = envelope.payload.get("userId")
+                if isinstance(user_id, str) and _USER_ID.fullmatch(user_id):
+                    speaker_id = self._speaker_token(user_id)
+                    self._speech_styles.forget(speaker_id)
+                    if (
+                        self._speech_style_speakers is not None
+                        and speaker_id in self._speech_style_speakers
+                    ):
+                        # An STT task already in flight can finish after the
+                        # withdrawal event. Keep it from recreating the
+                        # derived baseline until this person grants again.
+                        self._speech_style_suppressed.add(speaker_id)
+            elif envelope.event_type == "consent.granted":
+                user_id = envelope.payload.get("userId")
+                if isinstance(user_id, str) and _USER_ID.fullmatch(user_id):
+                    self._speech_style_suppressed.discard(
+                        self._speaker_token(user_id)
+                    )
             event = _session_event(envelope)
             if event is not None:
                 if event.state == "stopped":
                     self._speech_styles.clear()
+                    self._speech_style_speakers = set()
+                    self._speech_style_suppressed.clear()
                 self._emit(event)
             capture_blocked = (
                 envelope.event_type == "health.changed"
@@ -1202,10 +1228,13 @@ class VoiceCaptionCoordinator:
             or len(set(participant_ids)) != len(participant_ids)
         ):
             raise CoordinatorError("invalid_audience")
+        tokens = tuple(self._speaker_token(user_id) for user_id in participant_ids)
+        self._speech_styles.retain(tokens)
+        self._speech_style_speakers = set(tokens)
+        self._speech_style_suppressed.intersection_update(tokens)
         update = getattr(self.event_sink, "update_audience", None)
         if not callable(update):
             return
-        tokens = tuple(self._speaker_token(user_id) for user_id in participant_ids)
         try:
             updated = update(generation, revision, tokens)
         except Exception:
@@ -1427,12 +1456,30 @@ class VoiceCaptionCoordinator:
             return
         if parts.speech_style is None:
             utterance_level = next(
-                (level for level in parts.levels[:prefix] if level is not None),
+                (
+                    level
+                    for text, level in zip(
+                        parts.slots[:prefix],
+                        parts.levels[:prefix],
+                    )
+                    if text and text.strip() and level is not None
+                ),
                 None,
             )
-            parts.speech_style = self._speech_styles.classify_and_observe(
-                speaker_id,
-                utterance_level,
+            style_allowed = (
+                speaker_id not in self._speech_style_suppressed
+                and (
+                    self._speech_style_speakers is None
+                    or speaker_id in self._speech_style_speakers
+                )
+            )
+            parts.speech_style = (
+                self._speech_styles.classify_and_observe(
+                    speaker_id,
+                    utterance_level,
+                )
+                if style_allowed
+                else NORMAL_STYLE
             )
         self._emit(
             CaptionEvent(
@@ -1520,6 +1567,8 @@ class VoiceCaptionCoordinator:
         self._segments_by_task.clear()
         self._parts.clear()
         self._speech_styles.clear()
+        self._speech_style_speakers = set()
+        self._speech_style_suppressed.clear()
         await self.stt_service.close()
 
 

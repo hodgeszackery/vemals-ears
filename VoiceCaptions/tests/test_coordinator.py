@@ -648,6 +648,152 @@ class CoordinatorTests(unittest.IsolatedAsyncioTestCase):
         )
         await instance.shutdown()
 
+    async def test_consent_withdrawal_cannot_recreate_style_state_from_inflight_audio(self):
+        lines = EventLines()
+        sink = HostedFakeSink()
+        stt = ConcurrentFakeSTT(hold=True)
+        identity_key = b"prosody-consent-key".ljust(32, b"!")
+        instance = VoiceCaptionCoordinator(stt, sink, identity_key=identity_key)
+        user_id = "111111111111111111"
+        identity = speaker(user_id, "Mira")
+        pcm = tone_pcm(5_000)
+        await instance.feed_line(
+            lines.line(
+                "audience.snapshot",
+                {"generation": 1, "revision": 1, "participantIds": [user_id]},
+            )
+        )
+        await instance.feed_line(
+            lines.line("audio.segment.started", started("one", 1, identity))
+        )
+        await instance.feed_line(
+            lines.line("audio.segment.chunk", chunk("one", 1, 1, pcm))
+        )
+        await instance.feed_line(
+            lines.line(
+                "audio.segment.ended",
+                ended("one", 1, identity, 1, len(pcm)),
+            )
+        )
+        await stt.wait_active(1)
+
+        token = instance._speaker_token(user_id)
+        await instance.feed_line(
+            lines.line(
+                "consent.declined",
+                {"userId": user_id, "session": {"phase": "paused"}},
+            )
+        )
+        stt.release.set()
+        await instance.drain()
+
+        self.assertNotIn(token, instance._speech_styles._speakers)
+        caption_event = next(
+            event for event in sink.events if isinstance(event, CaptionEvent)
+        )
+        self.assertEqual("normal", caption_event.speech_style)
+
+        await instance.feed_line(
+            lines.line(
+                "consent.granted",
+                {"userId": user_id, "session": {"phase": "active"}},
+            )
+        )
+        await instance.feed_line(
+            lines.line("audio.segment.started", started("two", 2, identity))
+        )
+        await instance.feed_line(
+            lines.line("audio.segment.chunk", chunk("two", 2, 1, pcm))
+        )
+        await instance.feed_line(
+            lines.line(
+                "audio.segment.ended",
+                ended("two", 2, identity, 1, len(pcm)),
+            )
+        )
+        await instance.drain()
+        self.assertIn(token, instance._speech_styles._speakers)
+        await instance.shutdown()
+
+    async def test_departed_speaker_cannot_recreate_style_state_from_inflight_audio(self):
+        lines = EventLines()
+        sink = HostedFakeSink()
+        stt = ConcurrentFakeSTT(hold=True)
+        identity_key = b"prosody-roster-key".ljust(32, b"!")
+        instance = VoiceCaptionCoordinator(stt, sink, identity_key=identity_key)
+        alice = "111111111111111111"
+        bob = "222222222222222222"
+        identity = speaker(alice, "Mira")
+        pcm = tone_pcm(5_000)
+        await instance.feed_line(
+            lines.line(
+                "audience.snapshot",
+                {"generation": 1, "revision": 1, "participantIds": [alice, bob]},
+            )
+        )
+        await instance.feed_line(
+            lines.line("audio.segment.started", started("one", 1, identity))
+        )
+        await instance.feed_line(
+            lines.line("audio.segment.chunk", chunk("one", 1, 1, pcm))
+        )
+        await instance.feed_line(
+            lines.line(
+                "audio.segment.ended",
+                ended("one", 1, identity, 1, len(pcm)),
+            )
+        )
+        await stt.wait_active(1)
+
+        await instance.feed_line(
+            lines.line(
+                "audience.snapshot",
+                {"generation": 1, "revision": 2, "participantIds": [bob]},
+            )
+        )
+        stt.release.set()
+        await instance.drain()
+
+        self.assertNotIn(
+            instance._speaker_token(alice),
+            instance._speech_styles._speakers,
+        )
+        await instance.shutdown()
+
+    async def test_empty_stream_part_cannot_style_the_spoken_parts(self):
+        sink = FakeSink()
+        identity = SpeakerIdentity(
+            user_id="111111111111111111",
+            display_name="Mira",
+        )
+        instance = VoiceCaptionCoordinator(
+            ConcurrentFakeSTT(),
+            sink,
+            identity_key=b"prosody-parts-key".ljust(32, b"!"),
+        )
+        token = instance._speaker_token(identity.user_id)
+        for level in (-21.0, -19.5, -20.0):
+            instance._speech_styles.classify_and_observe(token, level)
+
+        instance._complete_part(
+            CompletedSegment(1, 1, 1, identity, bytearray(), 1, False),
+            token,
+            "",
+            -40.0,
+        )
+        instance._complete_part(
+            CompletedSegment(1, 1, 1, identity, bytearray(), 2, True),
+            token,
+            "spoken words",
+            -10.0,
+        )
+
+        caption_event = next(
+            event for event in sink.events if isinstance(event, CaptionEvent)
+        )
+        self.assertEqual("shout", caption_event.speech_style)
+        await instance.shutdown()
+
     async def test_audience_and_link_ids_are_pseudonymized_before_host_calls(self):
         lines = EventLines()
         sink = HostedFakeSink()
