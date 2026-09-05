@@ -3347,6 +3347,11 @@ def own_popup_window(popup: tk.Misc, owner: tk.Misc) -> bool:
         except tk.TclError:
             return False
     try:
+        # On Windows, Tk combines override-redirect and transient into a
+        # WS_CHILD wrapper. Giving that child an owner does not make it an
+        # activatable popup. Let Tk recreate a true top level before setting
+        # its native owner, then resolve the replacement HWND below.
+        popup.transient("")
         popup.update_idletasks()
         popup_hwnd = window_handle(popup)
         owner_hwnd = window_handle(owner)
@@ -4662,8 +4667,23 @@ class ScrollSurface(tk.Frame):
 
     def _on_focus_in(self, event) -> None:
         widget = getattr(event, "widget", None)
-        if self._contains(widget):
-            self.after_idle(lambda target=widget: self.reveal(target))
+        try:
+            # Tk also sends FocusIn to ancestors of the focused control.
+            # Revealing the whole content frame can move a visible button
+            # away from the pointer before its first mouse release.
+            if widget is not self.focus_get() or not self._contains(widget):
+                return
+        except tk.TclError:
+            return
+
+        def reveal_current() -> None:
+            try:
+                if widget is self.focus_get():
+                    self.reveal(widget)
+            except tk.TclError:
+                return
+
+        self.after_idle(reveal_current)
 
     def reveal(self, widget: tk.Widget) -> None:
         try:

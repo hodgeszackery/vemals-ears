@@ -2331,6 +2331,87 @@ class NightwatchUiTests(unittest.TestCase):
         finally:
             root.destroy()
 
+    def scroll_focus_fixture(self):
+        import tkinter as tk
+
+        root = tk.Tk()
+        self.addCleanup(root.destroy)
+        root.withdraw()
+        root.attributes("-alpha", 0.0)
+        root.geometry("400x260+-15000+-15000")
+        outside = tk.Button(root, text="Outside")
+        outside.pack()
+        surface = self.companion.ScrollSurface(root, background="#16181d")
+        surface.pack(fill="both", expand=True)
+        invoked = []
+        first = self.companion.VelvetButton(
+            surface.content, "Visible action", lambda: invoked.append(1),
+            theme=self.companion.get_theme_for_edition(self.companion.MEMBER_EDITION),
+        )
+        first.pack(pady=(60, 0))
+        tk.Frame(surface.content, height=400).pack()
+        last = tk.Button(surface.content, text="Offscreen action")
+        last.pack()
+        root.deiconify()
+        root.update()
+        outside.focus_force()
+        root.update()
+        return root, surface, outside, first, last, invoked
+
+    def test_visible_button_first_click_keeps_viewport_and_invokes_once(self):
+        root, surface, _outside, first, _last, invoked = self.scroll_focus_fixture()
+        before_view = surface.canvas.yview()
+        before_y = first.winfo_rooty()
+        pointer_x = first.winfo_width() // 2
+        pointer_y = before_y + first.winfo_height() // 2
+        first.event_generate("<Enter>", x=pointer_x, y=first.winfo_height() // 2)
+        first.event_generate("<ButtonPress-1>", x=pointer_x, y=first.winfo_height() // 2)
+        # FocusIn also arrives for the content ancestor. It must not scroll
+        # that oversized frame under the stationary pointer between clicks.
+        root.update()
+        release_y = pointer_y - first.winfo_rooty()
+        if not 0 <= release_y < first.winfo_height():
+            first.event_generate("<Leave>", x=pointer_x, y=release_y)
+        first.event_generate("<ButtonRelease-1>", x=pointer_x, y=release_y)
+        root.update()
+
+        self.assertEqual(before_view, surface.canvas.yview())
+        self.assertEqual(before_y, first.winfo_rooty())
+        self.assertIs(first, root.focus_get())
+        self.assertEqual([1], invoked)
+
+    def test_keyboard_tab_still_reveals_the_offscreen_focused_button(self):
+        root, surface, _outside, first, last, _invoked = self.scroll_focus_fixture()
+        first.focus_force()
+        root.update()
+        viewport_bottom = surface.canvas.winfo_rooty() + surface.canvas.winfo_height()
+        self.assertGreater(last.winfo_rooty(), viewport_bottom)
+
+        first.event_generate("<Tab>")
+        root.update()
+
+        self.assertIs(last, root.focus_get())
+        self.assertGreater(surface.canvas.yview()[0], 0.0)
+        self.assertGreaterEqual(last.winfo_rooty(), surface.canvas.winfo_rooty())
+        self.assertLessEqual(last.winfo_rooty() + last.winfo_height(), viewport_bottom)
+
+    def test_queued_reveal_does_not_scroll_after_focus_leaves_the_surface(self):
+        root, surface, outside, _first, last, _invoked = self.scroll_focus_fixture()
+        pending = []
+        before_view = surface.canvas.yview()
+        with mock.patch.object(surface, "after_idle", side_effect=pending.append):
+            last.focus_force()
+            root.update()
+            self.assertTrue(pending, "The focused leaf must schedule a reveal")
+            outside.focus_force()
+            root.update()
+        for callback in pending:
+            callback()
+        root.update()
+
+        self.assertIs(outside, root.focus_get())
+        self.assertEqual(before_view, surface.canvas.yview())
+
     def test_long_quick_chat_error_keeps_the_compact_popup_in_place(self):
         import tkinter as tk
 
@@ -2663,7 +2744,8 @@ class NightwatchUiTests(unittest.TestCase):
             root.update()
             window.open_settings()
             root.update()
-            self.assertEqual(str(root), str(window.menu.transient()))
+            if sys.platform != "win32":
+                self.assertEqual(str(root), str(window.menu.transient()))
             self.assertFalse(bool(window.menu.attributes("-topmost")))
             if sys.platform == "win32":
                 import ctypes
@@ -2679,6 +2761,15 @@ class NightwatchUiTests(unittest.TestCase):
                     int(get_window(child_handle, 4) or 0),
                     "Preferences must be a real Win32-owned popup",
                 )
+                get_style = ctypes.windll.user32.GetWindowLongPtrW
+                get_style.argtypes = [wintypes.HWND, ctypes.c_int]
+                get_style.restype = ctypes.c_ssize_t
+                style = get_style(child_handle, -16)  # GWL_STYLE
+                self.assertTrue(style & 0x80000000, "WS_POPUP is required")
+                self.assertFalse(style & 0x40000000, "WS_CHILD breaks popup activation")
+                ex_style = get_style(child_handle, -20)  # GWL_EXSTYLE
+                self.assertFalse(ex_style & 0x00040000, "No separate taskbar button")
+                self.assertFalse(ex_style & 0x00000008, "No system-wide topmost")
             labels = []
 
             def walk(widget):
@@ -2690,6 +2781,75 @@ class NightwatchUiTests(unittest.TestCase):
             walk(window.menu)
             self.assertIn("Open at sign-in", labels)
             self.assertIn("Keep running when closed", labels)
+        finally:
+            root.destroy()
+
+    @unittest.skipUnless(sys.platform == "win32", "Windows popup styles")
+    def test_popup_ownership_replaces_transient_child_without_moving_controls(self):
+        import ctypes
+        import tkinter as tk
+        from ctypes import wintypes
+
+        user32 = ctypes.windll.user32
+        get_style = user32.GetWindowLongPtrW
+        get_style.argtypes = [wintypes.HWND, ctypes.c_int]
+        get_style.restype = ctypes.c_ssize_t
+        get_window = user32.GetWindow
+        get_window.argtypes = [wintypes.HWND, ctypes.c_uint]
+        get_window.restype = wintypes.HWND
+        root = tk.Tk()
+        root.withdraw()
+        root.attributes("-alpha", 0.0)
+        root.overrideredirect(True)
+        root.geometry("400x200+-16000+-16000")
+        try:
+            root.deiconify()
+            root.update()
+            popup = tk.Toplevel(root)
+            popup.withdraw()
+            popup.attributes("-alpha", 0.0)
+            popup.overrideredirect(True)
+            popup.transient(root)
+            invoked = []
+            button = tk.Button(popup, text="Counter", command=lambda: invoked.append(1))
+            button.pack()
+            popup.geometry("300x110+-15000+-15000")
+            popup.deiconify()
+            root.update()
+            before_handle = self.companion.window_handle(popup)
+            before_geometry = popup.geometry()
+            button.focus_set()
+            before_focus = popup.tk.call("focus", "-lastfor", popup._w)
+            # This is the real Tk/Windows shape that the old GW_OWNER-only
+            # assertion accepted: a desktop child, not an owned top level.
+            self.assertTrue(get_style(before_handle, -16) & 0x40000000)
+
+            self.assertTrue(self.companion.own_popup_window(popup, root))
+            root.update()
+            after_handle = self.companion.window_handle(popup)
+            style = get_style(after_handle, -16)
+            self.assertTrue(style & 0x80000000, "A popup must use WS_POPUP")
+            self.assertFalse(style & 0x40000000, "A popup must not use WS_CHILD")
+            self.assertNotEqual(before_handle, after_handle, "Use Tk's new wrapper")
+            self.assertEqual(
+                self.companion.window_handle(root), int(get_window(after_handle, 4) or 0)
+            )
+            self.assertEqual(before_geometry, popup.geometry())
+            self.assertEqual(before_focus, popup.tk.call("focus", "-lastfor", popup._w))
+            self.assertFalse(get_style(after_handle, -20) & (0x00040000 | 0x00000008))
+            # Production fades after assigning the owner; preview skips it.
+            with mock.patch.object(self.companion, "animations_enabled", return_value=True), \
+                    mock.patch.object(popup, "after", side_effect=lambda _delay, frame: frame()):
+                self.companion.fade_in(popup)
+            self.assertEqual(after_handle, self.companion.window_handle(popup))
+            self.assertEqual(before_geometry, popup.geometry())
+            self.assertEqual(
+                self.companion.window_handle(root), int(get_window(after_handle, 4) or 0)
+            )
+            self.assertFalse(get_style(after_handle, -16) & 0x40000000)
+            self.assertTrue(button.winfo_exists())
+            button.invoke()
+            self.assertEqual([1], invoked)
         finally:
             root.destroy()
 

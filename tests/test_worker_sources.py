@@ -1,6 +1,7 @@
 """Offline source-availability checks for the worker's native dependencies."""
 
 import io
+import json
 import sys
 import tarfile
 import tempfile
@@ -25,6 +26,24 @@ def archive(files):
 
 
 class WorkerSourceTests(unittest.TestCase):
+    def test_repository_source_inventory_accepts_the_current_npm_lock(self):
+        manifest = json.loads((ROOT / "packaging/worker-sources.lock.json").read_text())
+        npm_lock = (ROOT / "VoiceCaptions/discord_adapter/package-lock.json").read_bytes()
+
+        class DownloadReached(Exception):
+            pass
+
+        def stop_before_download(_url):
+            # Exercise the real hash, license, and package coverage checks;
+            # reaching this boundary proves preflight passed without network.
+            raise DownloadReached()
+
+        with tempfile.TemporaryDirectory() as folder:
+            output = Path(folder) / "sources"
+            with self.assertRaises(DownloadReached):
+                worker_sources.stage_sources(manifest, npm_lock, output, stop_before_download)
+            self.assertFalse(output.exists())
+
     def fixture(self, source=None):
         package = b'[package]\nname="hpke-rs"\nversion="0.6.1"\nlicense="MPL-2.0"\n'
         crate = archive({"hpke-rs-0.6.1/Cargo.toml": package,

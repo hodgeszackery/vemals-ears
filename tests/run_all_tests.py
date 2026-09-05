@@ -37,7 +37,7 @@ from ci.test_inventory import PYTHON_TEST_ROOTS  # noqa: E402
 # GPL readiness adds three source/notice modules and exercises archived
 # modified builds, legal UI, and retained-runtime refresh contracts.
 EXPECTED_UNITS = 62
-EXPECTED_TESTS = 1222
+EXPECTED_TESTS = 1227
 
 
 def discover_modules(relative: str, prefix: str) -> list[tuple[str, list[str]]]:
