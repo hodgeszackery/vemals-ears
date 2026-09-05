@@ -406,49 +406,6 @@ function defaultClient() {
   });
 }
 
-function participantIdsAfterVoiceUpdate(session, oldState, newState, botUserId) {
-  const changedUserId = newState.id || oldState.id;
-  if (!changedUserId) {
-    // Test doubles and older callers may not carry the VoiceState id. Keep
-    // the old snapshot fallback for those inputs; real Discord VoiceState
-    // objects always identify the member that changed.
-    const channel = newState.guild.channels.cache.get(session.voiceChannelId);
-    return channel?.isVoiceBased()
-      ? [...channel.members.values()]
-          .filter((participant) => !participant.user.bot)
-          .map((participant) => participant.id)
-      : [];
-  }
-
-  // BaseGuildVoiceChannel.members omits voice states whose GuildMember is
-  // absent from the member cache. The adapter intentionally does not request
-  // the privileged GuildMembers intent, so rebuilding the whole audience from
-  // that projection can make every remaining participant disappear when the
-  // session starter leaves. Apply the one authoritative voice-state delta
-  // instead and leave the rest of the session roster intact.
-  const participantIds = new Set(
-    session.participants.map(({ userId }) => userId),
-  );
-  if (newState.channelId !== session.voiceChannelId) {
-    participantIds.delete(changedUserId);
-    return [...participantIds];
-  }
-
-  const member = newState.member
-    || oldState.member
-    || newState.guild.members?.cache?.get(changedUserId)
-    || null;
-  if (changedUserId === botUserId || member?.user?.bot === true) {
-    participantIds.delete(changedUserId);
-  } else if (participantIds.has(changedUserId) || member?.user?.bot === false) {
-    // An unknown member is never promoted into the consent roster. Existing
-    // participants were already checked when the session began, while a new
-    // participant must resolve to a known non-bot before they can be added.
-    participantIds.add(changedUserId);
-  }
-  return [...participantIds];
-}
-
 export class DiscordAdapterRuntime {
   constructor({
     config,
@@ -1429,12 +1386,15 @@ export class DiscordAdapterRuntime {
     }
     const previousPhase = session.phase;
     const previousParticipants = new Set(session.participants.map(({ userId }) => userId));
-    const participantIds = participantIdsAfterVoiceUpdate(
-      session,
-      oldState,
-      newState,
-      this.client.user?.id,
-    );
+    // discord.js patches guild.voiceStates and GuildMembers before emitting
+    // VoiceStateUpdate. BaseGuildVoiceChannel.members is therefore the
+    // authoritative post-event roster and also repairs any prior local drift.
+    const channel = newState.guild.channels.cache.get(session.voiceChannelId);
+    const participantIds = channel?.isVoiceBased()
+      ? [...channel.members.values()]
+          .filter((participant) => !participant.user.bot)
+          .map((participant) => participant.id)
+      : [];
     const updated = this.sessions.updateParticipants({ guildId, participantIds });
     const remainingParticipants = new Set(
       updated.participants.map(({ userId }) => userId),

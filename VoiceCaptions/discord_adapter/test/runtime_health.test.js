@@ -1,7 +1,13 @@
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
 import test from "node:test";
-import { Events, MessageFlags } from "discord.js";
+import {
+  ChannelType,
+  Client,
+  Events,
+  GatewayIntentBits,
+  MessageFlags,
+} from "discord.js";
 import { VoiceConnectionStatus } from "@discordjs/voice";
 
 import { captionsCommandJson } from "../src/command_schema.js";
@@ -1343,14 +1349,102 @@ test("participant pause is emitted only after Discord capture is destroyed", asy
   assert.equal(sessions.getSession(guildId).phase, "paused");
 });
 
-test("the session starter leaving preserves consented members and capture", async () => {
+test("Discord VoiceStateUpdate preserves remaining consented members and capture", async () => {
   const guildId = "723456789012345678";
   const voiceChannelId = "733456789012345678";
   const controlChannelId = "743456789012345678";
   const starterId = "753456789012345678";
   const remainingId = "763456789012345678";
-  const output = emitterEvents();
-  const client = new FakeClient();
+  const botId = "923456789012345678";
+  const handled = deferred();
+  const output = new JsonlEmitter({
+    writer: {
+      write: (chunk) => {
+        if (JSON.parse(chunk).type === "session.participants.changed") {
+          handled.resolve();
+        }
+      },
+    },
+  });
+  const client = new Client({
+    intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildVoiceStates],
+  });
+  client.user = client.users._add({
+    id: botId,
+    username: "caption-bot",
+    discriminator: "0",
+    avatar: null,
+    bot: true,
+  });
+  const memberPayload = (id, bot = false) => ({
+    user: { id, username: id, discriminator: "0", avatar: null, bot },
+    roles: [guildId],
+    joined_at: "2026-09-05T00:00:00.000Z",
+    deaf: false,
+    mute: false,
+    flags: 0,
+  });
+  const voiceStatePayload = (id) => ({
+    user_id: id,
+    channel_id: voiceChannelId,
+    session_id: `voice-${id}`,
+    deaf: false,
+    mute: false,
+    self_deaf: false,
+    self_mute: false,
+    self_video: false,
+    suppress: false,
+  });
+  const guild = client.guilds._add({
+    id: guildId,
+    name: "Voice cache fixture",
+    unavailable: false,
+    owner_id: starterId,
+    roles: [{
+      id: guildId,
+      name: "@everyone",
+      color: 0,
+      hoist: false,
+      position: 0,
+      permissions: "0",
+      managed: false,
+      mentionable: false,
+    }],
+    emojis: [],
+    stickers: [],
+    features: [],
+    channels: [{
+      id: voiceChannelId,
+      guild_id: guildId,
+      type: ChannelType.GuildVoice,
+      name: "Voice",
+      position: 0,
+      permission_overwrites: [],
+      bitrate: 64_000,
+      user_limit: 0,
+      rtc_region: null,
+      nsfw: false,
+    }],
+    // Discord includes the bot and every user in voice in Guild Create even
+    // without the privileged GuildMembers intent. discord.js then resolves
+    // BaseGuildVoiceChannel.members from these two caches.
+    members: [
+      memberPayload(botId, true),
+      memberPayload(starterId),
+      memberPayload(remainingId),
+    ],
+    voice_states: [
+      voiceStatePayload(botId),
+      voiceStatePayload(starterId),
+      voiceStatePayload(remainingId),
+    ],
+  });
+  const voiceChannel = guild.channels.cache.get(voiceChannelId);
+  const initialParticipantIds = [...voiceChannel.members.values()]
+    .filter((member) => !member.user.bot)
+    .map((member) => member.id);
+  assert.deepEqual(initialParticipantIds, [starterId, remainingId]);
+
   const sessions = new SessionManager({ captureHealthy: true });
   const runtime = new DiscordAdapterRuntime({
     config: {
@@ -1361,7 +1455,7 @@ test("the session starter leaving preserves consented members and capture", asyn
       connectTimeoutMs: 5_000,
       maxSegmentMs: 30_000,
     },
-    emitter: output.emitter,
+    emitter: output,
     audioSink: healthySink(),
     client,
     sessionManager: sessions,
@@ -1372,7 +1466,7 @@ test("the session starter leaving preserves consented members and capture", asyn
     voiceChannelId,
     controlChannelId,
     startedBy: starterId,
-    participantIds: [starterId, remainingId],
+    participantIds: initialParticipantIds,
   });
   sessions.setConsent({ guildId, userId: starterId, granted: true });
   sessions.setConsent({ guildId, userId: remainingId, granted: true });
@@ -1402,26 +1496,21 @@ test("the session starter leaving preserves consented members and capture", asyn
     voiceChannelId,
     connection: { destroy: () => { destroyCount += 1; } },
   });
-  const guild = {
-    id: guildId,
-    // discord.js derives channel.members from voice states that also resolve
-    // to cached GuildMembers. Without the privileged GuildMembers intent, a
-    // remaining voice state can be real while that projection is empty.
-    channels: {
-      cache: new Map([
-        [voiceChannelId, { isVoiceBased: () => true, members: new Map() }],
-      ]),
-    },
-    members: { cache: new Map() },
-  };
-  const starterMember = { id: starterId, user: { id: starterId, bot: false } };
+  // Exercise discord.js's real action: it clones the old VoiceState, patches
+  // the voice-state and member caches, and only then emits VoiceStateUpdate.
+  client.actions.VoiceStateUpdate.handle({
+    ...voiceStatePayload(starterId),
+    guild_id: guildId,
+    channel_id: null,
+    member: memberPayload(starterId),
+  });
+  await handled.promise;
 
-  client.emit(
-    Events.VoiceStateUpdate,
-    { id: starterId, member: starterMember, guild, channelId: voiceChannelId },
-    { id: starterId, member: starterMember, guild, channelId: null },
+  assert.deepEqual(
+    [...voiceChannel.members.keys()],
+    [botId, remainingId],
+    "the real post-action channel roster retains the remaining member",
   );
-  await new Promise((resolve) => setTimeout(resolve, 50));
 
   const session = sessions.getSession(guildId);
   assert.equal(session.phase, "active");
