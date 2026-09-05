@@ -45,6 +45,8 @@ class FakePublisherSink:
         self.routes = []
         self.audiences = []
         self.links = []
+        self.flushes = 0
+        self.flush_accepts = True
 
     def send(
         self,
@@ -71,6 +73,10 @@ class FakePublisherSink:
     def enroll_viewer(self, code, token, ttl_seconds):
         self.enrollments.append((code, token, ttl_seconds))
         return self.accepts
+
+    def flush(self):
+        self.flushes += 1
+        return self.flush_accepts
 
     def close(self):
         self.closed = True
@@ -282,6 +288,7 @@ class WorkerHealthTests(unittest.TestCase):
 
             self.assertTrue(sink.send(SessionEvent("stopped")))
             self.assertEqual(b"ready\n", path.read_bytes())
+            self.assertEqual(1, publisher.flushes)
 
             self.assertTrue(sink.send(SessionEvent("error")))
             self.assertFalse(path.exists())
@@ -304,6 +311,20 @@ class WorkerHealthTests(unittest.TestCase):
             sink = HealthReportingSink(publisher, marker)
             self.assertTrue(sink.send(SessionEvent("ready")))
             sink.close()
+            self.assertFalse(path.exists())
+
+    def test_unconfirmed_stopped_state_fails_closed(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            path = Path(temporary_directory) / "worker.state"
+            marker = WorkerHealthMarker(path)
+            marker.set_state("active")
+            publisher = FakePublisherSink()
+            publisher.flush_accepts = False
+            sink = HealthReportingSink(publisher, marker)
+
+            self.assertFalse(sink.send(SessionEvent("stopped")))
+            self.assertEqual(1, publisher.flushes)
+            self.assertTrue(publisher.closed)
             self.assertFalse(path.exists())
 
     def test_quick_chat_worker_is_proxied_and_closed_with_caption_sink(self):

@@ -12,6 +12,7 @@ import ipaddress
 import json
 import queue
 import threading
+import time
 from dataclasses import dataclass
 from typing import Any, Callable, Protocol
 from urllib.parse import urlsplit, urlunsplit
@@ -51,6 +52,11 @@ class _PendingFrame:
     generation: int = 0
     revision: int = 0
     code: str = ""
+
+
+@dataclass(frozen=True)
+class _FlushBarrier:
+    reached: threading.Event
 
 
 class PublisherConnection(Protocol):
@@ -242,6 +248,32 @@ class RemoteCaptionSink:
             self._failed.set()
             return False
 
+    def flush(self, timeout: float = ACK_TIMEOUT_SECONDS) -> bool:
+        """Wait until every frame accepted before this call has its relay ACK."""
+        if (
+            isinstance(timeout, bool)
+            or not isinstance(timeout, (int, float))
+            or timeout <= 0
+            or timeout > 60
+        ):
+            raise ValueError("flush timeout must be between 0 and 60 seconds")
+        if not self.alive():
+            return False
+        deadline = time.monotonic() + float(timeout)
+        barrier = _FlushBarrier(threading.Event())
+        try:
+            self._pending.put(barrier, timeout=float(timeout))
+        except queue.Full:
+            return False
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return False
+            if barrier.reached.wait(min(0.05, remaining)):
+                return self.alive()
+            if self._failed.is_set() or not self._writer.is_alive():
+                return False
+
     def update_audience(
         self, generation: int, revision: int, viewer_tokens: list[str] | tuple[str, ...]
     ) -> bool:
@@ -342,6 +374,11 @@ class RemoteCaptionSink:
                 try:
                     if payload is _STOP:
                         return
+                    if isinstance(payload, _FlushBarrier):
+                        # FIFO is the contract: reaching this memory-only
+                        # marker means every earlier frame received its ACK.
+                        payload.reached.set()
+                        continue
                     if not isinstance(payload, _PendingFrame):
                         raise PublisherError("An invalid caption entered the publish queue.")
                     connection.send(payload.payload)

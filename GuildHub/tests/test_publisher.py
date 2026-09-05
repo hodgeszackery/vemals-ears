@@ -4,7 +4,7 @@ import unittest
 
 from GuildHub.protocol import MAX_CURSOR, decode_message, encode_message
 from GuildHub.publisher import PublisherError, RemoteCaptionSink, publisher_url
-from VoiceCaptions.events import CaptionEvent
+from VoiceCaptions.events import CaptionEvent, SessionEvent
 
 
 CAPTION = CaptionEvent(
@@ -127,6 +127,46 @@ class PublisherTests(unittest.TestCase):
         self.assertEqual("publish", messages[1]["type"])
         self.assertEqual("Stack on me.", messages[1]["event"]["text"])
         self.assertNotIn(token, repr(sink.__dict__))
+
+    def test_flush_waits_for_the_last_publish_acknowledgement(self):
+        class DelayedAckConnection(FakeConnection):
+            def __init__(self):
+                super().__init__()
+                self.publish_waiting = threading.Event()
+                self.release_ack = threading.Event()
+                self.recv_calls = 0
+
+            def recv(self, timeout=None):
+                self.recv_calls += 1
+                if self.recv_calls > 1:
+                    self.publish_waiting.set()
+                    if not self.release_ack.wait(timeout or 1):
+                        raise TimeoutError()
+                return super().recv(timeout)
+
+        connection = DelayedAckConnection()
+        sink = RemoteCaptionSink.start(
+            "ws://localhost:8765",
+            "p" * 40,
+            connector=lambda *_args, **_kwargs: connection,
+            timeout=1,
+        )
+        result = []
+        self.assertTrue(sink.send(SessionEvent("stopped")))
+        waiter = threading.Thread(
+            target=lambda: result.append(sink.flush(timeout=1)),
+            daemon=True,
+        )
+        waiter.start()
+        self.assertTrue(connection.publish_waiting.wait(1))
+        self.assertTrue(waiter.is_alive(), "flush returned before the relay acknowledged")
+        connection.release_ack.set()
+        waiter.join(1)
+        try:
+            self.assertEqual([True], result)
+            self.assertEqual(1, sink._last_cursor)
+        finally:
+            sink.close()
 
     def test_bad_authentication_fails_without_raising_secret_text(self):
         connection = FakeConnection(auth_type="error")

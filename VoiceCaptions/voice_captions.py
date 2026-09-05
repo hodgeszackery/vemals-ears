@@ -476,6 +476,7 @@ def run_watch(
                 return 1
 
             router = CaptionRouter(sink)
+            event_sink = _caption_forwarder(router)
             backend = WhisperCppBackend(readiness.stt_config)
             speech_gate = WhisperCppVadGate.from_whisper_config(
                 readiness.stt_config
@@ -495,7 +496,7 @@ def run_watch(
                         readiness.credentials,
                         readiness.node,
                         service,
-                        _caption_forwarder(router),
+                        event_sink,
                         stop_event,
                     )
                 )
@@ -520,6 +521,13 @@ def run_watch(
                     )
                     last_public_status = ""
             finally:
+                # A requested service stop is authoritative only after the
+                # capture runner has destroyed Discord and closed STT. Node
+                # emits adapter.stopped during that teardown, after this
+                # loop has stopped reading its stdout, so publish the same
+                # terminal state here while the relay sink is still open.
+                if stop_event.is_set():
+                    event_sink(SessionEvent("stopped"))
                 sink.close()
             if not stop_event.is_set():
                 if time.monotonic() - session_started >= RETRY_HEALTHY_SECONDS:
