@@ -1543,6 +1543,17 @@ export class DiscordAdapterRuntime {
           startedBy: entry.startedBy,
           participantIds,
         });
+        if (!participantIds.includes(entry.startedBy)) {
+          // startSession normally repairs a command snapshot by inserting its
+          // starter. During restart the old starter may have left already:
+          // retain their explicit stop authority, then immediately restore
+          // membership to Discord's current voice roster before emitting or
+          // opening capture.
+          session = this.sessions.updateParticipants({
+            guildId: entry.guildId,
+            participantIds,
+          });
+        }
       } catch {
         this.sessions.forgetResumable?.(entry.guildId);
         continue;
