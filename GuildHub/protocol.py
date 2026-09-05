@@ -764,9 +764,10 @@ def _parse_exact_event(payload: Any) -> ProtocolEvent:
             "sequence",
             "timestamp",
         }
-        # wow_class is optional: event_to_json omits it for a speaker who
-        # has not mapped a character, so both shapes are legitimate and
-        # the check has to accept either.
+        # Optional fields are omitted when they have no visible effect:
+        # wow_class for an unmapped character and speech_style for normal
+        # speech. Every combination is legitimate, but unknown keys remain
+        # a protocol error.
         #
         # This exact list is one half of a contract whose other half lives
         # in VoiceCaptions.events.event_to_json. Adding a field there and
@@ -776,7 +777,9 @@ def _parse_exact_event(payload: Any) -> ProtocolEvent:
         # publisher failed and the whole pipeline came down. There is a
         # test below that pins the two halves together; keep it passing
         # rather than editing this set by hand.
-        if set(event) != required and set(event) != required | {"wow_class"}:
+        optional = {"wow_class", "speech_style"}
+        fields = set(event)
+        if not required.issubset(fields) or not fields.issubset(required | optional):
             raise GuildHubProtocolError(
                 "caption event fields do not match the protocol"
             )

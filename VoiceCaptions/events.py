@@ -14,6 +14,8 @@ from collections import deque
 from dataclasses import dataclass
 from typing import Any
 
+from .prosody import NORMAL_STYLE, SPEECH_STYLES
+
 MAX_EVENT_BYTES = 16_384
 MAX_SPEAKER_ID = 96
 MAX_NAME = 48
@@ -111,6 +113,7 @@ class CaptionEvent:
     sequence: int
     timestamp: float
     wow_class: str = ""
+    speech_style: str = NORMAL_STYLE
     # Private relay routing metadata. It is stamped at speech start and is
     # deliberately omitted by event_to_json, so a viewer can never inspect or
     # replay another audience revision.
@@ -175,6 +178,9 @@ def parse_event(payload: Any) -> ProtocolEvent:
         wow_class = str(payload.get("wow_class", "") or "").lower()
         if wow_class not in CLASS_COLORS:
             wow_class = ""
+        speech_style = payload.get("speech_style", NORMAL_STYLE)
+        if not isinstance(speech_style, str) or speech_style not in SPEECH_STYLES:
+            raise CaptionProtocolError("speech_style is invalid")
         return CaptionEvent(
             speaker_id=_clean_text(
                 payload.get("speaker_id"), "speaker_id", MAX_SPEAKER_ID
@@ -187,6 +193,7 @@ def parse_event(payload: Any) -> ProtocolEvent:
             sequence=_sequence(payload.get("sequence")),
             timestamp=_finite_time(payload.get("timestamp")),
             wow_class=wow_class,
+            speech_style=speech_style,
         )
     if event_type == "session":
         state = _clean_text(payload.get("state"), "state", 32).lower()
@@ -520,6 +527,12 @@ def event_to_json(event: ProtocolEvent) -> str:
         # speaker who has not run the mapping.
         if event.wow_class:
             payload["wow_class"] = event.wow_class
+        # Normal stays byte-for-byte compatible with the previous caption
+        # shape. Only speech that needs emphasis pays for the optional field.
+        if event.speech_style != NORMAL_STYLE:
+            if event.speech_style not in SPEECH_STYLES:
+                raise CaptionProtocolError("speech_style is invalid")
+            payload["speech_style"] = event.speech_style
     elif isinstance(event, SessionEvent):
         payload = {"type": "session", "state": event.state}
         if event.message:

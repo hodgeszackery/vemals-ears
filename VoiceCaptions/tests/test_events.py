@@ -58,6 +58,24 @@ class ProtocolTests(unittest.TestCase):
         self.assertNotIn("audienceGeneration", payload)
         self.assertNotIn("audienceRevision", payload)
 
+    def test_speech_emphasis_round_trips_but_normal_keeps_the_old_wire_shape(self):
+        whisper = replace(
+            caption("mira", 8, "Quietly stack.", role="HEALER"),
+            speech_style="whisper",
+        )
+        payload = json.loads(event_to_json(whisper))
+        self.assertEqual("whisper", payload["speech_style"])
+        self.assertEqual(whisper, parse_event(payload))
+
+        normal = json.loads(event_to_json(caption("mira", 9, "Stack.")))
+        self.assertNotIn("speech_style", normal)
+
+    def test_unknown_speech_emphasis_is_rejected(self):
+        payload = json.loads(event_to_json(caption("mira", 9, "Stack.")))
+        payload["speech_style"] = "scream"
+        with self.assertRaises(CaptionProtocolError):
+            parse_event(payload)
+
     def test_session_and_clear_round_trip(self):
         self.assertEqual(
             SessionEvent("paused", "Waiting for consent"),

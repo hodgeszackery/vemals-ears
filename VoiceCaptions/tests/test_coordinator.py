@@ -1,10 +1,12 @@
 import asyncio
+import array
 import base64
 import contextlib
 import hashlib
 import hmac
 import io
 import json
+import math
 import subprocess
 import tempfile
 import threading
@@ -134,6 +136,18 @@ def ended(
         "chunks": chunks,
         "pcmBytes": pcm_bytes,
     }
+
+
+def tone_pcm(amplitude, *, milliseconds=100):
+    samples = 16_000 * milliseconds // 1_000
+    wave = array.array(
+        "h",
+        (
+            int(amplitude * math.sin(2.0 * math.pi * index / 40.0))
+            for index in range(samples)
+        ),
+    )
+    return wave.tobytes()
 
 
 class FakeSink:
@@ -584,6 +598,56 @@ class DecoderTests(unittest.TestCase):
 
 
 class CoordinatorTests(unittest.IsolatedAsyncioTestCase):
+    async def test_caption_style_uses_each_speakers_recent_voice_level(self):
+        lines = EventLines()
+        sink = FakeSink()
+        stt = ConcurrentFakeSTT()
+        instance = VoiceCaptionCoordinator(
+            stt,
+            sink,
+            identity_key=b"test-key" * 4,
+        )
+        identity = speaker("111111111111111111", "Mira")
+
+        async def speak(sequence, amplitude):
+            pcm = tone_pcm(amplitude)
+            segment_id = f"part-{sequence}"
+            await instance.feed_line(
+                lines.line(
+                    "audio.segment.started",
+                    started(segment_id, sequence, identity),
+                )
+            )
+            await instance.feed_line(
+                lines.line(
+                    "audio.segment.chunk",
+                    chunk(segment_id, sequence, 1, pcm),
+                )
+            )
+            await instance.feed_line(
+                lines.line(
+                    "audio.segment.ended",
+                    ended(segment_id, sequence, identity, 1, len(pcm)),
+                )
+            )
+            await instance.drain()
+
+        for sequence in range(1, 4):
+            await speak(sequence, 5_000)
+        await speak(4, 900)
+        await speak(5, 20_000)
+
+        styles = [
+            event.speech_style
+            for event in sink.events
+            if isinstance(event, CaptionEvent)
+        ]
+        self.assertEqual(
+            ["normal", "normal", "normal", "whisper", "shout"],
+            styles,
+        )
+        await instance.shutdown()
+
     async def test_audience_and_link_ids_are_pseudonymized_before_host_calls(self):
         lines = EventLines()
         sink = HostedFakeSink()

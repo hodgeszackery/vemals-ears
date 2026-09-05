@@ -355,6 +355,21 @@ class PublishContractTests(unittest.TestCase):
         restored = self.published(self.caption(wow_class="paladin"))
         self.assertEqual("paladin", restored.wow_class)
 
+    def test_speech_emphasis_publishes_with_or_without_a_class(self):
+        for wow_class in ("", "paladin"):
+            for speech_style in ("whisper", "shout"):
+                with self.subTest(
+                    wow_class=wow_class,
+                    speech_style=speech_style,
+                ):
+                    restored = self.published(
+                        self.caption(
+                            wow_class=wow_class,
+                            speech_style=speech_style,
+                        )
+                    )
+                    self.assertEqual(speech_style, restored.speech_style)
+
     def test_every_class_the_encoder_can_emit_is_accepted(self):
         for wow_class in CLASS_COLORS:
             with self.subTest(wow_class=wow_class):
