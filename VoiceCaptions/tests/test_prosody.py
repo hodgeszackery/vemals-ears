@@ -48,6 +48,7 @@ class SpeechLevelTests(unittest.TestCase):
         self.assertIsNone(speech_level_dbfs(bytearray()))
         self.assertIsNone(speech_level_dbfs(b"\x00"))
         self.assertIsNone(speech_level_dbfs(bytearray(640)))
+        self.assertIsNone(speech_level_dbfs(memoryview(bytearray())[::2]))
 
 
 class SpeechStyleDetectorTests(unittest.TestCase):

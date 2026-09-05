@@ -40,14 +40,20 @@ def speech_level_dbfs(pcm: bytes | bytearray | memoryview) -> float | None:
 
     if not isinstance(pcm, (bytes, bytearray, memoryview)):
         return None
-    raw = memoryview(pcm)
+    try:
+        raw = memoryview(pcm).cast("B")
+    except (TypeError, ValueError):
+        return None
     if not raw or len(raw) % 2:
         return None
 
     # VE is Windows-only and its PCM contract is signed 16-bit little-endian,
     # so a native short view reads the owned buffer without making another
     # audio copy that would outlive the explicit wipe in the coordinator.
-    samples = raw.cast("h")
+    try:
+        samples = raw.cast("h")
+    except (TypeError, ValueError):
+        return None
     if not samples:
         return None
 
