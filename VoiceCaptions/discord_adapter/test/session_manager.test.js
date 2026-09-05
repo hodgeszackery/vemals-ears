@@ -124,6 +124,22 @@ test("any current participant can stop and outsiders cannot", () => {
   assert.equal(manager.canCapture({ guildId: GUILD, userId: BOB }), false);
 });
 
+test("the starter can leave without owning the remaining session", () => {
+  const manager = new SessionManager({ captureHealthy: true });
+  start(manager);
+  manager.setConsent({ guildId: GUILD, userId: ALICE, granted: true });
+  manager.setConsent({ guildId: GUILD, userId: BOB, granted: true });
+
+  const remaining = manager.updateParticipants({ guildId: GUILD, participantIds: [BOB] });
+  assert.equal(remaining.phase, SessionPhase.ACTIVE);
+  assert.equal(remaining.startedBy, ALICE);
+  assert.deepEqual(remaining.participants.map(({ userId }) => userId), [BOB]);
+  assert.equal(manager.canCapture({ guildId: GUILD, userId: BOB }), true);
+
+  const stopped = manager.stopSession({ guildId: GUILD, requestedBy: ALICE });
+  assert.equal(stopped.phase, SessionPhase.STOPPED);
+});
+
 test("character mappings are scoped to memory and included in session snapshots", () => {
   const manager = new SessionManager({ captureHealthy: true });
   manager.mapCharacter({
