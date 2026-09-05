@@ -1025,14 +1025,20 @@ class CaptionDisplaySettingTests(unittest.TestCase):
             result = window.set_caption_hold_seconds(10.0)
         self.assertEqual(6.0, result)
 
-    def test_settings_menu_names_duration_speaker_count_and_font(self):
+    def test_font_controls_live_in_move_preview_not_preferences(self):
         source = (ROOT / "WoW-Companion.pyw").read_text(encoding="utf-8")
         self.assertIn('"Caption duration"', source)
         self.assertIn('"Speakers on screen"', source)
-        self.assertIn('"Caption text size"', source)
+        self.assertNotIn('"Caption text size"', source)
         # Typed entry rows, not the old stepped option lists.
         self.assertIn("self.entry_row(", source)
-        self.assertIn("window.set_caption_font_size", source)
+        placement_source = (
+            ROOT / "VoiceCaptions" / "placement.py"
+        ).read_text(encoding="utf-8")
+        self.assertIn('text="Font"', placement_source)
+        self.assertIn('text="Size"', placement_source)
+        self.assertIn('text="Backdrop"', placement_source)
+        self.assertIn('text="Colours"', placement_source)
         self.assertNotIn("CAPTION_HOLD_OPTIONS", source)
         self.assertNotIn("VISIBLE_SPEAKER_OPTIONS", source)
 

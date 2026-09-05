@@ -5899,8 +5899,6 @@ class SettingsMenu(tk.Toplevel):
         if window.caption_suite:
             from VoiceCaptions.settings import (
                 DEFAULT_SETTINGS as DEFAULT_CAPTION_SETTINGS,
-                MIN_CAPTION_FONT_SIZE,
-                MAX_CAPTION_FONT_SIZE,
                 MIN_CAPTION_HOLD_SECONDS,
                 MAX_CAPTION_HOLD_SECONDS,
                 MIN_VISIBLE_SPEAKERS,
@@ -5940,20 +5938,6 @@ class SettingsMenu(tk.Toplevel):
                 "max",
                 window.set_max_visible_speakers,
             )
-            self.divider(caption_card)
-            self.entry_row(
-                caption_card,
-                "Caption text size",
-                "Text size inside each caption card.",
-                caption_settings.caption_font_size,
-                MIN_CAPTION_FONT_SIZE,
-                MAX_CAPTION_FONT_SIZE,
-                whole_number,
-                lambda value: str(value),
-                "pt",
-                window.set_caption_font_size,
-            )
-
             if window.caption_suite:
                 self.section_label(content, "Message Group")
                 chat_card = self.card(content)

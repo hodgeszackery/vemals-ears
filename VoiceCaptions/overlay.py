@@ -37,7 +37,11 @@ if __package__ in {None, ""}:
     from VoiceCaptions.layout import (  # type: ignore
         BASE_FONT_SIZE,
         DEFAULT_METRICS,
+        background_stipple,
+        canvas_height_for_target,
+        caption_font_specs,
         clipped_text,
+        metrics_for_target,
         wrap_text,
     )
     from VoiceCaptions.settings import (  # type: ignore
@@ -61,7 +65,16 @@ else:
         SessionEvent,
         parse_event_line,
     )
-    from .layout import BASE_FONT_SIZE, DEFAULT_METRICS, clipped_text, wrap_text
+    from .layout import (
+        BASE_FONT_SIZE,
+        DEFAULT_METRICS,
+        background_stipple,
+        canvas_height_for_target,
+        caption_font_specs,
+        clipped_text,
+        metrics_for_target,
+        wrap_text,
+    )
     from .settings import (
         MAX_ANCHOR_MONITOR,
         default_settings_path,
@@ -78,14 +91,9 @@ VOID = "#090b11"
 SLATE = "#11161d"
 SLATE_LIVE = "#151c25"
 FROST = "#42b8f2"
-# Pure white for live caption text, and near-white for finished lines.
-# Both were dimmer blue-greys tuned for the old opaque cards; with the
-# card bodies at half transparency the game shows through the backdrop
-# and the dim tones lost their contrast - Shino could not read them.
-# Finished lines stay a step softer than live so the two states remain
-# distinguishable, but both now sit at the bright end.
+# High-contrast chrome and the default caption text colour. Caption copy
+# reads the persisted appearance setting; privacy/status UI stays fixed.
 TEXT = "#ffffff"
-FINAL_TEXT = "#e9f1fa"
 # The accent placement mode draws its saved-state marker in.
 CLOCKFIRE = "#ffab3d"
 MUTED = "#879cb3"
@@ -138,14 +146,19 @@ def canvas_height_on_screen(root, max_rows: int, font_size: int = BASE_FONT_SIZE
     Shared by the overlay and the Move preview so the preview shows the
     footprint the member will actually get.
     """
-    ideal = canvas_height_for_rows(max_rows, font_size)
+    canvas_height_for_rows(max_rows, font_size)
     try:
-        available = int(root.winfo_screenheight() * 0.95)
+        available = int(root.winfo_screenheight())
     except tk.TclError:
         # The window is going away; an uncapped height is the old
         # behaviour and harmless for a frame nobody will see.
-        return ideal
-    return max(1, min(ideal, available))
+        available = None
+    return canvas_height_for_target(
+        max_rows,
+        font_size,
+        None,
+        fallback_height=available,
+    )
 
 
 CANVAS_HEIGHT = canvas_height_for_rows(DEFAULT_MAX_ROWS)
@@ -819,6 +832,7 @@ def rounded_rectangle(
     fill: str,
     outline: str,
     stipple: str = "",
+    tags=(),
 ) -> int:
     """A small smooth polygon avoids the square native Tk frame look.
 
@@ -858,6 +872,8 @@ def rounded_rectangle(
     options = {}
     if stipple:
         options["stipple"] = stipple
+    if tags:
+        options["tags"] = tags
     return canvas.create_polygon(
         points,
         smooth=True,
@@ -901,6 +917,7 @@ class CaptionOverlay:
             for speaker in load_known_speakers()
         }
         self.font_size = self.settings.caption_font_size
+        self._font_family = self.settings.caption_font_family
         self.metrics = self._metrics_for(self.font_size)
         self.board = CaptionBoard(
             max_rows=self.settings.max_visible_speakers,
@@ -960,15 +977,16 @@ class CaptionOverlay:
         more than a factor of two, and laying captions out for the monitor
         puts them off the side of the window the player is looking at.
         """
-        scaled = DEFAULT_METRICS.for_font_size(size)
         target = getattr(self, "target_rect", None)
-        if target is not None and target[2] > 0:
-            return scaled.fitted_to_width(target[2])
         try:
             available = self.root.winfo_screenwidth()
         except tk.TclError:
-            return scaled
-        return scaled.fitted_to_width(available)
+            available = None
+        return metrics_for_target(
+            size,
+            target,
+            fallback_width=available,
+        )
 
     def _make_fonts(self, size: int) -> dict:
         """Every caption font scaled from the chosen caption size.
@@ -977,25 +995,28 @@ class CaptionOverlay:
         base; the speaker name and status are a touch smaller), so raising
         the caption size raises them all together.
         """
-        factor = size / BASE_FONT_SIZE
-
-        def px(base: int) -> int:
-            return max(1, round(base * factor))
-
+        family = getattr(
+            self,
+            "_font_family",
+            getattr(self.settings, "caption_font_family", "Segoe UI"),
+        )
         return {
-            "speaker": tkfont.Font(family="Segoe UI", size=px(9), weight="bold"),
-            "caption": tkfont.Font(family="Segoe UI", size=px(10)),
-            "previous": tkfont.Font(family="Segoe UI", size=px(9)),
-            "initial": tkfont.Font(family="Segoe UI", size=px(8), weight="bold"),
-            "status": tkfont.Font(family="Segoe UI", size=px(8), weight="bold"),
+            name: tkfont.Font(**spec)
+            for name, spec in caption_font_specs(size, family).items()
         }
 
     def _canvas_height_for(self, rows: int, size: int) -> int:
-        height = canvas_height_on_screen(self.root, rows, size)
         target = getattr(self, "target_rect", None)
-        if target is not None and target[3] > 0:
-            return min(height, target[3])
-        return height
+        try:
+            available = int(self.root.winfo_screenheight())
+        except tk.TclError:
+            available = None
+        return canvas_height_for_target(
+            rows,
+            size,
+            target,
+            fallback_height=available,
+        )
 
     def fallback_rect(self) -> tuple[int, int, int, int]:
         return (0, 0, self.root.winfo_screenwidth(), self.root.winfo_screenheight())
@@ -1012,6 +1033,7 @@ class CaptionOverlay:
         # captions keep the geometry of whatever the window was when the
         # overlay started.
         if self.target_rect != previous and hasattr(self, "canvas"):
+            previous_width = self.metrics.canvas_width
             self.metrics = self._metrics_for(self.font_size)
             height = self._canvas_height_for(
                 self.settings.max_visible_speakers,
@@ -1020,6 +1042,8 @@ class CaptionOverlay:
             if height != self.canvas_height:
                 self.canvas_height = height
                 self.canvas.configure(height=height)
+            if self.metrics.canvas_width != previous_width:
+                self.canvas.configure(width=self.metrics.canvas_width)
 
     def refresh_settings(self) -> None:
         try:
@@ -1046,8 +1070,18 @@ class CaptionOverlay:
         )
         # A font-size change rescales every metric and rebuilds the fonts;
         # a row change (or the resulting taller stack) resizes the canvas.
-        if updated.caption_font_size != self.font_size:
+        font_changed = (
+            updated.caption_font_size != self.font_size
+            or updated.caption_font_family
+            != getattr(
+                self,
+                "_font_family",
+                self.settings.caption_font_family,
+            )
+        )
+        if font_changed:
             self.font_size = updated.caption_font_size
+            self._font_family = updated.caption_font_family
             self.metrics = self._metrics_for(self.font_size)
             self.fonts = self._make_fonts(self.font_size)
         new_height = self._canvas_height_for(
@@ -1467,11 +1501,10 @@ class CaptionOverlay:
         x1 = (self.metrics.canvas_width - width) // 2
         x2 = x1 + width
         y2 = y1 + height
-        fill = SLATE_LIVE if live else VOID
+        fill = self.settings.caption_background_color
         outline = event.color if live else SLATE
-        # Half-transparent card bodies, per Shino: the game stays visible
-        # through the backdrop while the caption text stays solid. The
-        # REC privacy tally and the status card stay opaque on purpose -
+        # Card opacity is a dithered backdrop while caption text stays solid.
+        # The REC privacy tally and the status card stay opaque on purpose -
         # a privacy indicator at half strength reads as half true.
         rounded_rectangle(
             self.canvas,
@@ -1480,7 +1513,9 @@ class CaptionOverlay:
             x2,
             y2,
             8,
-            stipple="gray50",
+            stipple=background_stipple(
+                self.settings.caption_background_opacity
+            ),
             fill=fill,
             outline=outline,
         )
@@ -1570,7 +1605,7 @@ class CaptionOverlay:
                 text_x,
                 text_y_offset,
                 text=chunk_text,
-                fill=TEXT if live else FINAL_TEXT,
+                fill=self.settings.caption_text_color,
                 font=caption_font,
                 anchor="w",
             )

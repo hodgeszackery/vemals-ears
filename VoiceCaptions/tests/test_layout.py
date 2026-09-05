@@ -1,6 +1,7 @@
 import queue
 import re
 import tempfile
+import tkinter as tk
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -19,7 +20,11 @@ from VoiceCaptions.layout import (
     BASE_FONT_SIZE,
     DEFAULT_METRICS,
     MAX_TEXT_LINES,
+    background_stipple,
+    canvas_height_for_target,
+    caption_font_specs,
     clipped_text,
+    metrics_for_target,
     safe_overlay_position,
     wrap_text,
 )
@@ -246,9 +251,9 @@ class LayoutTests(unittest.TestCase):
                         for call in canvas.text_calls
                         if call.get("text") == "Interrupt now"
                     )
-                    # Finished lines brightened to FINAL_TEXT for the
-                    # half-transparent cards; MUTED stays for chrome.
-                    expected_caption = overlay.FINAL_TEXT if final else overlay.TEXT
+                    # Caption copy follows the member's selected text colour;
+                    # the name still carries the role or class accent.
+                    expected_caption = subject.settings.caption_text_color
                     self.assertEqual(expected_caption, caption.get("fill"))
 
     def test_position_is_centered_and_above_the_bottom_safe_area(self):
@@ -451,6 +456,37 @@ class CardTransparencyTests(unittest.TestCase):
         canvas = self.drawn()
         for call in canvas.text_calls:
             self.assertNotIn("stipple", call)
+
+    def test_each_saved_opacity_maps_to_the_expected_card_stipple(self):
+        self.assertEqual("gray25", background_stipple(25))
+        self.assertEqual("gray50", background_stipple(50))
+        self.assertEqual("gray75", background_stipple(75))
+        self.assertEqual("", background_stipple(100))
+
+    def test_custom_text_and_background_do_not_replace_role_accents(self):
+        canvas = FakeCanvas()
+        subject = drawing_subject(canvas)
+        subject.settings = OverlaySettings(
+            caption_text_color="#abcdef",
+            caption_background_color="#123456",
+            caption_background_opacity=75,
+        )
+        row = line("MIRA", final=False)
+        card = CaptionOverlay.measure_card(subject, row)
+        CaptionOverlay.draw_line(subject, row, 0, card["height"], card)
+
+        body = canvas.polygon_calls[0]
+        caption = next(
+            call for call in canvas.text_calls if call.get("text") == "Text"
+        )
+        name = next(
+            call for call in canvas.text_calls if call.get("text") == "MIRA"
+        )
+        self.assertEqual("#123456", body["fill"])
+        self.assertEqual("gray75", body["stipple"])
+        self.assertEqual("#abcdef", caption["fill"])
+        self.assertEqual(row.event.name_color, name["fill"])
+        self.assertEqual(row.event.color, body["outline"])
 
 
 class RecordingTallyTests(unittest.TestCase):
@@ -835,6 +871,51 @@ class FontSizeScalingTests(unittest.TestCase):
         metrics = CaptionOverlay._metrics_for(subject, MAX_CAPTION_FONT_SIZE)
         self.assertLessEqual(metrics.canvas_width, 1920)
 
+    def test_preview_and_live_overlay_share_selected_1080p_geometry(self):
+        target = (2560, 0, 1920, 1040)
+        root = FakeRoot()
+        root.SCREEN_WIDTH = 5120
+        root.SCREEN_HEIGHT = 1440
+        settings = OverlaySettings(
+            caption_font_size=24,
+            max_visible_speakers=8,
+            anchor_mode="monitor",
+            anchor_monitor=1,
+        )
+
+        preview_metrics, preview_height = placement.preview_surface(
+            root, settings, target
+        )
+        live = SimpleNamespace(root=root, target_rect=target)
+        live_metrics = CaptionOverlay._metrics_for(
+            live, settings.caption_font_size
+        )
+        live_height = CaptionOverlay._canvas_height_for(
+            live,
+            settings.max_visible_speakers,
+            settings.caption_font_size,
+        )
+
+        self.assertEqual(live_metrics, preview_metrics)
+        self.assertEqual(live_height, preview_height)
+        self.assertEqual(
+            int(target[3] * 0.95),
+            preview_height,
+            "the primary monitor height leaked into a 1080p target",
+        )
+
+    def test_target_helpers_use_the_chosen_font_family_and_width(self):
+        specs = caption_font_specs(20, "Verdana")
+        self.assertEqual("Verdana", specs["caption"]["family"])
+        self.assertEqual(20, specs["caption"]["size"])
+        self.assertEqual(18, specs["speaker"]["size"])
+        metrics = metrics_for_target(48, (0, 0, 1920, 1080))
+        self.assertEqual(1920, metrics.canvas_width)
+        self.assertEqual(
+            int(1080 * 0.95),
+            canvas_height_for_target(20, 48, (0, 0, 1920, 1080)),
+        )
+
 
 class LiveDisplaySettingTests(unittest.TestCase):
     @staticmethod
@@ -988,6 +1069,26 @@ class LiveDisplaySettingTests(unittest.TestCase):
         placement.PlacementWindow.nudge(subject, -20, -15)
         self.assertEqual((-280, -285), (subject.root.x, subject.root.y))
 
+    def test_drag_starting_on_caption_text_moves_the_preview_once(self):
+        subject = self.placement_subject(DEFAULT_SETTINGS, x=100, y=200)
+        event = SimpleNamespace(x_root=250, y_root=260)
+
+        self.assertEqual(
+            "break", placement.PlacementWindow.press_card(subject, event)
+        )
+        self.assertEqual(
+            "break",
+            placement.PlacementWindow.drag_card(
+                subject,
+                SimpleNamespace(x_root=350, y_root=310),
+            ),
+        )
+        self.assertEqual((200, 250), (subject.root.x, subject.root.y))
+        self.assertEqual(
+            "break", placement.PlacementWindow.release_card(subject, event)
+        )
+        self.assertIsNone(subject.drag_origin)
+
     def test_a_font_size_change_rescales_metrics_and_grows_the_canvas(self):
         """Changing the size in the companion has to reach the live overlay.
 
@@ -1104,8 +1205,8 @@ class LiveDisplaySettingTests(unittest.TestCase):
             Path(placement.__file__).read_text(encoding="utf-8")
         )
         self.assertIn("def preview_fonts", source)
-        self.assertIn("self.preview_fonts(self.settings.caption_font_size)", source)
-        self.assertIn("self.fonts = self.preview_fonts(updated.caption_font_size)", source)
+        self.assertIn("caption_font_specs(size, family)", source)
+        self.assertIn("updated.caption_font_family", source)
 
     def test_placement_reset_changes_only_the_position(self):
         current = OverlaySettings(
@@ -1183,6 +1284,45 @@ class LiveDisplaySettingTests(unittest.TestCase):
         self.assertEqual(overlay.canvas_height_for_rows(4), subject.canvas_height)
         self.assertEqual(old_bottom, subject.root.y + subject.canvas_height)
         self.assertEqual(4, saved[0].max_visible_speakers)
+
+
+class PlacementControlWindowTests(unittest.TestCase):
+    def test_hidden_move_window_previews_appearance_immediately(self):
+        try:
+            root = tk.Tk()
+        except tk.TclError as exc:
+            self.skipTest(str(exc))
+        root.withdraw()
+        try:
+            with mock.patch.object(
+                placement,
+                "resolve_anchor_rect",
+                return_value=(0, 0, 1920, 1040),
+            ):
+                view = placement.PlacementWindow(root, preview=True)
+            root.withdraw()
+            root.update_idletasks()
+
+            footer = view.footer_shell.winfo_children()[0]
+            self.assertLessEqual(
+                footer.winfo_reqheight() + 2,
+                placement.FOOTER_HEIGHT,
+            )
+            self.assertTrue(view.canvas.find_withtag("caption-preview"))
+
+            view.font_size_var.set("18")
+            view.set_font_size()
+            view.set_background_opacity("75%")
+
+            self.assertEqual(18, view.settings.caption_font_size)
+            self.assertEqual(75, view.settings.caption_background_opacity)
+            self.assertEqual(
+                18,
+                int(view.fonts["caption"].cget("size")),
+            )
+            self.assertGreater(view.overlay_width, placement.WINDOW_WIDTH)
+        finally:
+            root.destroy()
 
 
 class MuteRenderTests(unittest.TestCase):
