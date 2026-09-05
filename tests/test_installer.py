@@ -166,6 +166,35 @@ class InstallerAllowlistTests(unittest.TestCase):
             with self.assertRaises(self.stage.StageError):
                 self.stage._safe_source_file(root, "../private.txt")
 
+    def test_icon_staging_accepts_canonicalized_root_alias_but_rejects_resolved_escape(self):
+        with tempfile.TemporaryDirectory() as folder:
+            parent = Path(folder).resolve()
+            root = parent / 'Long Installer Source'
+            icon = root / 'Windows/VemalsEars.ico'
+            icon.parent.mkdir(parents=True)
+            icon.write_bytes((ROOT / 'Windows/VemalsEars.ico').read_bytes())
+            alias = parent / 'LONGIN~1'
+            outside = parent / 'outside.ico'
+            outside.write_bytes(b'not application artwork')
+            original_resolve = Path.resolve
+            for escapes in (False, True):
+                with self.subTest(resolved_escape=escapes):
+                    def resolve(path, *args, **kwargs):
+                        if path == alias:
+                            return root
+                        if path in (alias / 'Windows/VemalsEars.ico', icon):
+                            return outside if escapes else icon
+                        return original_resolve(path, *args, **kwargs)
+                    target = parent / ('escaped.ico' if escapes else 'staged.ico')
+                    with mock.patch.object(Path, 'resolve', resolve):
+                        if escapes:
+                            with self.assertRaisesRegex(self.stage.StageError, 'escapes the source tree'):
+                                self.stage._write_icon(alias, target)
+                            self.assertFalse(target.exists())
+                        else:
+                            self.stage._write_icon(alias, target)
+                            self.assertEqual(icon.read_bytes(), target.read_bytes())
+
     def test_staging_reads_the_selected_source_manifest_despite_an_imported_checkout(self):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)

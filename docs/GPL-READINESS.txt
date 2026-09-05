@@ -97,13 +97,16 @@ their release and do not need a GitHub account.
 
 VALIDATION
 
-The final local suite passed 1,220 Python tests across 62 modules and 184
+The final local suite passed 1,221 Python tests across 62 modules and 184
 Node tests, with zero skips. A modified extracted source tree, without .git
 or signing keys, built the unsigned native installer and runtime-bearing ZIP;
 the freshly extracted ZIP passed runtime/import and source verification.
 All 36 runtime source artifacts staged successfully. The complete worker
 source run preserved 302 files, covering 47 npm versions, 234 crates and
 websockets, and verified every archive hash and source receipt path.
+The first hosted run exposed a Windows short-path containment error in
+installer staging. The corrected comparison and regression passed locally,
+including both previously failing cases under a real Windows 8.3 TEMP path.
 
 PRIMARY LICENSE REFERENCES
 

@@ -42,8 +42,11 @@ def _safe_source_file(source_root: Path, relative: str) -> Path:
     logical = PurePosixPath(relative)
     if logical.is_absolute() or ".." in logical.parts or not logical.parts:
         raise StageError("unsafe installer allowlist path: " + relative)
-    candidate = source_root.joinpath(*logical.parts)
     try:
+        # Windows can expand an 8.3 temp path while resolving its child.
+        # Compare the child and boundary using the same canonical spelling.
+        source_root = source_root.resolve(strict=True)
+        candidate = source_root.joinpath(*logical.parts)
         resolved = candidate.resolve(strict=True)
     except OSError as error:
         raise StageError("missing installer file: " + relative) from error
