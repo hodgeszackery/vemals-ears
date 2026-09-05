@@ -19,6 +19,124 @@ import build_release
 import build_runtime
 import refresh_local_copy
 import publish_release
+import source_distribution
+import runtime_licenses
+import runtime_sources
+import verify_bundle
+from tests.test_runtime_sources import write_source_fixture
+
+
+class CorrespondingSourceTests(unittest.TestCase):
+    def seed_source(self, root):
+        files = source_distribution.snapshot(ROOT, build_release.WINDOWS_INSTALLER_APP_FILES)
+        source_distribution.write_source_tree(files, root)
+        return files
+
+    def test_real_member_archive_carries_license_native_sources_and_matching_application(self):
+        with tempfile.TemporaryDirectory() as folder:
+            with mock.patch.object(build_release, 'DIST', Path(folder)):
+                member, missing = build_release.build_member_companion()
+            self.assertEqual([], missing)
+            source_bytes = (Path(folder) / 'vemals-ears-source.zip').read_bytes()
+            with zipfile.ZipFile(member) as package, zipfile.ZipFile(io.BytesIO(source_bytes)) as source:
+                self.assertEqual(source_bytes, package.read('VemalsEars/Source/vemals-ears-source.zip'))
+                for relative in ('LICENSE', 'docs/SOURCE.txt', 'Installer/THIRD-PARTY-NOTICES.txt',
+                                 'Installer/INNO-SETUP-LICENSE.txt'):
+                    self.assertEqual((ROOT / relative).read_bytes(), package.read('VemalsEars/' + relative))
+                required = ('LICENSE', 'SOURCE-IMPORT.json', 'docs/SOURCE.txt',
+                            'build_release.py', 'source_distribution.py',
+                            'Installer/launcher.c', 'Installer/launcher.rc', 'Windows/DowntimeLauncher.c',
+                            'Installer/VemalsEars.iss', 'Installer/build_installer.ps1',
+                            'Installer/stage_installer.py', 'Installer/runtime-lock.json',
+                            'Installer/runtime-sources.lock.json', 'packaging/runtime_sources.py',
+                            'packaging/build_runtime.py', 'packaging/runtime_licenses.py')
+                for relative in required:
+                    self.assertEqual((ROOT / relative).read_bytes(), source.read('VemalsEars-source/' + relative))
+                for relative in build_release.VEMALS_EARS_MEMBER_APP_FILES:
+                    self.assertEqual(package.read('VemalsEars/' + relative), source.read('VemalsEars-source/' + relative))
+
+    def test_source_archive_excludes_unlisted_and_operator_files_even_inside_build_roots(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            self.seed_source(root)
+            sentinels = ('GuildHub/.env', 'GuildHub/private-notes.txt', 'Installer/local-signing.json',
+                         'Windows/private-key.txt', 'secrets/token.txt', 'dist/old.zip',
+                         'node_modules/secret.js', '.git/config', 'GuildHub/live.sqlite3')
+            for relative in sentinels:
+                path = root / relative
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(b'CONFIDENTIAL-UNTRACKED-SENTINEL')
+            payload = source_distribution.archive_bytes(source_distribution.snapshot(root, build_release.WINDOWS_INSTALLER_APP_FILES))
+            with zipfile.ZipFile(io.BytesIO(payload)) as archive:
+                names = archive.namelist()
+                for relative in sentinels:
+                    self.assertNotIn('VemalsEars-source/' + relative, names)
+                self.assertNotIn(b'CONFIDENTIAL-UNTRACKED-SENTINEL', b''.join(archive.read(name) for name in names))
+
+    def test_missing_license_native_source_or_build_script_refuses_an_archive(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            files = self.seed_source(root)
+            for relative in ('LICENSE', 'Windows/DowntimeLauncher.c', 'Installer/build_installer.ps1',
+                             'packaging/runtime_licenses.py', 'packaging/runtime_sources.py',
+                             'Installer/runtime-sources.lock.json'):
+                with self.subTest(missing=relative):
+                    path = root / relative
+                    path.unlink()
+                    with self.assertRaisesRegex(source_distribution.SourceError, 'missing'):
+                        source_distribution.snapshot(root, build_release.WINDOWS_INSTALLER_APP_FILES)
+                    path.write_bytes(files[relative])
+
+    def test_identical_source_has_identical_archive_bytes(self):
+        files = source_distribution.snapshot(ROOT, build_release.WINDOWS_INSTALLER_APP_FILES)
+        self.assertEqual(source_distribution.archive_bytes(files), source_distribution.archive_bytes(dict(reversed(list(files.items())))))
+
+    def test_modified_extracted_source_rebuilds_member_and_installer_payload_without_git(self):
+        files = source_distribution.snapshot(ROOT, build_release.WINDOWS_INSTALLER_APP_FILES)
+        with tempfile.TemporaryDirectory() as folder:
+            target = Path(folder)
+            with zipfile.ZipFile(io.BytesIO(source_distribution.archive_bytes(files))) as archive:
+                archive.extractall(target)
+            root = target / 'VemalsEars-source'
+            self.assertFalse((root / '.git').exists())
+            app = root / 'WoW-Companion.pyw'
+            app.write_bytes(app.read_bytes() + b'\n# Recipient modification for corresponding-source rebuild test.\n')
+            native = root / 'Installer/launcher.c'
+            native.write_bytes(native.read_bytes() + b'\n/* Recipient native launcher modification. */\n')
+            version = (root / 'GuildHub/version.py').read_text(encoding='ascii')
+            version = re.search(r'^CLIENT_VERSION = "([^"]+)"', version, re.MULTILINE).group(1)
+            commands = (
+                [sys.executable, '-E', '-s', '-B', str(root / 'source_distribution.py')],
+                [sys.executable, '-E', '-s', '-B', str(root / 'build_release.py'), '--member'],
+                [sys.executable, '-E', '-s', '-B', str(root / 'Installer/stage_installer.py'),
+                 '--source', str(root), '--stage', str(target / 'installer-stage'), '--version', version],
+            )
+            for command in commands:
+                result = subprocess.run(command, cwd=target, capture_output=True, text=True, timeout=45)
+                self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+            with zipfile.ZipFile(root / 'dist/vemals-ears-member.zip') as package:
+                self.assertEqual(app.read_bytes(), package.read('VemalsEars/WoW-Companion.pyw'))
+                with zipfile.ZipFile(io.BytesIO(package.read('VemalsEars/Source/vemals-ears-source.zip'))) as source:
+                    self.assertEqual(app.read_bytes(), source.read('VemalsEars-source/WoW-Companion.pyw'))
+            stage = target / 'installer-stage'
+            self.assertEqual(app.read_bytes(), (stage / 'app/WoW-Companion.pyw').read_bytes())
+            self.assertEqual(native.read_bytes(), (stage / 'source/Installer/launcher.c').read_bytes())
+            with zipfile.ZipFile(stage / 'app/Source/vemals-ears-source.zip') as source:
+                for relative in ('Installer/launcher.c', 'Installer/launcher.rc', 'Windows/DowntimeLauncher.c', 'Installer/VemalsEars.iss'):
+                    self.assertEqual((stage / 'source' / relative).read_bytes(), source.read('VemalsEars-source/' + relative))
+            self.assertIsNone(json.loads((stage / 'payload-manifest.json').read_text())['source_commit'])
+
+    def test_member_builder_refuses_payload_bytes_that_differ_from_embedded_source(self):
+        original = zipfile.ZipFile.writestr
+        def corrupt(archive, name, data, *args, **kwargs):
+            if name == 'VemalsEars/WoW-Companion.pyw':
+                data = data + b'\n# mismatched payload\n'
+            return original(archive, name, data, *args, **kwargs)
+        with tempfile.TemporaryDirectory() as folder, \
+                mock.patch.object(build_release, 'DIST', Path(folder)), \
+                mock.patch.object(zipfile.ZipFile, 'writestr', corrupt):
+            with self.assertRaisesRegex(source_distribution.SourceError, 'payload differs'):
+                build_release.build_member_companion()
 
 
 class IndependentReleaseTests(unittest.TestCase):
@@ -55,7 +173,8 @@ class IndependentReleaseTests(unittest.TestCase):
             with contextlib.redirect_stdout(io.StringIO()):
                 self.assertEqual(0, refresh_local_copy.refresh(target))
             files = {path.relative_to(target).as_posix() for path in target.rglob('*') if path.is_file()}
-            self.assertEqual(set(build_release.VEMALS_EARS_MEMBER_APP_FILES) | {marker.name}, files)
+            self.assertEqual(set(build_release.VEMALS_EARS_MEMBER_APP_FILES) |
+                             {marker.name, 'Source/vemals-ears-source.zip'}, files)
             self.assertEqual('{ truncated', marker.read_text(encoding='ascii'))
 
     def test_conflicting_product_markers_refuse_refresh_before_copy(self):
@@ -139,6 +258,7 @@ class ReleaseSplit(unittest.TestCase):
             {
                 "VemalsEars/vemals-ears-member.json",
                 "VemalsEars/HOW-TO-RUN.txt",
+                "VemalsEars/Source/vemals-ears-source.zip",
             }
         )
         # Every allowlisted file is present, and the only thing permitted
@@ -246,12 +366,11 @@ class RuntimeEmbedding(unittest.TestCase):
     release build must refuse to produce it at all."""
 
     def build_with(self, dist, require_runtime=False):
-        original = build_release.DIST
-        build_release.DIST = dist
-        try:
+        source_root = dist / 'source-checkout'
+        if not source_root.is_dir():
+            source_root = ROOT
+        with mock.patch.object(build_release, 'DIST', dist), mock.patch.object(build_release, 'ROOT', source_root):
             return build_release.build_member_companion(require_runtime=require_runtime)
-        finally:
-            build_release.DIST = original
 
 
     def stage_fake_runtime(self, dist):
@@ -270,7 +389,79 @@ class RuntimeEmbedding(unittest.TestCase):
         (runtime / "python.exe").write_bytes(b"MZ fake interpreter")
         (site / "__init__.py").write_bytes(b"")
         (runtime / "Lib" / "tkinter" / "__init__.py").write_bytes(b"")
+        source_root = dist / 'source-checkout'
+        source_distribution.write_source_tree(
+            source_distribution.snapshot(ROOT, build_release.WINDOWS_INSTALLER_APP_FILES), source_root)
+        lock_path = source_root / 'Installer/runtime-lock.json'
+        lock = json.loads(lock_path.read_text(encoding='utf-8'))
+        for relative in runtime_licenses.required_license_paths(lock):
+            path = runtime / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(b'complete upstream notice fixture\r\n')
+        fixture = write_source_fixture(dist / 'upstream-fixture', runtime_lock=lock_path)
+        source_lock = source_root / 'Installer/runtime-sources.lock.json'
+        source_lock.write_bytes(fixture['source_lock'].read_bytes())
+        runtime_sources.stage_runtime_sources(runtime, fixture['cache'], source_lock=source_lock,
+                                              runtime_lock=lock_path, offline=True)
         return runtime
+
+    def test_old_cached_runtime_without_licenses_or_sources_cannot_be_packaged(self):
+        with tempfile.TemporaryDirectory() as folder:
+            dist = Path(folder)
+            runtime = self.stage_fake_runtime(dist)
+            for relative, message in (('LICENSE.txt', 'missing or empty'),
+                                      ('Source/README.txt', 'inventory mismatch')):
+                path = runtime / relative
+                original = path.read_bytes()
+                path.unlink()
+                for require_runtime in (False, True):
+                    with self.subTest(missing=relative, require_runtime=require_runtime):
+                        with self.assertRaisesRegex(SystemExit, message):
+                            self.build_with(dist, require_runtime=require_runtime)
+                        self.assertFalse((dist / 'vemals-ears-member.zip').exists())
+                path.write_bytes(original)
+
+    def test_bundle_verifier_rejects_missing_sources_before_running_its_interpreter(self):
+        with tempfile.TemporaryDirectory() as folder:
+            dist = Path(folder)
+            self.stage_fake_runtime(dist)
+            path, _ = self.build_with(dist)
+            with zipfile.ZipFile(path) as archive:
+                files = {name: archive.read(name) for name in archive.namelist()
+                         if name != 'VemalsEars/runtime/Source/README.txt'}
+            with zipfile.ZipFile(path, 'w') as archive:
+                for name, data in files.items():
+                    archive.writestr(name, data)
+            with mock.patch.object(verify_bundle, 'ROOT', dist / 'source-checkout'), \
+                    mock.patch.object(verify_bundle, 'DIST', dist), \
+                    mock.patch.object(verify_bundle.subprocess, 'run') as run:
+                problems = verify_bundle.verify(verify_bundle.BUNDLES[0])
+            run.assert_not_called()
+            self.assertTrue(any('source inventory mismatch' in problem for problem in problems), problems)
+
+    def test_zip_refresh_refuses_changed_runtime_source_lock_before_any_write(self):
+        with tempfile.TemporaryDirectory() as folder:
+            target = Path(folder)
+            self.stage_fake_runtime(target)
+            (target / 'vemals-ears-member.json').write_bytes(b'{}')
+            (target / 'GuildHub').mkdir()
+            (target / 'GuildHub/client.py').write_bytes(b'# old client preserved on failed preflight\n')
+            source_root = target / 'source-checkout'
+            lock_path = source_root / 'Installer/runtime-lock.json'
+            lock = json.loads(lock_path.read_text())
+            lock['python']['version'] = '3.14.8'
+            lock_path.write_bytes(runtime_sources.json_bytes(lock))
+            updated = write_source_fixture(target / 'updated-upstream-fixture', runtime_lock=lock_path)
+            (source_root / 'Installer/runtime-sources.lock.json').write_bytes(updated['source_lock'].read_bytes())
+            before = {path.relative_to(target): path.read_bytes()
+                      for path in target.rglob('*') if path.is_file()}
+            with mock.patch.object(refresh_local_copy, 'ROOT', source_root), \
+                    contextlib.redirect_stderr(io.StringIO()) as errors:
+                self.assertEqual(1, refresh_local_copy.refresh(target))
+            self.assertIn('retained runtime does not match', errors.getvalue())
+            self.assertIn('rebuild the full ZIP', errors.getvalue())
+            self.assertEqual(before, {path.relative_to(target): path.read_bytes()
+                                     for path in target.rglob('*') if path.is_file()})
 
     def test_thin_bundle_is_honest_about_needing_python(self):
         import tempfile
@@ -431,6 +622,10 @@ class RefreshSourcePreflightTests(unittest.TestCase):
         self.root = Path(directory.name) / "checkout"
         self.target = Path(directory.name) / "extracted"
         self.root.mkdir()
+        for relative in source_distribution.BUILD_FILES:
+            target = self.root / relative
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes((ROOT / relative).read_bytes())
         self.target.mkdir()
         (self.target / "vemals-ears-member.json").write_text("{}", encoding="ascii")
         patch = mock.patch.object(refresh_local_copy, "ROOT", self.root)
@@ -494,6 +689,14 @@ class RefreshPreservesInstalledVersionTests(unittest.TestCase):
     def setUp(self):
         self.root = Path(tempfile.mkdtemp())
         self.addCleanup(shutil.rmtree, self.root, True)
+        self.source_root = self.root / 'build-source'
+        source_distribution.write_source_tree(
+            source_distribution.snapshot(ROOT, build_release.WINDOWS_INSTALLER_APP_FILES), self.source_root)
+        self.upstream_fixture = write_source_fixture(
+            self.root / 'upstream-fixture', runtime_lock=self.source_root / 'Installer/runtime-lock.json')
+        (self.source_root / 'Installer/runtime-sources.lock.json').write_bytes(
+            self.upstream_fixture['source_lock'].read_bytes())
+        self.enterContext(mock.patch.object(refresh_local_copy, 'ROOT', self.source_root))
 
     def make_install(self, *, installer_managed, recorded="0.3.10"):
         """An extracted member copy, optionally installer-managed."""
@@ -512,6 +715,102 @@ class RefreshPreservesInstalledVersionTests(unittest.TestCase):
                 encoding="utf-8",
             )
         return app, version
+
+    def source_complete_native_install(self):
+        app, version = self.make_install(installer_managed=True)
+        (app.parent / 'VemalsEars.exe').write_bytes(b'MZ retained installed launcher')
+        runtime = app.parent / 'runtime'
+        runtime.mkdir()
+        (runtime / 'retained-runtime.dll').write_bytes(b'retained runtime')
+        lock_path = self.source_root / 'Installer/runtime-lock.json'
+        for relative in runtime_licenses.required_license_paths(json.loads(lock_path.read_text())):
+            path = runtime / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(b'upstream runtime license fixture\r\n')
+        runtime_sources.stage_runtime_sources(runtime, self.upstream_fixture['cache'],
+                                              source_lock=self.source_root / 'Installer/runtime-sources.lock.json',
+                                              runtime_lock=lock_path, offline=True)
+        files = source_distribution.snapshot(self.source_root, build_release.WINDOWS_INSTALLER_APP_FILES)
+        files['GuildHub/version.py'] = version.read_bytes()
+        (app / 'Installer').mkdir()
+        (app / 'Installer/uninstall_cleanup.py').write_bytes(files['Installer/uninstall_cleanup.py'])
+        capsule = app / source_distribution.EMBEDDED_PATH
+        capsule.parent.mkdir()
+        capsule.write_bytes(source_distribution.archive_bytes(files))
+        return app, version, files
+
+    def test_native_refresh_updates_matching_source_and_retains_runtime_and_version(self):
+        app, version, files = self.source_complete_native_install()
+        version_before = version.read_bytes()
+        runtime_before = (app.parent / 'runtime/retained-runtime.dll').read_bytes()
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(0, refresh_local_copy.refresh(app))
+        self.assertEqual(version_before, version.read_bytes())
+        self.assertEqual(runtime_before, (app.parent / 'runtime/retained-runtime.dll').read_bytes())
+        with zipfile.ZipFile(app / source_distribution.EMBEDDED_PATH) as source:
+            for relative in build_release.WINDOWS_INSTALLER_APP_FILES:
+                self.assertEqual((app / relative).read_bytes(), source.read('VemalsEars-source/' + relative))
+            for relative in refresh_local_copy.RETAINED_BINARY_INPUTS:
+                self.assertEqual(files[relative], source.read('VemalsEars-source/' + relative))
+
+    def test_native_refresh_without_prior_source_refuses_before_any_write(self):
+        app, _, _ = self.source_complete_native_install()
+        (app / source_distribution.EMBEDDED_PATH).unlink()
+        before = {path.relative_to(app.parent): path.read_bytes()
+                  for path in app.parent.rglob('*') if path.is_file()}
+        with contextlib.redirect_stderr(io.StringIO()) as errors:
+            self.assertEqual(1, refresh_local_copy.refresh(app))
+        self.assertIn('install a source-complete', errors.getvalue())
+        self.assertEqual(before, {path.relative_to(app.parent): path.read_bytes()
+                                 for path in app.parent.rglob('*') if path.is_file()})
+
+    def test_native_refresh_accepts_new_app_modules_and_keeps_the_source_rebuildable(self):
+        app, _, files = self.source_complete_native_install()
+        checkout = self.root / 'checkout'
+        source_distribution.write_source_tree(files, checkout)
+        added = 'VoiceCaptions/development_extra.py'
+        (checkout / added).write_bytes(b'EXTRA = "recipient app addition"\n')
+        builder = checkout / 'build_release.py'
+        builder.write_text(builder.read_text(encoding='ascii').replace(
+            'VEMALS_EARS_MEMBER_APP_FILES = (', 'VEMALS_EARS_MEMBER_APP_FILES = (\n    "' + added + '",'), encoding='ascii')
+        with mock.patch.object(refresh_local_copy, 'ROOT', checkout), \
+                mock.patch.object(build_release, 'VEMALS_EARS_MEMBER_APP_FILES',
+                                  build_release.VEMALS_EARS_MEMBER_APP_FILES + (added,)), \
+                contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(0, refresh_local_copy.refresh(app))
+        extracted = self.root / 'rebuilt'
+        with zipfile.ZipFile(app / source_distribution.EMBEDDED_PATH) as archive:
+            archive.extractall(extracted)
+        result = subprocess.run([sys.executable, '-E', '-s', '-B',
+                                 str(extracted / 'VemalsEars-source/build_release.py'), '--member'],
+                                capture_output=True, text=True, timeout=45)
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        with zipfile.ZipFile(extracted / 'VemalsEars-source/dist/vemals-ears-member.zip') as archive:
+            self.assertEqual((app / added).read_bytes(), archive.read('VemalsEars/' + added))
+
+    def test_native_refresh_with_changed_native_input_refuses_before_any_write(self):
+        app, _, files = self.source_complete_native_install()
+        files['Installer/launcher.c'] += b'\n/* original installed native variant */\n'
+        (app / source_distribution.EMBEDDED_PATH).write_bytes(source_distribution.archive_bytes(files))
+        before = {path.relative_to(app.parent): path.read_bytes()
+                  for path in app.parent.rglob('*') if path.is_file()}
+        with contextlib.redirect_stderr(io.StringIO()) as errors:
+            self.assertEqual(1, refresh_local_copy.refresh(app))
+        self.assertIn('retained native/runtime build inputs changed', errors.getvalue())
+        self.assertEqual(before, {path.relative_to(app.parent): path.read_bytes()
+                                 for path in app.parent.rglob('*') if path.is_file()})
+
+    def test_refresh_reports_payload_corruption_instead_of_success(self):
+        app, _ = self.make_install(installer_managed=False)
+        original = Path.write_bytes
+        def corrupt(path, payload):
+            if path == app / 'GuildHub/client.py':
+                payload += b'\n# damaged write\n'
+            return original(path, payload)
+        with mock.patch.object(Path, 'write_bytes', corrupt), \
+                contextlib.redirect_stderr(io.StringIO()) as errors:
+            self.assertEqual(1, refresh_local_copy.refresh(app))
+        self.assertIn('payload differs', errors.getvalue())
 
     def test_an_installer_managed_copy_keeps_its_version(self):
         app, version = self.make_install(installer_managed=True)

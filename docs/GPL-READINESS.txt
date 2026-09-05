@@ -1,0 +1,121 @@
+Vemal's Ears GPL readiness - 2026-09-05
+======================================
+
+DECISION
+
+Keep GPL-3.0-only for VE's own code. The reviewed source and pinned dependency
+licenses revealed no confirmed incompatibility preventing that choice. This
+is an engineering source/notice audit, not a legal certification of ownership
+or every possible future distribution. Third-party code keeps its own terms.
+
+GPL permits use, modification and redistribution, including commercial use.
+VE can be offered at no charge, but GPL does not prohibit someone charging
+for copies. Distributed modified covered works must preserve the applicable
+GPL freedoms and provide their corresponding source.
+
+SOURCE PROVENANCE
+
+All 239 imported file hashes in SOURCE-IMPORT.json matched the recorded
+original Git blobs. The original repository adopted GPL-3.0-only in commit
+3ddf6c8309b8c4d166b9572a54f1273d4474e436; its preceding MIT declaration named
+the same maintainer. The applying copyright is Zackery Hodges. These records
+support the grant but do not independently prove every contributor's rights.
+
+The VE artwork has a generation/edit history in Windows/VemalsEars-ARTWORK.txt.
+Only the VE artwork is included in client/source distributions. The unused
+legacy Windows/Downtime.ico has incomplete origin evidence and is excluded.
+No vendored binary, font or model was found in the imported application source.
+
+MEMBER RELEASES
+
+- LICENSE retains the complete GPLv3 text and the GPL-3.0-only applying grant.
+  Preferences provides the copyright, warranty notice, license and source.
+- ZIPs and installers embed Source/vemals-ears-source.zip. It includes actual
+  application bytes, native source, artwork, dependency locks and build scripts.
+  Native compilation uses that same snapshot. Source hashes describe the
+  distributed version; recipients can edit and rebuild it without Git or keys.
+- The runtime carries upstream legal texts, including CPython's incorporated
+  notices formerly lost with its documentation and all wheel component notices.
+- Installer/runtime-sources.lock.json preserves 36 verified upstream source
+  artifacts (about 283 MiB) beside the runtime. It ties source versions and
+  checksums to the binary runtime lock. Upgrades require updating both locks.
+- CPython's source closure follows its official binary SPDX; Pillow's follows
+  the exact wheel notices, release recipes and nested codec source pins.
+  The source collection includes build recipes missing from Pillow's sdist.
+- The upstream interpreter and wheels were not independently recompiled.
+  runtime/Source/README.txt records build procedures and reproducibility limits.
+  General-purpose toolchains remain prerequisites. No byte-identical claim.
+- Cached runtimes without the matching source/notices fail distribution checks.
+  Managed development refresh updates source with app files and refuses to
+  mislabel retained native binaries when their build inputs have changed.
+- Official publisher and installer builds reconstruct the runtime from
+  hash-verified upstream binaries. Source checks do not authenticate arbitrary
+  manually replaced cached DLLs; regenerate the runtime before distribution.
+
+DEPENDENCY TERMS
+
+The Windows payload includes CPython under PSF/historical/component licenses,
+websockets under BSD-3-Clause, Pillow under MIT-CMU plus its native-library
+terms, and pywin32 under its actual component licenses. pywin32 includes
+adodbapi under LGPL-2.1 in editable Python source form. FreeType and IJG
+attribution are preserved. See Installer/THIRD-PARTY-NOTICES.txt.
+
+Inno Setup's original license is Installer/INNO-SETUP-LICENSE.txt, retrieved
+unchanged from is-7_1_0 commit 7d634620f1d1caca6c76e8398da7133153db9e7b:
+https://raw.githubusercontent.com/jrsoftware/issrc/7d634620f1d1caca6c76e8398da7133153db9e7b/license.txt
+SHA256: 2e5346868c2a18434489824e11d65c3031620f792fefc415d05f19cd441abf5c
+Unsigned modified builds are permitted; they must not claim to be the
+original publisher's signed release.
+
+SEPARATE WORKER
+
+The CPU Docker recipe preserves VE source, whisper.cpp source/build flags,
+model notices and pinned upstream dependency source. Davey's native graph
+contains 234 registry crates, including MPL-2.0 hpke-rs. Those sources and
+terms are preserved instead of describing the entire graph as MIT. The
+review found no applied MPL "Incompatible With Secondary Licenses" notice
+in those hpke sources. Mozilla documents the conditions for combining such
+MPL code with GPLv3; original MPL notices remain intact.
+
+docs/WORKER-SOURCE.txt identifies the files and limits. Publishing a complete
+Node/Debian container also requires satisfying the base packages' obligations.
+The Docker engine was unavailable here, so a full image build was not run.
+No worker container was published by this audit.
+
+NVIDIA libraries are proprietary, separate worker downloads. They are absent
+from member releases and the CPU image. This audit does not clear a combined
+CUDA worker bundle for redistribution. Its actual linking and vendor terms
+would need review before publishing that bundle. Local operation is unchanged.
+
+RELEASE BOUNDARY
+
+These packaging changes apply to future builds. They do not retroactively
+change existing 0.5.8 downloads or installations. Keep source available for
+each distributed version; later unrelated source is not a substitute.
+The development repository stays private. Recipients obtain source with
+their release and do not need a GitHub account.
+
+VALIDATION
+
+The final local suite passed 1,221 Python tests across 62 modules and 184
+Node tests, with zero skips. A modified extracted source tree, without .git
+or signing keys, built the unsigned native installer and runtime-bearing ZIP;
+the freshly extracted ZIP passed runtime/import and source verification.
+All 36 runtime source artifacts staged successfully. The complete worker
+source run preserved 302 files, covering 47 npm versions, 234 crates and
+websockets, and verified every archive hash and source receipt path.
+The first hosted run exposed a Windows short-path containment error in
+installer staging. The corrected comparison and regression passed locally,
+including both previously failing cases under a real Windows 8.3 TEMP path.
+
+PRIMARY LICENSE REFERENCES
+
+GPLv3, especially sections 1, 4-6 and 10:
+https://www.gnu.org/licenses/gpl-3.0.html
+https://opensource.org/license/gpl-3.0
+MPL 2.0 compatibility and source obligations:
+https://www.mozilla.org/en-US/MPL/2.0/FAQ/
+https://www.mozilla.org/en-US/MPL/2.0/
+Exact dependency source URLs, versions and checksums are in
+Installer/runtime-sources.lock.json, packaging/worker-sources.lock.json and
+GuildHub/third-party/SOURCES.json.

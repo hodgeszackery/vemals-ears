@@ -35,6 +35,15 @@ distribution requires configuring the new repository's windows-release environme
 and publisher authorization; those settings do not move with copied source files.
 Installer/README.md describes the signing checks and release artifacts.
 
+Every member ZIP and installer carries Source/vemals-ears-source.zip matching
+its application and native build inputs, plus runtime/Source for the bundled
+dependencies. A standalone vemals-ears-source.zip is also produced. Keep these
+embedded files when mirroring or repackaging a release; a private repository
+link does not provide source access to recipients. See docs/SOURCE.txt.
+Installer/runtime-sources.lock.json pins upstream source archives to the
+runtime lock. Update both locks when changing dependencies. Distribution
+validation rejects missing notices, missing source or mismatched source pins.
+
 To build, verify and mirror an explicitly requested VE release on the guild host
 without advertising an update:
 
@@ -57,3 +66,12 @@ This requires the VE edition marker and refuses a Downtime extraction. It
 preflights all source files before copying, preserves the private runtime, and
 keeps an installer-managed copy's reported version unchanged so its update path
 remains valid. Restart the app separately to load refreshed source.
+
+Managed copies also need their existing corresponding-source archive and
+unchanged native/build/runtime inputs. A pre-source-archive installation or
+one needing new compiled inputs must receive an installer update first.
+Successful refreshes preserve the installed version in both payload and
+regenerated source archive. Unmanaged development copies remain supported.
+Any retained runtime, including one in an extracted member ZIP, must pass
+matching source/notice validation before refresh writes application files.
+An outdated runtime needs an updated runtime-bearing ZIP or installer.

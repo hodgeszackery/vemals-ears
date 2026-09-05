@@ -31,6 +31,9 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 DIST = ROOT / "dist"
+sys.path.insert(0, str(ROOT))
+import build_release
+import source_distribution
 
 # Every launcher that opens a window must clear these: a stale TCL_LIBRARY
 # from another Python points the bundled interpreter at a foreign Tcl and
@@ -195,6 +198,15 @@ def verify(bundle: dict) -> list[str]:
         problems = (check_launcher(root, bundle["launcher"])
                     + check_no_builder_traces(root)
                     + check_runtime_carries_no_repo_code(root))
+        try:
+            source_distribution.validate_runtime(root / "runtime", ROOT)
+            files = source_distribution.snapshot(ROOT, build_release.WINDOWS_INSTALLER_APP_FILES)
+            source_distribution.verify_payload(files, lambda relative: (root / relative).read_bytes(),
+                                               build_release.VEMALS_EARS_MEMBER_APP_FILES)
+        except (OSError, ValueError, source_distribution.SourceError, SystemExit) as error:
+            problems.append("distribution license/source verification failed: " + str(error))
+        if problems:
+            return problems
 
         # Written INTO the bundle so the bundle root is the script's own
         # directory, which is the only reason its packages import.

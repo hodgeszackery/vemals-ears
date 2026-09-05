@@ -24,7 +24,7 @@
   #if defined(ProofUntrusted)
     ; Signed for real, through the whole pipeline, by a certificate nobody
     ; trusts. It proves the plumbing before a certificate is bought, and
-    ; the name makes sure it is never handed to a member.
+    ; the name identifies it as a proof rather than an official release.
     #define OutputName "Vemals-Ears-Setup-PROOF-UNTRUSTED"
   #elif defined(SignedBuild) || defined(DistributeUnsigned)
     ; DistributeUnsigned is a deliberate choice made at build time: the

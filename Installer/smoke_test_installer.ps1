@@ -164,7 +164,13 @@ try {
     $companion = Join-Path $testRoot "app\Vemals-Ears.pyw"
     $memberEdition = Join-Path $testRoot "app\vemals-ears-member.json"
     $manifestPath = Join-Path $testRoot "payload-manifest.json"
-    foreach ($required in @($privatePython, $launcher, $companion, $memberEdition, $manifestPath)) {
+    $license = Join-Path $testRoot "app\LICENSE"
+    $sourceInstructions = Join-Path $testRoot "app\docs\SOURCE.txt"
+    $sourceArchive = Join-Path $testRoot "app\Source\vemals-ears-source.zip"
+    $dependencyNotices = Join-Path $testRoot "app\Installer\THIRD-PARTY-NOTICES.txt"
+    $innoLicense = Join-Path $testRoot "app\Installer\INNO-SETUP-LICENSE.txt"
+    foreach ($required in @($privatePython, $launcher, $companion, $memberEdition, $manifestPath,
+                             $license, $sourceInstructions, $sourceArchive, $dependencyNotices, $innoLicense)) {
         if (-not (Test-Path -LiteralPath $required -PathType Leaf)) {
             throw "The isolated install is missing $required."
         }

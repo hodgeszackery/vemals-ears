@@ -98,6 +98,8 @@ jobs:
           python -m pip install --require-hashes -r GuildHub/requirements-client.txt
           python -m unittest `
             tests.test_installer `
+            tests.test_packaging `
+            tests.test_runtime_licenses `
             tests.test_companion_window `
             GuildHub.tests.test_client `
             GuildHub.tests.test_windows_integration `
@@ -350,6 +352,7 @@ jobs:
           path: |
             dist/Vemals-Ears-Setup.exe
             dist/Vemals-Ears-Setup.exe.sha256
+            dist/vemals-ears-source.zip
           if-no-files-found: error
           compression-level: 0
           retention-days: 14
@@ -376,6 +379,7 @@ jobs:
           cd release
           sha256sum --check Vemals-Ears-Setup.exe.sha256
           test -f Vemals-Ears-Setup.exe
+          test -f vemals-ears-source.zip
 
       - name: Publish GitHub release
         uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
@@ -386,6 +390,7 @@ jobs:
           files: |
             release/Vemals-Ears-Setup.exe
             release/Vemals-Ears-Setup.exe.sha256
+            release/vemals-ears-source.zip
           body: |
             Signed per-user Windows installer for Vemal's Ears.
 

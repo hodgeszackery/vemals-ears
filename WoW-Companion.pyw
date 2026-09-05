@@ -5951,6 +5951,9 @@ class SettingsMenu(tk.Toplevel):
                 font=window.fonts["meta"],
             ).pack(fill="x", padx=22, pady=(12, 18))
 
+        if window.member_edition:
+            self.license_card(content)
+
         self.update_idletasks()
         area = work_area(window.handle(), window.root)
         desired_height = (
@@ -5988,6 +5991,78 @@ class SettingsMenu(tk.Toplevel):
         self.focus_force()
         if not window.preview:
             fade_in(self)
+
+    def license_card(self, parent: tk.Widget) -> None:
+        self.section_label(parent, "License & source")
+        card = self.card(parent)
+        self.license_notice = tk.Label(
+            card,
+            text=(
+                "GPL-3.0-only - Copyright (C) 2026 Zackery Hodges\n"
+                "You may modify and redistribute this program under GPLv3.\n"
+                "This program comes WITHOUT ANY WARRANTY."
+            ),
+            bg=self.window.theme.panel_alt,
+            fg=self.window.theme.text,
+            anchor="w",
+            justify="left",
+            wraplength=430,
+            font=self.window.fonts["meta"],
+        )
+        self.license_notice.pack(fill="x", padx=16, pady=(12, 10))
+        actions = tk.Frame(card, bg=self.window.theme.panel_alt)
+        actions.pack(fill="x", padx=16)
+        self.license_buttons = {}
+        for label, relative_path in (
+            ("License", "LICENSE"),
+            ("Source guide", "docs/SOURCE.txt"),
+            ("Source archive", "Source/vemals-ears-source.zip"),
+        ):
+            button = self.window.make_compact_button(
+                actions,
+                label,
+                lambda path=relative_path: self.open_license_file(path),
+            )
+            button.pack(side="left", padx=(0, 8))
+            self.license_buttons[label] = button
+        self.license_status = tk.Label(
+            card,
+            text="License and source files open from this copy of the app.",
+            bg=self.window.theme.panel_alt,
+            fg=self.window.theme.muted,
+            anchor="w",
+            justify="left",
+            wraplength=430,
+            font=self.window.fonts["meta"],
+        )
+        self.license_status.pack(fill="x", padx=16, pady=(10, 12))
+
+    def open_license_file(self, relative_path: str) -> None:
+        target = ROOT / relative_path
+        try:
+            if not target.is_file():
+                if relative_path == "Source/vemals-ears-source.zip":
+                    detail = (
+                        "The source archive is not present in this copy. "
+                        "It is included with distributed member ZIPs and installers. "
+                        "Open Source guide for build and source instructions."
+                    )
+                else:
+                    detail = (
+                        f"{relative_path} is missing from this copy. "
+                        "Get the matching file from the distribution's source archive."
+                    )
+                self.license_status.configure(text=detail, fg=DANGER)
+                return
+            os.startfile(str(target))  # noqa: S606 - fixed local document paths
+        except OSError as error:
+            self.license_status.configure(
+                text=f"Could not open {relative_path}: {error}", fg=DANGER,
+            )
+            return
+        self.license_status.configure(
+            text=f"Opened {relative_path}.", fg=self.window.theme.muted,
+        )
 
     @staticmethod
     def contains_widget(container: tk.Widget, widget: tk.Widget | None) -> bool:

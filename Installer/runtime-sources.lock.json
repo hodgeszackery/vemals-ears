@@ -1,0 +1,320 @@
+{
+  "schema": 1,
+  "runtime_lock_hash_mode": "sha256-lf",
+  "runtime_lock_sha256": "99a39747d2ab40a473181cd933bdbeedafe78f12532513256139aeb195e6f5e1",
+  "runtime_components": {
+    "cpython": "3.14.7",
+    "websockets": "13.1",
+    "pillow": "12.3.0",
+    "pywin32": "312"
+  },
+  "artifacts": [
+    {
+      "name": "cpython-hacl-star",
+      "version": "8ba599b2f6c9701b3dc961db895b0856a2210f76",
+      "filename": "8ba599b2f6c9701b3dc961db895b0856a2210f76.zip",
+      "url": "https://github.com/hacl-star/hacl-star/archive/8ba599b2f6c9701b3dc961db895b0856a2210f76.zip",
+      "sha256": "61e48893f37cb2280d106cefacf6fb5afe84edf625fec39572d0ee94e1018f26",
+      "provenance": "https://www.python.org/ftp/python/3.14.7/python-3.14.7-amd64.zip.spdx.json"
+    },
+    {
+      "name": "pillow-build",
+      "version": "12.3.0",
+      "filename": "Pillow-12.3.0-build.tar.gz",
+      "url": "https://codeload.github.com/python-pillow/Pillow/tar.gz/bb1d8e8ab8d29048624d96e3ee53cecf7c13d13d",
+      "sha256": "3088957d53e64d5bc802dc043d64de2d76796c3f3b973113bdbb4c9ecd1b30a1",
+      "provenance": "https://api.github.com/repos/python-pillow/Pillow/git/ref/tags/12.3.0"
+    },
+    {
+      "name": "cpython",
+      "version": "3.14.7",
+      "filename": "Python-3.14.7.tar.xz",
+      "url": "https://www.python.org/ftp/python/3.14.7/Python-3.14.7.tar.xz",
+      "sha256": "3b48dac8fb59f62eaa67ac83c1eb12bda1b7a08406dd286e252c11a66be27f81",
+      "provenance": "https://www.python.org/ftp/python/3.14.7/",
+      "runtime_component": "cpython"
+    },
+    {
+      "name": "pillow-aom",
+      "version": "3.14.1",
+      "filename": "aom-3.14.1.tar.gz",
+      "url": "https://aomedia.googlesource.com/aom/+archive/refs/tags/v3.14.1.tar.gz",
+      "sha256": "6e52af5ba6884a9879b48c9f40ad09d87f366e93d6d98073a5b6c4c133ed9b48",
+      "provenance": "libavif-1.4.2/cmake/Modules/LocalAom.cmake"
+    },
+    {
+      "name": "cpython-bzip2",
+      "version": "1.0.8",
+      "filename": "bzip2-1.0.8.tar.gz",
+      "url": "https://github.com/python/cpython-source-deps/archive/refs/tags/bzip2-1.0.8.tar.gz",
+      "sha256": "ab8d1b0cc087c20d4c32c0e4fcf7d0c733a95da12cedc6d63b3f0a9af07427e2",
+      "provenance": "https://www.python.org/ftp/python/3.14.7/python-3.14.7-amd64.zip.spdx.json"
+    },
+    {
+      "name": "pillow-dav1d",
+      "version": "1.5.3",
+      "filename": "dav1d-1.5.3.tar.gz",
+      "url": "https://code.videolan.org/videolan/dav1d/-/archive/1.5.3/dav1d-1.5.3.tar.gz",
+      "sha256": "cbe212b02faf8c6eed5b6d55ef8a6e363aaab83f15112e960701a9c3df813686",
+      "provenance": "libavif-1.4.2/cmake/Modules/LocalDav1d.cmake"
+    },
+    {
+      "name": "cpython-expat",
+      "version": "2.8.2",
+      "filename": "expat-2.8.2.tar.gz",
+      "url": "https://github.com/libexpat/libexpat/releases/download/R_2_8_2/expat-2.8.2.tar.gz",
+      "sha256": "ef7d1994f533c9e7343d6c19f31064fc8ebbcbcaa144be3812b4f43052a05f4c",
+      "provenance": "https://www.python.org/ftp/python/3.14.7/python-3.14.7-amd64.zip.spdx.json"
+    },
+    {
+      "name": "pillow-freetype",
+      "version": "2.14.3",
+      "filename": "freetype-2.14.3.tar.gz",
+      "url": "https://download-mirror.savannah.gnu.org/releases/freetype/freetype-2.14.3.tar.gz",
+      "sha256": "e61b31ab26358b946e767ed7eb7f4bb2e507da1cfefeb7a8861ace7fd5c899a1",
+      "provenance": "GNU Savannah release mirror; original winbuild/build_prepare.py URL"
+    },
+    {
+      "name": "pillow-fribidi-build-input",
+      "version": "1.0.16",
+      "filename": "fribidi-1.0.16.zip",
+      "url": "https://github.com/fribidi/fribidi/archive/v1.0.16.zip",
+      "sha256": "1e619b9949db8ff00631a2442d72db8faf53ff104dc4a9bf13cc2c224f7cd2ea",
+      "provenance": "Pillow12.3.0 winbuild/build_prepare.py; built for wheel recipe but excluded from shipped wheel"
+    },
+    {
+      "name": "pillow-harfbuzz",
+      "version": "14.2.1",
+      "filename": "harfbuzz-14.2.1.tar.xz",
+      "url": "https://github.com/harfbuzz/harfbuzz/releases/download/14.2.1/harfbuzz-14.2.1.tar.xz",
+      "sha256": "a54a5d8e9380a41fbb762ce367bcbf7704792dfca0d93f1bbca86c5a57902e0e",
+      "provenance": "Pillow-bb1d8e8ab8d29048624d96e3ee53cecf7c13d13d/winbuild/build_prepare.py and .github/dependencies.json"
+    },
+    {
+      "name": "pillow-lcms2",
+      "version": "2.19.1",
+      "filename": "lcms2-2.19.1.tar.gz",
+      "url": "https://downloads.sourceforge.net/project/lcms/lcms/2.19.1/lcms2-2.19.1.tar.gz",
+      "sha256": "bfc54f7bab59fbc921012014a8032e4cba4abd46db47d46b76416a8c0b2815c8",
+      "provenance": "Pillow-bb1d8e8ab8d29048624d96e3ee53cecf7c13d13d/winbuild/build_prepare.py and .github/dependencies.json"
+    },
+    {
+      "name": "cpython-libffi",
+      "version": "3.4.4",
+      "filename": "libffi-3.4.4.tar.gz",
+      "url": "https://github.com/python/cpython-source-deps/archive/refs/tags/libffi-3.4.4.tar.gz",
+      "sha256": "9d802681adfea27d84cae0487a785fb9caa925bdad44c401b364c59ab2b8edda",
+      "provenance": "https://www.python.org/ftp/python/3.14.7/python-3.14.7-amd64.zip.spdx.json"
+    },
+    {
+      "name": "pillow-libjpeg-turbo",
+      "version": "3.1.4.1",
+      "filename": "libjpeg-turbo-3.1.4.1.tar.gz",
+      "url": "https://github.com/libjpeg-turbo/libjpeg-turbo/releases/download/3.1.4.1/libjpeg-turbo-3.1.4.1.tar.gz",
+      "sha256": "ecae8008e2cc9ade2f2c1bb9d5e6d4fb73e7c433866a056bd82980741571a022",
+      "provenance": "Pillow-bb1d8e8ab8d29048624d96e3ee53cecf7c13d13d/winbuild/build_prepare.py and .github/dependencies.json"
+    },
+    {
+      "name": "pillow-libpng",
+      "version": "1.6.58",
+      "filename": "libpng-1.6.58.tar.gz",
+      "url": "https://downloads.sourceforge.net/project/libpng/libpng16/1.6.58/libpng-1.6.58.tar.gz",
+      "sha256": "8c9b05b675ca7301a458df2c2e46f26e1d41ff36b8863f8c33530bc58c2e6225",
+      "provenance": "Pillow-bb1d8e8ab8d29048624d96e3ee53cecf7c13d13d/winbuild/build_prepare.py and .github/dependencies.json"
+    },
+    {
+      "name": "pillow-libwebp",
+      "version": "1.6.0",
+      "filename": "libwebp-1.6.0.tar.gz",
+      "url": "https://storage.googleapis.com/downloads.webmproject.org/releases/webp/libwebp-1.6.0.tar.gz",
+      "sha256": "e4ab7009bf0629fd11982d4c2aa83964cf244cffba7347ecd39019a9e38c4564",
+      "provenance": "Official WebP release bucket; original download host has TLS hostname failure"
+    },
+    {
+      "name": "pillow-libyuv",
+      "version": "644251f252a84bf8ce91ff0aca86a9b16b069ab8",
+      "filename": "libyuv-644251f.tar.gz",
+      "url": "https://chromium.googlesource.com/libyuv/libyuv/+archive/644251f252a84bf8ce91ff0aca86a9b16b069ab8.tar.gz",
+      "sha256": "f28b362a82ffbdb8cfc4e974e02caefe9c546bac165ac8e89249492a84c039a6",
+      "provenance": "libavif-1.4.2/cmake/Modules/LocalLibyuv.cmake"
+    },
+    {
+      "name": "cpython-macholib",
+      "version": "1.0",
+      "filename": "macholib-1.0.tar.gz",
+      "url": "https://files.pythonhosted.org/packages/ec/57/f0a712efc3ed982cf4038a3cee172057303b9be914c32c93b2fbec27f785/macholib-1.0.tar.gz",
+      "sha256": "c76f268f5054024e962f2515a0e522baf85313064f6740d80375afc850787a38",
+      "provenance": "https://www.python.org/ftp/python/3.14.7/python-3.14.7-amd64.zip.spdx.json"
+    },
+    {
+      "name": "cpython-mpdecimal",
+      "version": "2.5.1",
+      "filename": "mpdecimal-2.5.1.tar.gz",
+      "url": "https://www.bytereef.org/software/mpdecimal/releases/mpdecimal-2.5.1.tar.gz",
+      "sha256": "9f9cd4c041f99b5c49ffb7b59d9f12d95b683d88585608aa56a6307667b2b21f",
+      "provenance": "https://www.python.org/ftp/python/3.14.7/python-3.14.7-amd64.zip.spdx.json"
+    },
+    {
+      "name": "cpython-mpdecimal",
+      "version": "4.0.0",
+      "filename": "mpdecimal-4.0.0.tar.gz",
+      "url": "https://github.com/python/cpython-source-deps/archive/refs/tags/mpdecimal-4.0.0.tar.gz",
+      "sha256": "338fac3fb8cdd60f406b6326431338756f58a8af94229ffd9bf1e7c2b1ad71ca",
+      "provenance": "https://www.python.org/ftp/python/3.14.7/python-3.14.7-amd64.zip.spdx.json"
+    },
+    {
+      "name": "cpython-openssl",
+      "version": "3.5.7",
+      "filename": "openssl-3.5.7.tar.gz",
+      "url": "https://github.com/python/cpython-source-deps/archive/refs/tags/openssl-3.5.7.tar.gz",
+      "sha256": "ca94e7c6c223d9caf77bb51aac5949186379608ea2a0cad3aa8bdf31856912e9",
+      "provenance": "https://www.python.org/ftp/python/3.14.7/python-3.14.7-amd64.zip.spdx.json"
+    },
+    {
+      "name": "pillow",
+      "version": "12.3.0",
+      "filename": "pillow-12.3.0.tar.gz",
+      "url": "https://files.pythonhosted.org/packages/1c/3d/bb7fca845737cf9d7dbde16ed1843984665ff2e0a518f5db43e77ec540b9/pillow-12.3.0.tar.gz",
+      "sha256": "3b8182a766685eaa002637e28b4ec8d6b18819a0c71f579bf0dbaa5830297cce",
+      "provenance": "https://pypi.org/pypi/pillow/12.3.0/json",
+      "runtime_component": "pillow"
+    },
+    {
+      "name": "pillow-brotli",
+      "version": "1.2.0",
+      "filename": "pillow-brotli-1.2.0.tar.gz",
+      "url": "https://github.com/google/brotli/archive/refs/tags/v1.2.0.tar.gz",
+      "sha256": "816c96e8e8f193b40151dad7e8ff37b1221d019dbcb9c35cd3fadbfe6477dfec",
+      "provenance": "Pillow-bb1d8e8ab8d29048624d96e3ee53cecf7c13d13d/winbuild/build_prepare.py and .github/dependencies.json"
+    },
+    {
+      "name": "pillow-libavif",
+      "version": "1.4.2",
+      "filename": "pillow-libavif-1.4.2.tar.gz",
+      "url": "https://github.com/AOMediaCodec/libavif/archive/v1.4.2.tar.gz",
+      "sha256": "2b645287340ba5a631d268b551dc2d72bd73ac33335962dd36dcdb6d8366921d",
+      "provenance": "Pillow-bb1d8e8ab8d29048624d96e3ee53cecf7c13d13d/winbuild/build_prepare.py and .github/dependencies.json"
+    },
+    {
+      "name": "pillow-openjpeg",
+      "version": "2.5.4",
+      "filename": "pillow-openjpeg-2.5.4.tar.gz",
+      "url": "https://github.com/uclouvain/openjpeg/archive/v2.5.4.tar.gz",
+      "sha256": "a695fbe19c0165f295a8531b1e4e855cd94d0875d2f88ec4b61080677e27188a",
+      "provenance": "Pillow-bb1d8e8ab8d29048624d96e3ee53cecf7c13d13d/winbuild/build_prepare.py and .github/dependencies.json"
+    },
+    {
+      "name": "pillow-zlib-ng",
+      "version": "2.3.3",
+      "filename": "pillow-zlib-ng-2.3.3.tar.gz",
+      "url": "https://github.com/zlib-ng/zlib-ng/archive/refs/tags/2.3.3.tar.gz",
+      "sha256": "f9c65aa9c852eb8255b636fd9f07ce1c406f061ec19a2e7d508b318ca0c907d1",
+      "provenance": "Pillow-bb1d8e8ab8d29048624d96e3ee53cecf7c13d13d/winbuild/build_prepare.py and .github/dependencies.json"
+    },
+    {
+      "name": "cpython-runtime-sbom",
+      "version": "3.14.7",
+      "filename": "python-3.14.7-amd64.zip.spdx.json",
+      "url": "https://www.python.org/ftp/python/3.14.7/python-3.14.7-amd64.zip.spdx.json",
+      "sha256": "8372f287451761525b2ccb24f84ba493a4ea3273d06b696e46bbaae983d9dd71",
+      "provenance": "Official SPDX accompanying runtime-lock.json Python artifact"
+    },
+    {
+      "name": "pywin32",
+      "version": "312",
+      "filename": "pywin32-312.tar.gz",
+      "url": "https://codeload.github.com/mhammond/pywin32/tar.gz/2a277cb5552756c2b4d42b524dc36d25e0bb6354",
+      "sha256": "c5900d127ffd1b4594080925e343725f8b896423d57e96f66863f443e9098da6",
+      "provenance": "https://api.github.com/repos/mhammond/pywin32/git/ref/tags/b312",
+      "runtime_component": "pywin32"
+    },
+    {
+      "name": "cpython-sqlite",
+      "version": "3.50.4.0",
+      "filename": "sqlite-3.50.4.0.tar.gz",
+      "url": "https://github.com/python/cpython-source-deps/archive/refs/tags/sqlite-3.50.4.0.tar.gz",
+      "sha256": "fb5ab81f27612b0a7b4861ba655906c76dc85ee969e7a4905d2075aff931e8d0",
+      "provenance": "https://www.python.org/ftp/python/3.14.7/python-3.14.7-amd64.zip.spdx.json"
+    },
+    {
+      "name": "cpython-tcl",
+      "version": "9.0.4.0",
+      "filename": "tcl-9.0.4.0.tar.gz",
+      "url": "https://github.com/python/cpython-source-deps/archive/refs/tags/tcl-9.0.4.0.tar.gz",
+      "sha256": "3ac2acd65ddaaac0b2b8df321b558419d21da20bf67ab39149b8248c85f0d214",
+      "provenance": "https://www.python.org/ftp/python/3.14.7/python-3.14.7-amd64.zip.spdx.json"
+    },
+    {
+      "name": "pillow-tiff",
+      "version": "4.7.1",
+      "filename": "tiff-4.7.1.tar.gz",
+      "url": "https://download.osgeo.org/libtiff/tiff-4.7.1.tar.gz",
+      "sha256": "f698d94f3103da8ca7438d84e0344e453fe0ba3b7486e04c5bf7a9a3fabe9b69",
+      "provenance": "Pillow-bb1d8e8ab8d29048624d96e3ee53cecf7c13d13d/winbuild/build_prepare.py and .github/dependencies.json"
+    },
+    {
+      "name": "cpython-tk",
+      "version": "9.0.4.1",
+      "filename": "tk-9.0.4.1.tar.gz",
+      "url": "https://github.com/python/cpython-source-deps/archive/refs/tags/tk-9.0.4.1.tar.gz",
+      "sha256": "66048966cfa88989333ff1632f454e10e9248516bb45efda7b4d2ae5a61642cb",
+      "provenance": "https://www.python.org/ftp/python/3.14.7/python-3.14.7-amd64.zip.spdx.json"
+    },
+    {
+      "name": "websockets",
+      "version": "13.1",
+      "filename": "websockets-13.1.tar.gz",
+      "url": "https://files.pythonhosted.org/packages/e2/73/9223dbc7be3dcaf2a7bbf756c351ec8da04b1fa573edaf545b95f6b0c7fd/websockets-13.1.tar.gz",
+      "sha256": "a3b3366087c1bc0a2795111edcadddb8b3b59509d5db5d7ea3fdd69f954a8878",
+      "provenance": "https://pypi.org/pypi/websockets/13.1/json",
+      "runtime_component": "websockets"
+    },
+    {
+      "name": "cpython-xz",
+      "version": "5.2.5",
+      "filename": "xz-5.2.5.tar.gz",
+      "url": "https://github.com/python/cpython-source-deps/archive/refs/tags/xz-5.2.5.tar.gz",
+      "sha256": "a15c168e39e87d750c3dc766edc7f19bdda57dacf01e509678467eace91ad282",
+      "provenance": "https://www.python.org/ftp/python/3.14.7/python-3.14.7-amd64.zip.spdx.json"
+    },
+    {
+      "name": "pillow-xz",
+      "version": "5.8.3",
+      "filename": "xz-5.8.3.tar.gz",
+      "url": "https://github.com/tukaani-project/xz/releases/download/v5.8.3/xz-5.8.3.tar.gz",
+      "sha256": "3d3a1b973af218114f4f889bbaa2f4c037deaae0c8e815eec381c3d546b974a0",
+      "provenance": "Pillow-bb1d8e8ab8d29048624d96e3ee53cecf7c13d13d/winbuild/build_prepare.py and .github/dependencies.json"
+    },
+    {
+      "name": "cpython-zlib-ng",
+      "version": "2.2.4",
+      "filename": "zlib-ng-2.2.4.tar.gz",
+      "url": "https://github.com/python/cpython-source-deps/archive/refs/tags/zlib-ng-2.2.4.tar.gz",
+      "sha256": "00bbd88709bc416cb96160ab61d3e1c8f76e106799af7328d0fe434dc7dd5004",
+      "provenance": "https://www.python.org/ftp/python/3.14.7/python-3.14.7-amd64.zip.spdx.json"
+    },
+    {
+      "name": "cpython-zstd",
+      "version": "1.5.7",
+      "filename": "zstd-1.5.7.tar.gz",
+      "url": "https://github.com/python/cpython-source-deps/archive/refs/tags/zstd-1.5.7.tar.gz",
+      "sha256": "f24b52470d12f466e9fa4fcc94e6c530625ada51d7b36de7fdc6ed7e6f499c8e",
+      "provenance": "https://www.python.org/ftp/python/3.14.7/python-3.14.7-amd64.zip.spdx.json"
+    }
+  ],
+  "build_notes": [
+    "CPython: extract Python-3.14.7.tar.xz. PCbuild/readme.txt, PCbuild/build.bat and PCbuild/get_externals.bat are the Windows build recipe. Its PCbuild preparation scripts cover OpenSSL/libffi/Tcl/Tk. The accompanying official SPDX identifies the exact bundled source-dependency snapshots. Extract those cpython-source-deps archives into the externals directories named by PCbuild/python.props and PCbuild/tcltk.props. Unmodified MSVC, Windows SDK, NASM and other general-purpose build tools are separate prerequisites.",
+    "Pillow: the PyPI sdist is supplied unchanged. The release Git archive Pillow-12.3.0-build.tar.gz adds .github/dependencies.json, .github/workflows/wheels.yml, winbuild/build_prepare.py and all recipe patches missing from the sdist. Read winbuild/README.md and build.rst. The Windows wheel workflow calls build_prepare.py --no-imagequant --architecture=AMD64, then build_dep_all.cmd and cibuildwheel; consult the supplied workflow and pyproject.toml for options.",
+    "Pillow dependencies: place supplied release archives in winbuild/depends under the filenames required by build_prepare.py (rename only the archive file where this manifest prefixes pillow-). All original archive bytes and notices remain unchanged. The WebP source comes from the official Google release bucket because the historical downloads.webmproject.org HTTPS hostname failed certificate validation.",
+    "libavif: its supplied cmake/Modules/LocalAom.cmake, LocalDav1d.cmake, LocalLibyuv.cmake and LocalLibsharpyuv.cmake pin aom v3.14.1, dav1d 1.5.3, libyuv 644251f252a84bf8ce91ff0aca86a9b16b069ab8 and WebP v1.6.0. Extract their supplied sources to libavif ext/aom, ext/dav1d, ext/libyuv and ext/libwebp to use the documented local-source paths. Gitiles archives for aom/libyuv have no enclosing top directory.",
+    "pywin32: pywin32-312.tar.gz is the verified b312 release commit 2a277cb5552756c2b4d42b524dc36d25e0bb6354. Read README.md and setup.py; build with the matching Python headers/import libraries and Visual Studio Windows SDK. This source includes its native extensions and build workflow.",
+    "websockets: extract the unchanged PyPI websockets-13.1.tar.gz and follow its pyproject.toml and build documentation. The distributed runtime uses the pure-Python wheel.",
+    "Rebuilding modified dependencies: build new artifacts from these editable sources, update Installer/runtime-lock.json with your artifact URLs/checksums, then update Installer/runtime-sources.lock.json to bind the matching source inputs. The source helper does not require Git or a private repository account. Its --offline option reuses a verified cache. No signing certificate is required for an unsigned modified VE build."
+  ],
+  "coverage_notes": [
+    "Input versions are traced to the exact Windows runtime lock, official CPython binary SPDX, PyPI metadata, Pillow wheel notices/SBOM and the verified upstream release build recipes. Matching source inputs are provided; this collection has not independently rebuilt the upstream binary wheels or interpreter.",
+    "Compiler versions, upstream build-host configuration and a full offline dependency rebuild have not been independently reproduced. This manifest does not claim byte-identical binary reproducibility. Build recipes may fetch general-purpose build tools; the helper itself only downloads hash-verified source inputs.",
+    "Pillow includes raqm, fribidi-shim and pythoncapi_compat sources under src/thirdparty. The Windows release workflow explicitly excludes libimagequant and the FriBiDi DLL from the wheel; FriBiDi source is included here as a recipe build input. The generic Pillow SBOM also lists optional non-Windows dependencies that this wheel does not bundle.",
+    "CPython archives preserve its upstream source dependencies and notices. pip/ensurepip and their vendored packages are pruned from the shipped runtime by VE build scripts; unrelated operating-system libraries, compiler/tool binaries, signing tools, credentials and operator state are not included here."
+  ]
+}

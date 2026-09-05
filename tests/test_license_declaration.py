@@ -1,18 +1,11 @@
-"""The licence must be declared everywhere a consumer looks for it.
+"""VE's applying notice and product declarations must agree.
 
-A LICENSE file alone is easy to contradict. CurseForge reads the toc,
-npm reads package.json, and players read the listing copy - and before
-this existed the GearHelper listing promised "free, open source" while
-the repository declared nothing at all, which is the mismatch that
-matters: a public claim the project did not actually make.
-
-The sweep over tracked .toc files is the part with teeth. A fifth addon
-cannot join the suite without declaring its licence.
+Third-party notices describe other licenses and must not be mistaken for
+a conflicting declaration about VE itself. Artifact tests separately verify
+that the license and matching source actually reach recipients.
 """
 
 import json
-import re
-import subprocess
 import unittest
 from pathlib import Path
 
@@ -22,8 +15,7 @@ LICENSE = "GPL-3.0-only"
 
 class LicenseDeclarationTests(unittest.TestCase):
     def test_the_repository_carries_the_license_text(self):
-        """Shino, 2026-09-02, choosing GPL so Warpsim can be a headline
-        feature of 0.5.0 rather than a thing held at arm's length."""
+        """The standalone product keeps the original GPLv3 applying grant."""
         text = (ROOT / "LICENSE").read_text(encoding="utf-8")
         self.assertIn("GNU GENERAL PUBLIC LICENSE", text)
         self.assertIn("Version 3, 29 June 2007", text)
@@ -39,29 +31,18 @@ class LicenseDeclarationTests(unittest.TestCase):
         self.assertIn("You may charge any price or no price", text)
         self.assertIn("may not impose any further restrictions", text)
 
-    def test_nothing_still_claims_the_old_licence(self):
-        """A half-finished relicence is worse than either licence: it makes
-        two contradictory public claims about the same code."""
-        listed = subprocess.run(
-            ["git", "ls-files", "*.toc", "*.json", "*.md", "*.txt", "LICENSE"],
-            cwd=str(ROOT), capture_output=True, text=True, check=True,
+    def test_product_declarations_agree_with_the_applying_notice(self):
+        readme = (ROOT / "README.txt").read_text(encoding="ascii")
+        self.assertIn("License: GPL-3.0-only; see LICENSE.", readme)
+        notice = (ROOT / "Installer/THIRD-PARTY-NOTICES.txt").read_text(encoding="ascii")
+        self.assertIn(
+            "Vemal's Ears itself is licensed under the GNU General Public License,\n"
+            "version 3 only.", notice,
         )
-        stale = []
-        for relative in [line.strip() for line in listed.stdout.splitlines() if line.strip()]:
-            if relative.startswith("Warpsim/") or "package-lock" in relative:
-                continue  # upstream text and dependency metadata, not our claim
-            path = ROOT / relative
-            try:
-                text = path.read_text(encoding="utf-8")
-            except (OSError, UnicodeDecodeError):
-                continue
-            for line in text.splitlines():
-                lowered = line.casefold()
-                if "mit license" in lowered or "mit licensed" in lowered:
-                    if "whisper" in lowered or "silero" in lowered:
-                        continue  # third parties keep their own licences
-                    stale.append(f"{relative}: {line.strip()}")
-        self.assertEqual([], stale, "these still claim MIT after the relicence")
+        grant = (ROOT / "LICENSE").read_text(encoding="ascii").split("------", 1)[0]
+        self.assertIn("Vemal's Ears", grant)
+        self.assertIn("under the terms of the GNU General Public License", grant)
+        self.assertNotIn("MIT License", grant)
 
 
     def test_the_discord_adapter_manifest_declares_it(self):

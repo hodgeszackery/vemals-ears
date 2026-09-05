@@ -17,7 +17,7 @@ setup), verifies every signature is by that certificate, and removes the
 certificate again whether or not anything failed.
 
 The output is Vemals-Ears-Setup-PROOF-UNTRUSTED.exe. It is signed by a
-certificate nobody trusts and must never be distributed; it exists to
+certificate nobody trusts and is not an official release; it exists to
 show that the day a real certificate is in the store, signing a release
 is one thumbprint away.
 #>
@@ -83,7 +83,7 @@ try {
     Write-Output "  signer invoked 3 times: launcher, uninstaller ($($uninstaller[0])), installer"
     Write-Output "  every signature made by $thumbprint"
     Write-Output "  the key was never exportable and no password was ever typed"
-    Write-Output "  output is PROOF-UNTRUSTED and must not be distributed"
+    Write-Output "  output is PROOF-UNTRUSTED and is not an official release"
 }
 finally {
     if (Test-Path -LiteralPath $storePath) {

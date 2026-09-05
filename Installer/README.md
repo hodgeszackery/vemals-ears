@@ -40,7 +40,7 @@ embedded in the installer.
 
 ## Local unsigned build
 
-Unsigned builds are only for development and must not be distributed:
+The default unsigned build is labeled for development:
 
 ```powershell
 ./Installer/build_installer.ps1
@@ -50,6 +50,15 @@ The result is `dist/Vemals-Ears-Setup-UNSIGNED.exe`. The build downloads the
 exact Python runtime and wheels recorded in `runtime-lock.json`, verifies every
 SHA-256 digest, stages only the explicit application allowlist, compiles the
 native launcher, and uses the locked Inno Setup version.
+
+This label describes the project's release process, not a restriction on your
+GPL rights. You may rebuild, modify and redistribute under GPL-3.0-only. Use
+`-AllowUnsigned` to deliberately select the normal release filename for an
+unsigned build. Do not represent an unsigned or modified build as an official
+signed release. Matching client source and instructions are included in
+`app/Source/vemals-ears-source.zip` and `app/docs/SOURCE.txt` after installation.
+Recipients do not need the private GitHub repository or publisher's signing
+credentials to rebuild; see `docs/SOURCE.txt`.
 
 Inno Setup 7.1.0 and the Visual Studio x64 C++ Build Tools must be installed for
 a local build. The release workflow downloads and verifies the locked Inno
@@ -72,7 +81,7 @@ on reinstall, native launcher pairing arguments, and uninstall cleanup.
 
 ## Protected signed release
 
-`.github/workflows/vemals-ears-windows.yml` is the only distribution path. It
+`.github/workflows/vemals-ears-windows.yml` is the project's signed-release path. It
 runs for tags matching `vemals-ears-v*` and for manual workflow dispatches. The
 workflow does the following in order:
 
@@ -121,7 +130,7 @@ certificate's full subject string as returned by PowerShell:
 Configure the Azure federated credential for this environment subject:
 
 ```text
-repo:hodgeszackery/downtime-addons:environment:windows-release
+repo:hodgeszackery/vemals-ears:environment:windows-release
 ```
 
 Grant that identity signing access only to the intended Artifact Signing

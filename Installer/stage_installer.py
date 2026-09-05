@@ -5,12 +5,15 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import runpy
 import shutil
 import subprocess
 import sys
 from pathlib import Path, PurePosixPath
 
 ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT))
+import source_distribution
 MEMBER_EDITION_PATH = "vemals-ears-member.json"
 MEMBER_EDITION_DOCUMENT = {"edition": "member", "schema": 1}
 
@@ -39,8 +42,11 @@ def _safe_source_file(source_root: Path, relative: str) -> Path:
     logical = PurePosixPath(relative)
     if logical.is_absolute() or ".." in logical.parts or not logical.parts:
         raise StageError("unsafe installer allowlist path: " + relative)
-    candidate = source_root.joinpath(*logical.parts)
     try:
+        # Windows can expand an 8.3 temp path while resolving its child.
+        # Compare the child and boundary using the same canonical spelling.
+        source_root = source_root.resolve(strict=True)
+        candidate = source_root.joinpath(*logical.parts)
         resolved = candidate.resolve(strict=True)
     except OSError as error:
         raise StageError("missing installer file: " + relative) from error
@@ -99,12 +105,10 @@ def _version_from_toc(source_root: Path) -> str:
 
 
 def _load_allowlist(source_root: Path) -> tuple[str, ...]:
-    sys.path.insert(0, str(source_root))
     try:
-        from build_release import WINDOWS_INSTALLER_APP_FILES
-    except (ImportError, AttributeError) as error:
+        values = tuple(runpy.run_path(str(source_root / "build_release.py"))["WINDOWS_INSTALLER_APP_FILES"])
+    except (ImportError, KeyError, OSError) as error:
         raise StageError("the Windows installer allowlist is unavailable") from error
-    values = tuple(WINDOWS_INSTALLER_APP_FILES)
     if len(values) != len(set(values)):
         raise StageError("the Windows installer allowlist contains duplicates")
     return values
@@ -137,23 +141,29 @@ def stage_payload(
             "installer version " + version + " does not match Vemals Ears " + declared_version
         )
 
+    allowlist = _load_allowlist(source_root)
+    source_files = source_distribution.snapshot(source_root, allowlist)
+    if require_clean:
+        for relative in source_files:
+            require_tracked_file(source_root, relative)
+
     app_root = stage_root / "app"
     if app_root.exists():
         raise StageError("the installer app staging directory already exists")
     app_root.mkdir(parents=True)
-
-    allowlist = _load_allowlist(source_root)
-    if require_clean:
-        for relative in allowlist:
-            require_tracked_file(source_root, relative)
-
     records: list[dict[str, str]] = []
     for relative in allowlist:
-        source = _safe_source_file(source_root, relative)
         target = app_root.joinpath(*PurePosixPath(relative).parts)
         target.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(source, target)
+        target.write_bytes(source_files[relative])
         records.append({"path": relative, "sha256": _sha256(target)})
+
+    source_archive = app_root / source_distribution.EMBEDDED_PATH
+    source_archive.parent.mkdir(parents=True)
+    source_archive.write_bytes(source_distribution.archive_bytes(source_files))
+    records.append({"path": source_distribution.EMBEDDED_PATH, "sha256": _sha256(source_archive)})
+    source_distribution.write_source_tree(source_files, stage_root / "source")
+    source_distribution.verify_payload(source_files, lambda relative: (app_root / relative).read_bytes(), allowlist)
 
     member_marker = app_root / MEMBER_EDITION_PATH
     member_marker.write_text(
@@ -162,12 +172,14 @@ def stage_payload(
     )
     records.append({"path": MEMBER_EDITION_PATH, "sha256": _sha256(member_marker)})
 
-    _write_icon(source_root, stage_root / "VemalsEars.ico")
+    _write_icon(stage_root / "source", stage_root / "VemalsEars.ico")
     manifest: dict[str, object] = {
         "schema": 1,
         "product": "Vemal's Ears",
         "version": version,
-        "source_commit": _git_output(source_root, "rev-parse", "HEAD"),
+        "source_commit": source_distribution.git_commit(source_root),
+        "corresponding_source": {"path": source_distribution.EMBEDDED_PATH,
+                                 "sha256": _sha256(source_archive)},
         "generic": True,
         "audience": "member",
         "guild_configuration_embedded": False,
@@ -194,7 +206,7 @@ def main(argv: list[str] | None = None) -> int:
             arguments.version,
             require_clean=arguments.require_clean,
         )
-    except (OSError, StageError, ValueError) as error:
+    except (OSError, StageError, ValueError, source_distribution.SourceError) as error:
         print("Installer staging failed: " + str(error), file=sys.stderr)
         return 1
     print(

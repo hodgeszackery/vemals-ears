@@ -1,0 +1,27 @@
+[
+  {
+    "path": "GuildHub/third-party/WHISPER-MODEL-LICENSE.txt",
+    "url": "https://raw.githubusercontent.com/openai/whisper/86098128c0b4f24f0e2aa2994de830614b474227/LICENSE",
+    "sha256": "b5d65a59060e68c4ff940e1eddfa6f94b2d68fdf58ed7f4dd57721c997e35e9d"
+  },
+  {
+    "path": "GuildHub/third-party/SILERO-VAD-LICENSE.txt",
+    "url": "https://raw.githubusercontent.com/snakers4/silero-vad/be95df9152c0d7618fa1edfeb296fc3dae32376f/LICENSE",
+    "sha256": "2e63e9a38b6e8fc0c7bc37ce174caca1862870856c6daf5697cfb785e925520b"
+  },
+  {
+    "path": "GuildHub/third-party/CPP-HTTPLIB-LICENSE.txt",
+    "url": "https://raw.githubusercontent.com/yhirose/cpp-httplib/787a34ad7f01f20922a237d5142aae469828be72/LICENSE",
+    "sha256": "4b45cbe16d7b71b89ae6127e26e0d90a029198ca5e958ad8e3d0b8bbed364d8b"
+  },
+  {
+    "path": "GuildHub/third-party/WHISPER-MODEL-CARD.txt",
+    "url": "https://huggingface.co/ggerganov/whisper.cpp/raw/5359861c739e955e79d9a303bcbc70fb988958b1/README.md",
+    "sha256": "21fd967098804f33fc84e803fb0e5ab7666d71801f4027cf28a65e7af09c1758"
+  },
+  {
+    "path": "GuildHub/third-party/SILERO-VAD-MODEL-CARD.txt",
+    "url": "https://huggingface.co/ggml-org/whisper-vad/raw/9ffd54a1e1ee413ddf265af9913beaf518d1639b/README.md",
+    "sha256": "6c1077880c654e84e103c34d2f7560e058ee62fecd2bc868db0249641c5d247e"
+  }
+]
