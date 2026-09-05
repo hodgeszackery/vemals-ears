@@ -348,9 +348,14 @@ class RemoteCaptionSink:
                     response = connection.recv(timeout=ACK_TIMEOUT_SECONDS)
                     if payload.kind == "publish":
                         cursor = _cursor_message(response, "published")
-                        if cursor != self._last_cursor + 1:
+                        # This is the relay's global stream cursor. Typed
+                        # chat publishes directly to that stream between
+                        # worker frames, so acknowledgements can skip ahead.
+                        # Only a repeated or backward cursor is invalid here;
+                        # subscribers still require contiguous replay.
+                        if cursor <= self._last_cursor:
                             raise PublisherError(
-                                "The Vemal's Ears server returned a discontinuous cursor."
+                                "The Vemal's Ears server returned a non-advancing cursor."
                             )
                         self._last_cursor = cursor
                     elif payload.kind == "audience_update":

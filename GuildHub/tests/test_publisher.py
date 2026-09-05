@@ -2,7 +2,7 @@ import threading
 import time
 import unittest
 
-from GuildHub.protocol import decode_message, encode_message
+from GuildHub.protocol import MAX_CURSOR, decode_message, encode_message
 from GuildHub.publisher import PublisherError, RemoteCaptionSink, publisher_url
 from VoiceCaptions.events import CaptionEvent
 
@@ -24,15 +24,17 @@ class FakeConnection:
         self,
         *,
         auth_type="authenticated",
+        auth_cursor=0,
         ack_cursor=1,
         auth_extra=False,
     ):
         self.sent = []
-        authentication = {"type": auth_type, "cursor": 0}
+        authentication = {"type": auth_type, "cursor": auth_cursor}
         if auth_extra:
             authentication["unexpected"] = "field"
         self.responses = [encode_message(authentication)]
         self.ack_cursor = ack_cursor
+        self.ack_response = None
         self.closed = False
         self.lock = threading.Lock()
 
@@ -42,7 +44,11 @@ class FakeConnection:
             decoded = decode_message(message)
             if decoded.get("type") == "publish":
                 self.responses.append(
-                    encode_message({"type": "published", "cursor": self.ack_cursor})
+                    encode_message(
+                        self.ack_response
+                        if self.ack_response is not None
+                        else {"type": "published", "cursor": self.ack_cursor}
+                    )
                 )
             elif decoded.get("type") == "audience_update":
                 self.responses.append(
@@ -144,37 +150,76 @@ class PublisherTests(unittest.TestCase):
                 timeout=1,
             )
 
-    def test_repeated_ack_fails_closed(self):
-        connection = FakeConnection(ack_cursor=0)
-        sink = RemoteCaptionSink.start(
-            "ws://localhost:8765",
-            "p" * 40,
-            connector=lambda *_args, **_kwargs: connection,
-            timeout=1,
-        )
-        self.assertTrue(sink.send(CAPTION))
-        sink._pending.join()
-        deadline = time.monotonic() + 1
-        while not sink._failed.is_set() and time.monotonic() < deadline:
-            time.sleep(0.001)
-        self.assertFalse(sink.alive())
-        sink.close()
+    def test_repeated_or_backward_ack_fails_closed(self):
+        for cursor in (5, 4):
+            with self.subTest(cursor=cursor):
+                connection = FakeConnection(auth_cursor=5, ack_cursor=cursor)
+                sink = RemoteCaptionSink.start(
+                    "ws://localhost:8765",
+                    "p" * 40,
+                    connector=lambda *_args, **_kwargs: connection,
+                    timeout=1,
+                )
+                try:
+                    self.assertTrue(sink.send(CAPTION))
+                    self.assertTrue(sink._failed.wait(1))
+                    self.assertFalse(sink.alive())
+                finally:
+                    sink.close()
 
-    def test_ack_cursor_gap_fails_closed(self):
-        connection = FakeConnection(ack_cursor=2)
+    def test_interleaved_relay_chat_keeps_worker_publishing(self):
+        # Authentication can start partway through the global stream. Two
+        # typed lines then consume 6/7, and three more consume 9/10/11.
+        # Every worker acknowledgement must advance, but need not be +1.
+        connection = FakeConnection(auth_cursor=5)
         sink = RemoteCaptionSink.start(
             "ws://localhost:8765",
             "p" * 40,
             connector=lambda *_args, **_kwargs: connection,
             timeout=1,
         )
-        self.assertTrue(sink.send(CAPTION))
-        sink._pending.join()
-        deadline = time.monotonic() + 1
-        while not sink._failed.is_set() and time.monotonic() < deadline:
-            time.sleep(0.001)
-        self.assertFalse(sink.alive())
-        sink.close()
+        try:
+            for cursor in (8, 12, 13):
+                connection.ack_cursor = cursor
+                self.assertTrue(sink.send(CAPTION))
+                deadline = time.monotonic() + 1
+                while (
+                    sink._last_cursor != cursor
+                    and not sink._failed.is_set()
+                    and time.monotonic() < deadline
+                ):
+                    time.sleep(0.001)
+                self.assertTrue(sink.alive(), "relay chat stopped the worker publisher")
+                self.assertEqual(cursor, sink._last_cursor)
+            self.assertEqual(4, len(connection.sent))
+        finally:
+            sink.close()
+
+    def test_malformed_or_out_of_bounds_ack_fails_closed(self):
+        responses = [
+            {"type": "published", "cursor": cursor}
+            for cursor in (True, 1.5, "1", -1, MAX_CURSOR + 1)
+        ] + [
+            {"type": "authenticated", "cursor": 1},
+            {"type": "published"},
+            {"type": "published", "cursor": 1, "unexpected": True},
+        ]
+        for response in responses:
+            with self.subTest(response=response):
+                connection = FakeConnection()
+                connection.ack_response = response
+                sink = RemoteCaptionSink.start(
+                    "ws://localhost:8765",
+                    "p" * 40,
+                    connector=lambda *_args, **_kwargs: connection,
+                    timeout=1,
+                )
+                try:
+                    self.assertTrue(sink.send(CAPTION))
+                    self.assertTrue(sink._failed.wait(1))
+                    self.assertFalse(sink.alive())
+                finally:
+                    sink.close()
 
     def test_an_invitation_round_trip_keeps_the_publisher_alive(self):
         """The bug that shipped in 0.4.5 and took captions down.
