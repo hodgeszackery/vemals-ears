@@ -200,10 +200,38 @@ def caption_font_specs(size: int, family: str) -> dict[str, dict[str, object]]:
     return {
         "speaker": {"family": family, "size": px(9), "weight": "bold"},
         "caption": {"family": family, "size": px(10)},
+        "caption_whisper": {
+            "family": family,
+            "size": px(10),
+            "slant": "italic",
+        },
+        "caption_shout": {
+            "family": family,
+            "size": px(10),
+            "weight": "bold",
+        },
         "previous": {"family": family, "size": px(9)},
+        "previous_whisper": {
+            "family": family,
+            "size": px(9),
+            "slant": "italic",
+        },
+        "previous_shout": {
+            "family": family,
+            "size": px(9),
+            "weight": "bold",
+        },
         "initial": {"family": family, "size": px(8), "weight": "bold"},
         "status": {"family": family, "size": px(8), "weight": "bold"},
     }
+
+
+def caption_font_key(live: bool, speech_style: str) -> str:
+    """Return the font face for one caption without changing its text."""
+    base = "caption" if live else "previous"
+    if speech_style in {"whisper", "shout"}:
+        return base + "_" + speech_style
+    return base
 
 
 def background_stipple(opacity: int) -> str:

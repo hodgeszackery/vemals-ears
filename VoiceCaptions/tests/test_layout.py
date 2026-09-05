@@ -22,6 +22,7 @@ from VoiceCaptions.layout import (
     MAX_TEXT_LINES,
     background_stipple,
     canvas_height_for_target,
+    caption_font_key,
     caption_font_specs,
     clipped_text,
     metrics_for_target,
@@ -255,6 +256,42 @@ class LayoutTests(unittest.TestCase):
                     # the name still carries the role or class accent.
                     expected_caption = subject.settings.caption_text_color
                     self.assertEqual(expected_caption, caption.get("fill"))
+
+    def test_whispers_are_italic_and_shouts_are_bold_in_live_and_history_rows(self):
+        canvas = FakeCanvas()
+        subject = drawing_subject(canvas)
+        subject.fonts.update(
+            {
+                "caption_whisper": FakeFont(7),
+                "caption_shout": FakeFont(10),
+                "previous_whisper": FakeFont(6),
+                "previous_shout": FakeFont(9),
+            }
+        )
+        for final, style, expected in (
+            (False, "whisper", "caption_whisper"),
+            (False, "shout", "caption_shout"),
+            (True, "whisper", "previous_whisper"),
+            (True, "shout", "previous_shout"),
+            (False, "normal", "caption"),
+        ):
+            with self.subTest(final=final, style=style):
+                event = CaptionEvent(
+                    speaker_id="mira",
+                    speaker="Mira",
+                    character="Mira",
+                    role="HEALER",
+                    text="Move left",
+                    final=final,
+                    sequence=1,
+                    timestamp=0.0,
+                    speech_style=style,
+                )
+                card = CaptionOverlay.measure_card(
+                    subject,
+                    DisplayLine(event=event, updated_at=0.0),
+                )
+                self.assertIs(subject.fonts[expected], card["caption_font"])
 
     def test_position_is_centered_and_above_the_bottom_safe_area(self):
         position = safe_overlay_position((100, 200, 1920, 1080), (540, 86))
@@ -909,6 +946,12 @@ class FontSizeScalingTests(unittest.TestCase):
         self.assertEqual("Verdana", specs["caption"]["family"])
         self.assertEqual(20, specs["caption"]["size"])
         self.assertEqual(18, specs["speaker"]["size"])
+        self.assertEqual("italic", specs["caption_whisper"]["slant"])
+        self.assertEqual("bold", specs["caption_shout"]["weight"])
+        self.assertEqual("italic", specs["previous_whisper"]["slant"])
+        self.assertEqual("bold", specs["previous_shout"]["weight"])
+        self.assertEqual("caption_whisper", caption_font_key(True, "whisper"))
+        self.assertEqual("previous_shout", caption_font_key(False, "shout"))
         metrics = metrics_for_target(48, (0, 0, 1920, 1080))
         self.assertEqual(1920, metrics.canvas_width)
         self.assertEqual(

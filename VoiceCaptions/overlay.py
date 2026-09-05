@@ -39,6 +39,7 @@ if __package__ in {None, ""}:
         DEFAULT_METRICS,
         background_stipple,
         canvas_height_for_target,
+        caption_font_key,
         caption_font_specs,
         clipped_text,
         metrics_for_target,
@@ -70,6 +71,7 @@ else:
         DEFAULT_METRICS,
         background_stipple,
         canvas_height_for_target,
+        caption_font_key,
         caption_font_specs,
         clipped_text,
         metrics_for_target,
@@ -1222,6 +1224,7 @@ class CaptionOverlay:
                     line.event.sequence,
                     line.event.text,
                     line.event.final,
+                    line.event.speech_style,
                 )
                 for line in lines
             ),
@@ -1421,7 +1424,11 @@ class CaptionOverlay:
         """
         event = line.event
         live = line.live
-        caption_font = self.fonts["caption"] if live else self.fonts["previous"]
+        base_font = "caption" if live else "previous"
+        caption_font = self.fonts.get(
+            caption_font_key(live, event.speech_style),
+            self.fonts[base_font],
+        )
         # A name allowed to run the length of the card silently deletes
         # the words it belongs to. Bound it before measuring anything.
         speaker = clipped_text(

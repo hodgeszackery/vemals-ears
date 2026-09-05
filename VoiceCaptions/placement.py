@@ -16,6 +16,7 @@ if __package__ in {None, ""}:
         DEFAULT_METRICS,
         background_stipple,
         canvas_height_for_target,
+        caption_font_key,
         caption_font_specs,
         clipped_text,
         metrics_for_target,
@@ -50,6 +51,7 @@ else:
         DEFAULT_METRICS,
         background_stipple,
         canvas_height_for_target,
+        caption_font_key,
         caption_font_specs,
         clipped_text,
         metrics_for_target,
@@ -702,10 +704,10 @@ class PlacementWindow:
             ),
         )
         examples = (
-            (330, "Tari", "Adds are spawning.", "#a330c9"),
-            (370, "Lena", "Move out, then back in.", "#fff468"),
-            (360, "Drex", "Boss turning left.", "#4b8fe8"),
-            (430, "Mira", "Spread for circles, then stack on me.", "#4fd182"),
+            (330, "Tari", "Adds are spawning.", "#a330c9", "whisper"),
+            (370, "Lena", "Move out, then back in.", "#fff468", "normal"),
+            (360, "Drex", "Boss turning left.", "#4b8fe8", "shout"),
+            (430, "Mira", "Spread for circles, then stack on me.", "#4fd182", "normal"),
         )
         # More rows than there are examples: repeat them so the preview
         # shows the real count rather than silently capping at four.
@@ -725,7 +727,7 @@ class PlacementWindow:
                 - metrics.stacked(heights)
                 + metrics.vertical_padding
             )
-        for index, (width, speaker, text, color) in enumerate(shown):
+        for index, (width, speaker, text, color, speech_style) in enumerate(shown):
             live = index == len(shown) - 1
             height = heights[index]
             scaled_width = round(
@@ -744,6 +746,7 @@ class PlacementWindow:
                 text=text,
                 color=color,
                 live=live,
+                speech_style=speech_style,
             )
             cursor_y += height + metrics.row_gap
 
@@ -757,6 +760,7 @@ class PlacementWindow:
         text: str,
         color: str,
         live: bool,
+        speech_style: str = "normal",
     ) -> None:
         canvas_width = getattr(self, "window_width", WINDOW_WIDTH)
         x1 = (canvas_width - width) // 2
@@ -805,7 +809,11 @@ class PlacementWindow:
         tally_width = self.recording_tally_size()[0] if live else 0
         reserve = tally_width + 12 if live else 9
         available = max(x2 - caption_x - reserve, 0)
-        caption_font = self.fonts["caption"] if live else self.fonts["previous"]
+        base_font = "caption" if live else "previous"
+        caption_font = self.fonts.get(
+            caption_font_key(live, speech_style),
+            self.fonts[base_font],
+        )
         self.canvas.create_text(
             caption_x,
             text_y,
