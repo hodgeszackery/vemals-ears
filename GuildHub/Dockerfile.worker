@@ -1,0 +1,163 @@
+FROM node:22.12.0-bookworm-slim AS node-dependencies
+
+ENV NPM_CONFIG_AUDIT=false \
+    NPM_CONFIG_FUND=false \
+    NPM_CONFIG_UPDATE_NOTIFIER=false
+
+WORKDIR /build/discord-adapter
+COPY VoiceCaptions/discord_adapter/package.json \
+     VoiceCaptions/discord_adapter/package-lock.json \
+     ./
+RUN npm ci --omit=dev \
+    && npm cache clean --force
+
+
+FROM node:22.12.0-bookworm-slim AS whisper-builder
+
+# b4938 resolves to this exact source commit. Fetch the tag, peel it to a
+# commit, and fail the build if the upstream reference ever points elsewhere.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+       build-essential \
+       ca-certificates \
+       cmake \
+       git \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /build/whisper.cpp
+RUN git init \
+    && git remote add origin https://github.com/ggml-org/whisper.cpp.git \
+    && git fetch --depth 1 origin refs/tags/b4938 \
+    && test "$(git rev-parse 'FETCH_HEAD^{commit}')" = \
+       "371b5a7561823ab2bb32142d2751e35e7534727b" \
+    && git checkout --detach 371b5a7561823ab2bb32142d2751e35e7534727b \
+    && cmake -S . -B build \
+       -DCMAKE_BUILD_TYPE=Release \
+       -DCMAKE_INSTALL_PREFIX=/opt/whisper \
+       -DBUILD_SHARED_LIBS=ON \
+       -DGGML_BACKEND_DL=ON \
+       -DGGML_NATIVE=OFF \
+       -DWHISPER_BUILD_EXAMPLES=ON \
+       -DWHISPER_BUILD_SERVER=ON \
+       -DWHISPER_BUILD_TESTS=OFF \
+    && cmake --build build --parallel 2 \
+    && cmake --install build \
+    && test -x /opt/whisper/bin/whisper-server \
+    && test -e /opt/whisper/lib/libwhisper.so \
+    && test -e /opt/whisper/lib/libggml.so \
+    && test -e /opt/whisper/lib/libggml-base.so \
+    && test -e /opt/whisper/bin/libggml-cpu.so
+
+
+FROM node:22.12.0-bookworm-slim AS model-assets
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates curl \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /opt/vemals-ears/models
+
+# Both URLs name immutable upstream revisions. Verify every downloaded byte
+# before it can enter the runtime image.
+RUN curl --fail --location --proto '=https' --tlsv1.2 --retry 3 \
+       --output ggml-large-v3-turbo-q5_0.bin \
+       https://huggingface.co/ggerganov/whisper.cpp/resolve/5359861c739e955e79d9a303bcbc70fb988958b1/ggml-large-v3-turbo-q5_0.bin \
+    && echo "394221709cd5ad1f40c46e6031ca61bce88931e6e088c188294c6d5a55ffa7e2  ggml-large-v3-turbo-q5_0.bin" \
+       | sha256sum --check --strict - \
+    && curl --fail --location --proto '=https' --tlsv1.2 --retry 3 \
+       --output ggml-silero-v6.2.0.bin \
+       https://huggingface.co/ggml-org/whisper-vad/resolve/9ffd54a1e1ee413ddf265af9913beaf518d1639b/ggml-silero-v6.2.0.bin \
+    && echo "2aa269b785eeb53a82983a20501ddf7c1d9c48e33ab63a41391ac6c9f7fb6987  ggml-silero-v6.2.0.bin" \
+       | sha256sum --check --strict -
+
+
+FROM node:22.12.0-bookworm-slim AS caption-worker
+
+LABEL org.opencontainers.image.title="Vemal's Ears Caption Worker"
+LABEL org.opencontainers.image.description="Private consent-gated Discord speech worker for Vemal's Ears"
+
+ENV DEBIAN_FRONTEND=noninteractive \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PATH=/opt/venv/bin:/opt/whisper/bin:/usr/local/bin:/usr/bin:/bin \
+    LD_LIBRARY_PATH=/opt/whisper/lib \
+    VOICE_CAPTIONS_WHISPER_SERVER=/opt/whisper/bin/whisper-server \
+    VOICE_CAPTIONS_WHISPER_FALLBACK_SERVER=/opt/whisper/bin/whisper-server \
+    VOICE_CAPTIONS_WHISPER_MODEL=/opt/vemals-ears/models/ggml-large-v3-turbo-q5_0.bin \
+    VOICE_CAPTIONS_WHISPER_DLL=/opt/whisper/lib/libwhisper.so \
+    VOICE_CAPTIONS_WHISPER_VAD_MODEL=/opt/vemals-ears/models/ggml-silero-v6.2.0.bin \
+    CAPTIONS_CONSENT_STATE_PATH=/var/lib/vemals-ears/consent/consent.json \
+    VEMALS_EARS_WORKER_HEALTH_FILE=/tmp/vemals-ears-worker.state
+
+# uid/gid pinned so operators have a number to chown secret files to:
+# compose file: secrets are bind mounts keeping HOST ownership (the
+# uid/gid/mode keys are Swarm-only), and this user has no DAC_OVERRIDE.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+       ca-certificates \
+       libgomp1 \
+       python3 \
+       python3-venv \
+    && python3 -m venv /opt/venv \
+    && /opt/venv/bin/python -m pip install --no-cache-dir websockets==13.1 \
+    && groupadd --system --gid 4820 vemalsears \
+    && useradd --system --uid 4820 --gid vemalsears --home-dir /nonexistent \
+       --shell /usr/sbin/nologin vemalsears \
+    && install -d -o vemalsears -g vemalsears \
+       /app/GuildHub \
+       /app/VoiceCaptions/stt \
+       /app/VoiceCaptions/discord_adapter/src \
+       /var/lib/vemals-ears/consent \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY --from=whisper-builder /opt/whisper /opt/whisper
+COPY --from=model-assets /opt/vemals-ears/models /opt/vemals-ears/models
+
+COPY --chown=vemalsears:vemalsears \
+    GuildHub/__init__.py \
+    GuildHub/host.py \
+    GuildHub/protocol.py \
+    GuildHub/publisher.py \
+    GuildHub/quick_chat_worker.py \
+    GuildHub/worker_health.py \
+    /app/GuildHub/
+COPY --chown=vemalsears:vemalsears \
+    VoiceCaptions/__init__.py \
+    VoiceCaptions/coordinator.py \
+    VoiceCaptions/credentials.py \
+    VoiceCaptions/events.py \
+    VoiceCaptions/member_overlay.py \
+    VoiceCaptions/runtime_installer.py \
+    VoiceCaptions/settings.py \
+    VoiceCaptions/voice_captions.py \
+    /app/VoiceCaptions/
+COPY --chown=vemalsears:vemalsears \
+    VoiceCaptions/stt/__init__.py \
+    VoiceCaptions/stt/backend.py \
+    VoiceCaptions/stt/contracts.py \
+    VoiceCaptions/stt/fake.py \
+    VoiceCaptions/stt/service.py \
+    VoiceCaptions/stt/vad.py \
+    VoiceCaptions/stt/vocabulary.py \
+    VoiceCaptions/stt/whisper_cpp.py \
+    /app/VoiceCaptions/stt/
+COPY --chown=vemalsears:vemalsears \
+    VoiceCaptions/discord_adapter/package.json \
+    VoiceCaptions/discord_adapter/package-lock.json \
+    /app/VoiceCaptions/discord_adapter/
+COPY --chown=vemalsears:vemalsears \
+    VoiceCaptions/discord_adapter/src/ \
+    /app/VoiceCaptions/discord_adapter/src/
+COPY --from=node-dependencies --chown=vemalsears:vemalsears \
+    /build/discord-adapter/node_modules \
+    /app/VoiceCaptions/discord_adapter/node_modules
+
+WORKDIR /app
+USER vemalsears
+
+# No EXPOSE instruction: this process only makes outbound Discord and WSS
+# connections. Health follows a successfully queued or published session state.
+HEALTHCHECK --interval=15s --timeout=5s --start-period=90s --retries=4 \
+    CMD ["python", "-m", "GuildHub.host", "--healthcheck"]
+CMD ["python", "-m", "GuildHub.host", "--watch"]

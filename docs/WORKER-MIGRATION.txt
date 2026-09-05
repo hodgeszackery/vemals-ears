@@ -1,0 +1,52 @@
+VE worker source migration
+==========================
+
+The source split does not deploy or restart anything. Installed 0.5.8 apps,
+pairing, settings, public downloads and the active worker remain as deployed.
+
+Before a later authorized deployment advances the old live checkout past this
+split, move the worker service's source registration to this repository. A
+running Python process can import additional files later; leaving it running
+does not make deleting its old checkout safe.
+
+1. Select a tested VE commit. In this checkout, install the pinned member
+   Python dependency and run npm ci in VoiceCaptions/discord_adapter. Preserve
+   the existing whisper runtime, consent state and mapping state in the user
+   profile. Never copy a bot token, relay.env or secrets into source control.
+
+2. Run a read-only preflight, using the real Python executable:
+     powershell -NoProfile -File GuildHub/Install-VemalsEars-Worker.ps1 -CheckOnly -PythonPath <python.exe>
+
+3. During the authorized deployment, run the same script elevated without
+   -CheckOnly. Pass -NssmPath if NSSM is not on PATH. The script changes only
+   VemalsEarsWorker, using this checkout as its AppDirectory and preserving the
+   shared ProgramData/VemalsEars location and invoking user's LOCALAPPDATA.
+   It does not configure the relay, console, jobs, tunnel or member installs.
+   Service configuration failure leaves an explicit error; investigate it
+   before advancing the Downtime checkout.
+
+4. Verify the service's Application, AppDirectory and AppParameters, a new
+   worker child process, healthy state, and actual caption/typed-chat behavior
+   against the existing relay. Test pause/resume and confirm the existing
+   consent and mappings are retained. A Running SCM status alone is not a
+   completed migration. Do not print secrets while checking state.
+
+5. Only after that verification, promote Downtime. Its promotion preflight
+   checks that the worker no longer depends on the old checkout before any
+   fast-forward. Downtime no longer builds or refreshes the VE member install
+   or owns its advertised version and downloads.
+
+   For the FIRST promotion across this split, invoke the updated promote.py
+   from a separate checkout of the merged extraction commit. It explicitly
+   targets the live worktree through DOWNTIME_LIVE_WORKTREE. The old script
+   still present in the pre-split live checkout cannot contain this new guard;
+   do not run that historical copy for the cutover.
+
+Rollback: before advancing Downtime, the previous pinned old checkout remains
+available. Repoint only VemalsEarsWorker to that known-good checkout and verify
+its behavior. Do not mix individual runtime files across the two roots.
+
+Docker operators keep the shared host compose file in downtime-addons and
+set VE_PROJECT_ROOT to this checkout for the worker build context. The worker
+Dockerfile here makes outbound connections and does not include the guild
+server. No image publication or container deployment occurs during extraction.

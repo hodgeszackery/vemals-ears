@@ -1,0 +1,44 @@
+# Line endings.
+#
+# Without this file git stored whatever bytes a tool happened to write, so
+# an editor or script that rewrote a CRLF file with LF endings produced a
+# whole-file diff with the real change buried inside it. That happened
+# twice on 2026-08-31: a fifteen line edit to WoW-Companion.pyw was
+# recorded as roughly 2600 changed lines, and the actual change became
+# unreviewable.
+#
+# text=auto stores text as LF in the repository whatever the working tree
+# holds, so the same edit yields the same commit whichever tool wrote it.
+#
+# eol=lf pins the WORKING TREE to LF as well. Without it, text=auto with
+# core.eol unset overrides this repo's deliberate local
+# core.autocrlf=false on Git for Windows and starts writing CRLF into
+# checkouts - a behaviour change nobody asked for.
+#
+# This IS accompanied by a one-time `git add --renormalize .`, and that is
+# not optional. Since git 2.10 text=auto skips check-in normalisation for
+# any path whose index blob already holds CRLF (the has_crlf_in_index
+# guard in crlf_to_git), so a CRLF-preserving edit - what every Windows
+# editor does by default - would commit those files still CRLF forever.
+# Files already carrying CRLF would have stayed permanently outside the
+# protection, which is exactly backwards: they are the ones most exposed
+# to the bug. An earlier revision of this file claimed they would
+# "normalise one at a time as they are next edited". They would not.
+* text=auto eol=lf
+
+# Binary files, declared rather than left to heuristics. text=auto guesses
+# from content, and a wrong guess on one of these corrupts it silently.
+*.png binary
+*.ico binary
+*.exe binary
+*.dll binary
+*.zip binary
+*.ttf binary
+*.otf binary
+*.wav binary
+*.mp3 binary
+*.bin binary
+# WoW's own texture formats. Not tracked here today, but build_release.py
+# copies addon Media folders wholesale, so name them before one arrives.
+*.blp binary
+*.tga binary

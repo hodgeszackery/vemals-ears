@@ -1,0 +1,394 @@
+name: Vemal's Ears Windows
+
+on:
+  push:
+    tags:
+      - "vemals-ears-v*"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: vemals-ears-windows-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    name: Validate unsigned Windows build
+    runs-on: windows-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - name: Check out release source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.14"
+          cache: pip
+          cache-dependency-path: GuildHub/requirements-client.txt
+
+      - name: Validate installer version
+        id: version
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $versionLine = Get-Content -LiteralPath "GuildHub/version.py" |
+            Where-Object { $_ -like 'CLIENT_VERSION = *' } |
+            Select-Object -First 1
+          if ([string]::IsNullOrWhiteSpace($versionLine)) {
+            throw "GuildHub/version.py does not declare an installer version."
+          }
+          $version = ($versionLine -split "=", 2)[1].Trim().Trim('"')
+          if ($version -notmatch '^\d+\.\d+\.\d+(?:\.\d+)?$') {
+            throw "The installer version is invalid: $version"
+          }
+          if ($env:GITHUB_REF_TYPE -eq "tag") {
+            $expectedTag = "vemals-ears-v" + $version
+            if ($env:GITHUB_REF_NAME -cne $expectedTag) {
+              throw "Release tag $($env:GITHUB_REF_NAME) must match $expectedTag."
+            }
+          }
+          "INSTALLER_VERSION=$version" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "version=$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+
+      - name: Install locked Inno Setup
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $lock = Get-Content -Raw -LiteralPath "Installer/runtime-lock.json" | ConvertFrom-Json
+          $download = Join-Path $env:RUNNER_TEMP "inno-setup-$($lock.inno_setup.version).exe"
+          Invoke-WebRequest -Uri $lock.inno_setup.url -OutFile $download
+          $actual = (Get-FileHash -Algorithm SHA256 -LiteralPath $download).Hash.ToLowerInvariant()
+          $expected = ([string]$lock.inno_setup.sha256).ToLowerInvariant()
+          if ($actual -cne $expected) {
+            throw "The Inno Setup download does not match runtime-lock.json."
+          }
+          $installRoot = Join-Path $env:RUNNER_TEMP "InnoSetup"
+          $process = Start-Process -FilePath $download -ArgumentList @(
+            "/VERYSILENT",
+            "/SUPPRESSMSGBOXES",
+            "/NORESTART",
+            "/SP-",
+            "/DIR=$installRoot"
+          ) -Wait -PassThru
+          if ($process.ExitCode -ne 0) {
+            throw "Inno Setup installation failed with exit code $($process.ExitCode)."
+          }
+          $iscc = Join-Path $installRoot "ISCC.exe"
+          if (-not (Test-Path -LiteralPath $iscc -PathType Leaf)) {
+            throw "The locked Inno Setup compiler was not installed."
+          }
+          $installedVersion = (& $iscc --version | Select-Object -First 1).Trim()
+          if ($installedVersion -cne [string]$lock.inno_setup.version) {
+            throw "Unexpected Inno Setup version: $installedVersion"
+          }
+          "INNO_ISCC=$iscc" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Run installer and companion tests
+        shell: pwsh
+        run: |
+          python -m pip install --require-hashes -r GuildHub/requirements-client.txt
+          python -m unittest `
+            tests.test_installer `
+            tests.test_companion_window `
+            GuildHub.tests.test_client `
+            GuildHub.tests.test_windows_integration `
+            VoiceCaptions.tests.test_runtime
+
+      - name: Build and smoke-test the isolated installer
+        shell: pwsh
+        run: |
+          $testOutput = Join-Path $PWD "dist-test"
+          ./Installer/build_installer.ps1 `
+            -Version $env:INSTALLER_VERSION `
+            -IsccPath $env:INNO_ISCC `
+            -OutputDirectory $testOutput `
+            -TestBuild
+          ./Installer/smoke_test_installer.ps1 `
+            -InstallerPath (Join-Path $testOutput "Vemals-Ears-Setup-TEST-UNSIGNED.exe")
+
+      - name: Prove the unsigned build before Azure sign-in
+        shell: pwsh
+        run: |
+          ./Installer/build_installer.ps1 `
+            -Version $env:INSTALLER_VERSION `
+            -IsccPath $env:INNO_ISCC `
+            -OutputDirectory (Join-Path $PWD "dist")
+          if (-not (Test-Path -LiteralPath "dist/Vemals-Ears-Setup-UNSIGNED.exe" -PathType Leaf)) {
+            throw "The unsigned build proof did not produce its expected output."
+          }
+
+  build_sign:
+    name: Build and sign Windows installer
+    needs: validate
+    runs-on: windows-latest
+    timeout-minutes: 45
+    environment: windows-release
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      INSTALLER_VERSION: ${{ needs.validate.outputs.version }}
+    steps:
+      - name: Check out validated release source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install locked Inno Setup
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $lock = Get-Content -Raw -LiteralPath "Installer/runtime-lock.json" | ConvertFrom-Json
+          $download = Join-Path $env:RUNNER_TEMP "inno-setup-$($lock.inno_setup.version).exe"
+          Invoke-WebRequest -Uri $lock.inno_setup.url -OutFile $download
+          $actual = (Get-FileHash -Algorithm SHA256 -LiteralPath $download).Hash.ToLowerInvariant()
+          $expected = ([string]$lock.inno_setup.sha256).ToLowerInvariant()
+          if ($actual -cne $expected) {
+            throw "The Inno Setup download does not match runtime-lock.json."
+          }
+          $installRoot = Join-Path $env:RUNNER_TEMP "InnoSetup"
+          $process = Start-Process -FilePath $download -ArgumentList @(
+            "/VERYSILENT",
+            "/SUPPRESSMSGBOXES",
+            "/NORESTART",
+            "/SP-",
+            "/DIR=$installRoot"
+          ) -Wait -PassThru
+          if ($process.ExitCode -ne 0) {
+            throw "Inno Setup installation failed with exit code $($process.ExitCode)."
+          }
+          $iscc = Join-Path $installRoot "ISCC.exe"
+          if (-not (Test-Path -LiteralPath $iscc -PathType Leaf)) {
+            throw "The locked Inno Setup compiler was not installed."
+          }
+          $installedVersion = (& $iscc --version | Select-Object -First 1).Trim()
+          if ($installedVersion -cne [string]$lock.inno_setup.version) {
+            throw "Unexpected Inno Setup version: $installedVersion"
+          }
+          "INNO_ISCC=$iscc" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Install locked Artifact Signing client
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $lock = Get-Content -Raw -LiteralPath "Installer/runtime-lock.json" | ConvertFrom-Json
+          $download = Join-Path $env:RUNNER_TEMP "ArtifactSigningClientTools-$($lock.artifact_signing_tools.version).msi"
+          Invoke-WebRequest -Uri $lock.artifact_signing_tools.url -OutFile $download
+          $actual = (Get-FileHash -Algorithm SHA256 -LiteralPath $download).Hash.ToLowerInvariant()
+          $expected = ([string]$lock.artifact_signing_tools.sha256).ToLowerInvariant()
+          if ($actual -cne $expected) {
+            throw "The Artifact Signing client does not match runtime-lock.json."
+          }
+          $arguments = "/i `"$download`" /qn /norestart"
+          $process = Start-Process -FilePath "msiexec.exe" -ArgumentList $arguments -Wait -PassThru
+          if ($process.ExitCode -notin @(0, 3010)) {
+            throw "Artifact Signing client installation failed with exit code $($process.ExitCode)."
+          }
+          $toolsRoot = "C:\Program Files (x86)\Microsoft\ArtifactSigningClientTools\bin"
+          foreach ($required in @("signtool.exe", "Azure.CodeSigning.Dlib.dll")) {
+            if (-not (Test-Path -LiteralPath (Join-Path $toolsRoot $required) -PathType Leaf)) {
+              throw "The Artifact Signing client is missing $required."
+            }
+          }
+
+      - name: Validate protected signing configuration
+        shell: pwsh
+        env:
+          SIGNING_ENDPOINT: ${{ vars.ARTIFACT_SIGNING_ENDPOINT }}
+          SIGNING_ACCOUNT: ${{ vars.ARTIFACT_SIGNING_ACCOUNT }}
+          SIGNING_PROFILE: ${{ vars.ARTIFACT_SIGNING_PROFILE }}
+          EXPECTED_PUBLISHER: ${{ vars.ARTIFACT_SIGNING_PUBLISHER_SUBJECT }}
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          foreach ($name in @(
+            "SIGNING_ENDPOINT",
+            "SIGNING_ACCOUNT",
+            "SIGNING_PROFILE",
+            "EXPECTED_PUBLISHER",
+            "AZURE_CLIENT_ID",
+            "AZURE_TENANT_ID",
+            "AZURE_SUBSCRIPTION_ID"
+          )) {
+            if ([string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable($name))) {
+              throw "The protected environment is missing $name."
+            }
+          }
+
+      - name: Sign in to Azure with OIDC
+        uses: azure/login@7ddb5af1ef8758cf1353cf3b42f940aee27ba21c # v3.0.2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Create temporary Artifact Signing metadata
+        shell: pwsh
+        env:
+          SIGNING_ENDPOINT: ${{ vars.ARTIFACT_SIGNING_ENDPOINT }}
+          SIGNING_ACCOUNT: ${{ vars.ARTIFACT_SIGNING_ACCOUNT }}
+          SIGNING_PROFILE: ${{ vars.ARTIFACT_SIGNING_PROFILE }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          $metadata = [ordered]@{
+            Endpoint = $env:SIGNING_ENDPOINT
+            CodeSigningAccountName = $env:SIGNING_ACCOUNT
+            CertificateProfileName = $env:SIGNING_PROFILE
+          }
+          $metadataPath = Join-Path $env:RUNNER_TEMP "artifact-signing-metadata.json"
+          $json = $metadata | ConvertTo-Json
+          [System.IO.File]::WriteAllText(
+            $metadataPath,
+            $json + "`n",
+            [System.Text.UTF8Encoding]::new($false)
+          )
+          "SIGNING_METADATA_PATH=$metadataPath" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Build, sign, and verify release installer
+        shell: pwsh
+        env:
+          EXPECTED_PUBLISHER: ${{ vars.ARTIFACT_SIGNING_PUBLISHER_SUBJECT }}
+        run: |
+          ./Installer/build_installer.ps1 `
+            -Version $env:INSTALLER_VERSION `
+            -IsccPath $env:INNO_ISCC `
+            -OutputDirectory (Join-Path $PWD "dist") `
+            -Signed `
+            -SigningMetadataPath $env:SIGNING_METADATA_PATH `
+            -ExpectedPublisher $env:EXPECTED_PUBLISHER
+
+      - name: Verify the post-sign checksum
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $installer = Resolve-Path -LiteralPath "dist/Vemals-Ears-Setup.exe"
+          $checksum = Resolve-Path -LiteralPath "dist/Vemals-Ears-Setup.exe.sha256"
+          $digest = (Get-FileHash -Algorithm SHA256 -LiteralPath $installer).Hash.ToLowerInvariant()
+          $expectedLine = $digest + "  Vemals-Ears-Setup.exe"
+          $actualLine = (Get-Content -Raw -LiteralPath $checksum).Trim()
+          if ($actualLine -cne $expectedLine) {
+            throw "The published checksum was not generated from the final signed installer bytes."
+          }
+
+      - name: Verify signed install and uninstall
+        shell: pwsh
+        env:
+          EXPECTED_PUBLISHER: ${{ vars.ARTIFACT_SIGNING_PUBLISHER_SUBJECT }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          $installer = (Resolve-Path -LiteralPath "dist/Vemals-Ears-Setup.exe").Path
+          $installProcess = Start-Process -FilePath $installer -ArgumentList @(
+            "/VERYSILENT",
+            "/SUPPRESSMSGBOXES",
+            "/NORESTART",
+            "/SP-"
+          ) -Wait -PassThru
+          if ($installProcess.ExitCode -ne 0) {
+            throw "The signed installer returned exit code $($installProcess.ExitCode)."
+          }
+
+          $installRoot = Join-Path $env:LOCALAPPDATA "Programs/VemalsEars"
+          $launcher = Join-Path $installRoot "VemalsEars.exe"
+          $uninstaller = Join-Path $installRoot "unins000.exe"
+          ./Installer/verify_signature.ps1 `
+            -FilePath $launcher `
+            -ExpectedPublisher $env:EXPECTED_PUBLISHER
+          ./Installer/verify_signature.ps1 `
+            -FilePath $uninstaller `
+            -ExpectedPublisher $env:EXPECTED_PUBLISHER
+
+          $protocolKey = "HKCU:\Software\Classes\vemalsears\shell\open\command"
+          $actualCommand = (Get-Item -LiteralPath $protocolKey).GetValue("")
+          $expectedCommand = '"' + $launcher + '" --vemals-ears-pair "%1"'
+          if ($actualCommand -cne $expectedCommand) {
+            throw "The installed pairing protocol does not target the signed launcher."
+          }
+          $installedVersion = Get-ItemPropertyValue `
+            -LiteralPath "HKCU:\Software\VemalsEars\Installer" `
+            -Name "Version"
+          if ($installedVersion -cne $env:INSTALLER_VERSION) {
+            throw "The installed version record is incorrect."
+          }
+
+          $uninstallProcess = Start-Process -FilePath $uninstaller -ArgumentList @(
+            "/VERYSILENT",
+            "/SUPPRESSMSGBOXES",
+            "/NORESTART"
+          ) -Wait -PassThru
+          if ($uninstallProcess.ExitCode -ne 0) {
+            throw "The signed uninstaller returned exit code $($uninstallProcess.ExitCode)."
+          }
+          $removeDeadline = [DateTime]::UtcNow.AddSeconds(10)
+          while ((Test-Path -LiteralPath $installRoot) -and [DateTime]::UtcNow -lt $removeDeadline) {
+            Start-Sleep -Milliseconds 100
+          }
+          if (Test-Path -LiteralPath $installRoot) {
+            throw "The signed uninstaller left its install directory behind."
+          }
+          if (Test-Path -LiteralPath "HKCU:\Software\VemalsEars\Installer") {
+            throw "The signed uninstaller left its version record behind."
+          }
+          if (Test-Path -LiteralPath "HKCU:\Software\Classes\vemalsears") {
+            throw "The signed uninstaller left its pairing protocol behind."
+          }
+
+      - name: Upload signed release files
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: vemals-ears-windows-${{ needs.validate.outputs.version }}
+          path: |
+            dist/Vemals-Ears-Setup.exe
+            dist/Vemals-Ears-Setup.exe.sha256
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14
+
+  publish:
+    name: Publish signed Windows installer
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/vemals-ears-v')
+    needs: [validate, build_sign]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - name: Download signed release files
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: vemals-ears-windows-${{ needs.validate.outputs.version }}
+          path: release
+
+      - name: Verify downloaded release files
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd release
+          sha256sum --check Vemals-Ears-Setup.exe.sha256
+          test -f Vemals-Ears-Setup.exe
+
+      - name: Publish GitHub release
+        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
+        with:
+          name: Vemal's Ears ${{ needs.validate.outputs.version }}
+          generate_release_notes: true
+          fail_on_unmatched_files: true
+          files: |
+            release/Vemals-Ears-Setup.exe
+            release/Vemals-Ears-Setup.exe.sha256
+          body: |
+            Signed per-user Windows installer for Vemal's Ears.
+
+            The installer includes its own private runtime. Windows may still
+            show reputation prompts while the publisher and application build
+            SmartScreen reputation.

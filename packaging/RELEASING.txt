@@ -1,0 +1,59 @@
+Vemal's Ears releases
+====================
+
+This repository owns the VE member application, voice worker, member ZIP and
+Windows installer. Downtime addons, desktop bundles and the shared guild relay
+are maintained in the separate downtime-addons repository. Their versions can
+advance independently. Preserve the pairing scheme, Windows identity, credential
+targets and data directories when updating VE.
+
+LOCAL VALIDATION
+
+    python -m unittest tests.test_packaging tests.test_installer
+    python build_release.py --member
+
+The development ZIP needs an installed Python. A distributable ZIP must bundle
+the locked runtime and pass the extracted-interpreter probe:
+
+    python packaging/build_runtime.py
+    python build_release.py --member --require-runtime
+    python packaging/verify_bundle.py
+
+To build an unsigned local installer:
+
+    powershell -File Installer/build_installer.ps1
+
+Installer/runtime-lock.json owns the private Python, wheel, compiler and signing
+tool versions. Installer/stage_installer.py reads GuildHub/version.py, refuses a
+different requested version, and records the source commit and payload hashes.
+
+RELEASE
+
+Update the independent VE version carriers and merge the reviewed change before
+building. The installer workflow uses matching vemals-ears-vVERSION tags. Signed
+distribution requires configuring the new repository's windows-release environment
+and publisher authorization; those settings do not move with copied source files.
+Installer/README.md describes the signing checks and release artifacts.
+
+To build, verify and mirror an explicitly requested VE release on the guild host
+without advertising an update:
+
+    python packaging/publish_release.py --version VERSION --no-advertise
+
+The default destination is PROGRAMDATA/VemalsEars/downloads. Use --downloads PATH
+for another destination. Only Vemals-Ears-Setup.exe and vemals-ears-member.zip are
+copied, atomically per file. Existing Downtime ZIPs are preserved. Omit
+--no-advertise only when the operator intends to update the shared relay's
+VEMALS_EARS_CLIENT_VERSION. The relay remains independently deployed.
+
+For a build rehearsal, add --dry-run. It builds and verifies locally but does
+not publish or advertise. Version mismatches fail before any build action.
+
+DEVELOPMENT REFRESH
+
+    python packaging/refresh_local_copy.py PATH_TO_VE_APP
+
+This requires the VE edition marker and refuses a Downtime extraction. It
+preflights all source files before copying, preserves the private runtime, and
+keeps an installer-managed copy's reported version unchanged so its update path
+remains valid. Restart the app separately to load refreshed source.

@@ -1,0 +1,30 @@
+VE development
+==============
+
+Use the actual Python executable on Windows, especially when tests override
+LOCALAPPDATA. The install-manager or WindowsApps shim is not a test runtime.
+
+  python dev.py doctor
+  python dev.py check --dry-run
+  python dev.py check --jobs 8
+
+The complete check runs Python plus the Discord adapter suite. Tests do not
+need a Downtime checkout, Lua, Warpsim, Discord credentials or a live server.
+Install adapter dependencies with npm ci in VoiceCaptions/discord_adapter.
+CPython 3.12 Windows CI uses the hash-pinned ci/requirements-windows.txt.
+For a different Python version, use compatible dependencies in an isolated
+environment; CI wheel hashes are specific to the declared runtime.
+
+  python tests/run_all_tests.py --list
+  python tests/run_all_tests.py caption --jobs 4
+  python -m unittest GuildHub.tests.test_protocol
+
+New test modules under registered roots are discovered automatically. Missing
+roots, empty processes and missing reports fail validation. The PCM integration
+test must execute with the real Node Opus dependency. Keep state in temporary
+directories, mock credentials and service control, and clean up native windows.
+Use tests.support.companion.isolated_companion for GUI and edition tests.
+
+Building or testing this source does not update an installed copy. Member
+packaging, installer staging and bundle verification live here. Runtime source
+ownership and deliberate common-code copies are documented in ADR-001.txt.

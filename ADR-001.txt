@@ -1,0 +1,56 @@
+ADR 001 - Separate Vemal's Ears source ownership
+Status: accepted, 2026-09-05
+
+Context
+The user requested a standalone repository at E:/Projects/vemals-ears and
+authorized its private GitHub remote and CI. VE and Downtime already have
+separate product identities and settings, but were built in one repository.
+
+Decision
+VE owns the caption client, Discord adapter, speech worker, Windows installer,
+member archive, and their tests. downtime-addons owns the shared guild relay,
+admin console, hosted jobs, Lua addons, simulation engine and Downtime apps.
+Each project builds without importing or reading a sibling checkout.
+
+The existing edition-aware UI and downtime_ui are initially copied into VE.
+The legacy WoW-Companion.pyw filename remains a native-launcher contract.
+Vemals-Ears.pyw and the direct main entry select the member application.
+Uncalled Downtime UI helpers in this initial snapshot are intentional debt;
+they do not grant the VE build an addon or simulation dependency.
+
+Common wire contracts, pairing/credential helpers, Windows identity helpers,
+and worker-health data are retained where each product needs them. The old
+server retains the small VoiceCaptions event and credential compatibility
+modules. These are separate source copies, not symlinks or a shared runtime.
+Review fixes to these files for applicability to both repositories. Protocol
+changes must remain backward compatible with independently released clients
+and workers; update both contract suites when the wire format changes.
+
+Alternatives
+A sibling folder in one repository would retain coupled CI and release
+ownership. A new published common package would add a third build/release
+system during migration. Rewriting the GUI at the same time would enlarge
+the behavior change and obscure migration failures. None is required now.
+
+Consequences
+VE owns its version independently, beginning at 0.5.8. Its release tooling
+reads GuildHub/version.py, not addon TOCs. Downtime promotions must preserve
+VE artifacts, local installations, and the relay's advertised VE version.
+Existing Windows identities, settings, pairing and public download contracts
+are preserved. New remote signing configuration is not inherited implicitly.
+Unsigned build checks can run before the owner configures signing credentials.
+
+Source history is preserved by a source repository/commit/file hash manifest
+and the original repository history, rather than copying unrelated addon
+history into the new repository. SOURCE-IMPORT.json records the exact initial
+tracked snapshot; standalone adaptations are tracked in this repository.
+GPL-3.0-only and original attribution remain intact.
+
+Validation and rollout
+Both repositories run independently with nonempty test inventories. The member
+archive is extracted to an unrelated temporary directory and started with an
+isolated Python import path. CI validates Python and Discord behavior here;
+the old project validates its server, Downtime apps, addons and Warpsim.
+Worker service reconfiguration is a later explicit deployment step. Downtime
+promotion must refuse before changing checkout files while an installed worker
+still depends on the old source tree. See docs/WORKER-MIGRATION.txt.

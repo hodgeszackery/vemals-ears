@@ -1,0 +1,4 @@
+# Release addon Lua checks: CPython 3.12, Linux x86_64 only.
+# Wheel digest verified against https://pypi.org/pypi/lupa/2.8/json.
+lupa==2.8 \
+    --hash=sha256:8cf4f064a0e5531afce2d7d750120c10c10f9529139af6ca6150d13151034398

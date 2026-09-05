@@ -1,0 +1,43 @@
+{
+  "schema": 1,
+  "architecture": "x64",
+  "python": {
+    "version": "3.14.7",
+    "url": "https://www.python.org/ftp/python/3.14.7/python-3.14.7-amd64.zip",
+    "sha256": "ac1a727a71738e11de80b76e975f9b8a258aea6412bfc31696b929d59c6aafd0"
+  },
+  "wheels": [
+    {
+      "name": "websockets",
+      "version": "13.1",
+      "filename": "websockets-13.1-py3-none-any.whl",
+      "url": "https://files.pythonhosted.org/packages/56/27/96a5cd2626d11c8280656c6c71d8ab50fe006490ef9971ccd154e0c42cd2/websockets-13.1-py3-none-any.whl",
+      "sha256": "a9a396a6ad26130cdae92ae10c36af09d9bfe6cafe69670fd3b6da9b07b4044f"
+    },
+    {
+      "name": "pillow",
+      "version": "12.3.0",
+      "filename": "pillow-12.3.0-cp314-cp314-win_amd64.whl",
+      "url": "https://files.pythonhosted.org/packages/f1/e0/492879f69d94f91f60fc8cd05ba03650e9520afebb2fb7aa12777d7c7f38/pillow-12.3.0-cp314-cp314-win_amd64.whl",
+      "sha256": "fdafc9cce40277e0f7a0feabce0ee50dd2fa1800f3b38015e51296b5e814048d"
+    },
+    {
+      "name": "pywin32",
+      "version": "312",
+      "filename": "pywin32-312-cp314-cp314-win_amd64.whl",
+      "url": "https://files.pythonhosted.org/packages/21/82/3bf86d2e2808902013132e1ce905a7da0da53790f3836c64bf44d55e24f3/pywin32-312-cp314-cp314-win_amd64.whl",
+      "sha256": "a4dd3a848290ef724347b19f301045831d8e802fa4464f491b98b1e0a081432e"
+    }
+  ],
+  "inno_setup": {
+    "version": "7.1.0",
+    "url": "https://github.com/jrsoftware/issrc/releases/download/is-7_1_0/innosetup-7.1.0-x64.exe",
+    "sha256": "0362a383ed217d4c4239b5933866dd96d3eb2102737da92f80f6057a4b40df2f"
+  },
+  "artifact_signing_tools": {
+    "version": "0.1.128",
+    "url": "https://download.microsoft.com/download/a3c24ba9-ff1f-444f-b626-eff710f345c3/ArtifactSigningClientTools.msi",
+    "sha256": "93807bb270e63416912faddcecf21e0165fc8eb8ae444b01458c7849679e0e4f"
+  },
+  "timestamp_url": "http://timestamp.acs.microsoft.com"
+}

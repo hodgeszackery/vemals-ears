@@ -1,0 +1,26 @@
+Vemal's Ears application mark
+============================
+
+Assets: VemalsEars.png (RGBA) and VemalsEars.ico (seven Windows sizes).
+Downtime retains its separate clock artwork.
+
+Mode: built-in image generation and editing, followed by approved local
+alpha cleanup and mechanical PNG-to-ICO packaging. No external logo source.
+
+Final edit prompt:
+Edit this Vemal's Ears application icon: make only the red caption bubble
+a little darker, a deep rich crimson around #851c2a that sits elegantly
+on a black taskbar/background. Preserve the golden ear, white caption
+lines, composition, proportions, shape and transparency. This is a small
+color adjustment, not a redesign. Preserve genuine alpha transparency:
+fully transparent empty background and negative spaces inside the ear.
+No checkerboard, white backdrop or black background rectangle. Keep
+smooth clean edges and remove stray specks outside the intended shape.
+No text or new details. One square transparent PNG icon.
+
+The generated edit flattened the background. Local cleanup removes the
+neutral checkerboard, retains the gold ear's negative spaces and preserves
+the three opaque caption bars inside the crimson speech bubble.
+
+The ICO is a format derivative of the PNG. It contains 16, 24, 32, 48, 64,
+128 and 256 pixel representations; there is no circular crop or opaque tile.
