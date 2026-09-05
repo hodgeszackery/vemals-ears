@@ -4,6 +4,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
 import textwrap
 import unittest
@@ -11,6 +12,7 @@ from pathlib import Path
 from unittest import mock
 
 import build_release
+import source_distribution
 
 ROOT = Path(__file__).resolve().parent.parent
 INSTALLER = ROOT / "Installer"
@@ -121,6 +123,11 @@ class InstallerAllowlistTests(unittest.TestCase):
                 "CANARY = 'host-secret'\n",
                 encoding="ascii",
             )
+            # Source packaging is independently curated, including build inputs.
+            for relative in source_distribution.BUILD_FILES:
+                target = source / relative
+                target.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(ROOT / relative, target)
 
             with mock.patch.object(
                 self.stage,
@@ -135,7 +142,7 @@ class InstallerAllowlistTests(unittest.TestCase):
 
             icon.assert_called_once()
             self.assertEqual(
-                ["allowed/member.py", "vemals-ears-member.json"],
+                ["allowed/member.py", "Source/vemals-ears-source.zip", "vemals-ears-member.json"],
                 [row["path"] for row in manifest["app_files"]],
             )
             self.assertEqual("member", manifest["audience"])
@@ -159,14 +166,60 @@ class InstallerAllowlistTests(unittest.TestCase):
             with self.assertRaises(self.stage.StageError):
                 self.stage._safe_source_file(root, "../private.txt")
 
+    def test_staging_reads_the_selected_source_manifest_despite_an_imported_checkout(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            (root / "build_release.py").write_text(
+                'WINDOWS_INSTALLER_APP_FILES = ("modified/member.py",)\n', encoding="ascii")
+            self.assertNotIn("modified/member.py", build_release.WINDOWS_INSTALLER_APP_FILES)
+            self.assertEqual(("modified/member.py",), self.stage._load_allowlist(root))
+
+    def test_final_installer_gate_refuses_missing_runtime_source_or_changed_app_bytes(self):
+        from tests.test_runtime_sources import write_source_fixture
+        import runtime_licenses
+        import runtime_sources
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            source = root / 'source'
+            source_distribution.write_source_tree(
+                source_distribution.snapshot(ROOT, build_release.WINDOWS_INSTALLER_APP_FILES), source)
+            lock_path = source / 'Installer/runtime-lock.json'
+            fixture = write_source_fixture(root / 'upstream-fixture', runtime_lock=lock_path)
+            source_lock = source / 'Installer/runtime-sources.lock.json'
+            source_lock.write_bytes(fixture['source_lock'].read_bytes())
+            stage = root / 'stage'
+            self.stage.stage_payload(source, stage, self.stage._version_from_toc(source))
+            runtime = stage / 'runtime'
+            for relative in runtime_licenses.required_license_paths(json.loads(lock_path.read_text())):
+                target = runtime / relative
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes(b'upstream license fixture\r\n')
+            runtime_sources.stage_runtime_sources(runtime, fixture['cache'], source_lock=source_lock,
+                                                  runtime_lock=lock_path, offline=True)
+            command = [sys.executable, '-E', '-s', '-B', str(stage / 'source/source_distribution.py'),
+                       '--verify-stage', str(stage)]
+            result = subprocess.run(command, capture_output=True, text=True, timeout=30)
+            self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+            notice = runtime / 'Source/README.txt'
+            original = notice.read_bytes()
+            notice.unlink()
+            result = subprocess.run(command, capture_output=True, text=True, timeout=30)
+            self.assertNotEqual(0, result.returncode)
+            self.assertIn('source inventory mismatch', result.stderr)
+            notice.write_bytes(original)
+            (stage / 'app/Vemals-Ears.pyw').write_bytes(b'# mismatched staged application\n')
+            result = subprocess.run(command, capture_output=True, text=True, timeout=30)
+            self.assertNotEqual(0, result.returncode)
+            self.assertIn('payload differs', result.stderr)
+
     def test_installer_stages_the_distinct_ve_icon_without_reencoding(self):
         with tempfile.TemporaryDirectory() as folder:
             target = Path(folder) / "VemalsEars.ico"
             self.stage._write_icon(ROOT, target)
             self.assertEqual((ROOT / "Windows" / "VemalsEars.ico").read_bytes(),
                              target.read_bytes())
-            self.assertNotEqual((ROOT / "Windows" / "Downtime.ico").read_bytes(),
-                                target.read_bytes())
+            self.assertEqual(b"\x00\x00\x01\x00", target.read_bytes()[:4])
+            self.assertGreater(int.from_bytes(target.read_bytes()[4:6], "little"), 1)
 
     def test_signed_stage_requires_allowlisted_files_to_be_tracked(self):
         with mock.patch.object(
@@ -691,7 +744,8 @@ class InstallerPolicyTests(unittest.TestCase):
         verify_position = build.index("verify_signature.ps1")
         checksum_position = build.index("Get-FileHash", verify_position)
         self.assertGreater(checksum_position, verify_position)
-        self.assertIn("must not be distributed", build)
+        self.assertIn("PROOF BUILD signed by an untrusted certificate", build)
+        self.assertIn("not an official release", build)
         self.assertIn("--no-compile", build)
         self.assertIn('Filter "direct_url.json"', build)
         self.assertIn('Filter "*.pyc"', build)

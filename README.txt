@@ -6,6 +6,11 @@ Canonical source: https://github.com/hodgeszackery/vemals-ears (private).
 Local checkout: E:/Projects/vemals-ears
 License: GPL-3.0-only; see LICENSE.
 
+Release recipients receive matching client source in
+Source/vemals-ears-source.zip and upstream runtime sources in runtime/Source.
+Read docs/SOURCE.txt to modify and rebuild without private repository access
+or signing keys. Preferences has a License & source card for these files.
+
 Run the desktop client from this folder:
   python Vemals-Ears.pyw
 

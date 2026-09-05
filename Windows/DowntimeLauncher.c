@@ -1,3 +1,6 @@
+/* SPDX-License-Identifier: GPL-3.0-only
+ * Copyright (C) 2026 Zackery Hodges
+ */
 #define UNICODE
 #define _UNICODE
 #define WIN32_LEAN_AND_MEAN

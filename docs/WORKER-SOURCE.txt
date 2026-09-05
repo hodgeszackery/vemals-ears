@@ -1,0 +1,49 @@
+Vemal's Ears worker source and notices
+====================================
+
+The worker's VE source is licensed under GNU GPL version 3 only. LICENSE
+contains the applying notice and complete terms. It does not relicense
+third-party packages, model weights, operating-system packages or GPU code.
+
+The CPU worker image preserves its Python and JavaScript application source
+under /app, including GuildHub/Dockerfile.worker and the dependency-source
+stager. The native whisper implementation and its embedded source notices
+are archived at /opt/whisper/whisper-source.tar.gz; its root license is
+/opt/whisper/LICENSE. The Dockerfile records the exact commit and build flags.
+
+Preferred source for the locked npm packages, the native Discord dependency
+and all registry crates from its Cargo.lock is preserved under
+/opt/vemals-ears/third-party/discord-native, alongside websockets source. Read
+SOURCE-AVAILABILITY.txt and WORKER-SOURCES.json there. The files retain their
+original license declarations. In particular, hpke-rs is MPL-2.0 and cannot
+be described as MIT merely because its outer npm package declares MIT.
+The source stager verifies archive checksums before completing the manifest.
+Published npm archives retain exact embedded TypeScript sources where build
+substitutions differ from the accompanying upstream repository snapshots.
+
+Whisper and Silero model cards, their MIT terms, and the extra cpp-httplib
+notice are under /opt/vemals-ears/third-party/model-notices. SOURCES.json
+records the upstream locations and hashes. The actual model files are under
+/opt/vemals-ears/models and retain those third-party terms.
+
+Build the CPU worker from a source checkout with Docker:
+
+    docker build -f GuildHub/Dockerfile.worker -t vemals-ears-worker .
+
+The build downloads pinned upstream models and source inputs. It does not
+need bot tokens or live guild state. Those are configured separately when
+an operator runs the worker. Neither the member application nor its source
+archive contains this operator configuration.
+
+The image also contains Node.js and Debian packages under their own terms.
+Their notices remain in the base image/package locations. Any redistribution
+of the complete image must meet those upstream source and notice obligations
+as well as VE's. No container publication is performed by the source audit.
+
+WINDOWS GPU WORKERS
+
+The separately downloaded NVIDIA runtime is proprietary and is not covered
+by VE's GPL declaration. It is not in the member ZIP, member installer or CPU
+worker image. This audit does not approve redistribution of a combined CUDA
+worker bundle. Such a bundle requires checking the actual linkage, NVIDIA
+redistribution terms and any applicable permissions before publication.

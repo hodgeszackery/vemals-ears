@@ -1,0 +1,1118 @@
+{
+  "davey": {
+    "cargo_lock_path": "davey-a1e2e741bea06bc3b7167a5c3792844b8975993c/Cargo.lock",
+    "cargo_lock_sha256": "cf9bc6884056b8e20ee6835ac0ffca237f8b869d5ca14cddf25f548fa15ceb50",
+    "name": "davey-a1e2e741bea06bc3b7167a5c3792844b8975993c.tar.gz",
+    "packages": [
+      "@snazzah/davey-android-arm-eabi@0.1.12",
+      "@snazzah/davey-android-arm64@0.1.12",
+      "@snazzah/davey-darwin-arm64@0.1.12",
+      "@snazzah/davey-darwin-x64@0.1.12",
+      "@snazzah/davey-freebsd-x64@0.1.12",
+      "@snazzah/davey-linux-arm-gnueabihf@0.1.12",
+      "@snazzah/davey-linux-arm64-gnu@0.1.12",
+      "@snazzah/davey-linux-arm64-musl@0.1.12",
+      "@snazzah/davey-linux-x64-gnu@0.1.12",
+      "@snazzah/davey-linux-x64-musl@0.1.12",
+      "@snazzah/davey-wasm32-wasi@0.1.12",
+      "@snazzah/davey-win32-arm64-msvc@0.1.12",
+      "@snazzah/davey-win32-ia32-msvc@0.1.12",
+      "@snazzah/davey-win32-x64-msvc@0.1.12",
+      "@snazzah/davey@0.1.12"
+    ],
+    "sha256": "f13c2a22426df6ffed133c403da0abcc8fa4ca4d2672bc7916408633e8b032ba",
+    "url": "https://codeload.github.com/Snazzah/davey/tar.gz/a1e2e741bea06bc3b7167a5c3792844b8975993c"
+  },
+  "licenses": [
+    {
+      "name": "davey-MIT.txt",
+      "sha256": "90760006b6e6c76a67476de39bee25e42e584679eac5d608765355d5d54e8afa",
+      "url": "https://raw.githubusercontent.com/Snazzah/davey/a1e2e741bea06bc3b7167a5c3792844b8975993c/LICENSE"
+    },
+    {
+      "name": "sapphire-async-queue-MIT.txt",
+      "sha256": "9a022e629657a7e9753e631ac112bb4260e71267b9ccff1fa72240eb167e2eeb",
+      "url": "https://raw.githubusercontent.com/sapphiredev/utilities/36268acb83cc613e06836f6ebbdafeeba99c2365/LICENSE.md"
+    },
+    {
+      "name": "sapphire-snowflake-MIT.txt",
+      "sha256": "9a022e629657a7e9753e631ac112bb4260e71267b9ccff1fa72240eb167e2eeb",
+      "url": "https://raw.githubusercontent.com/sapphiredev/utilities/dd52b66fc63099b2f95163eebd4df23c26b1cd16/LICENSE.md"
+    },
+    {
+      "name": "MPL-2.0.txt",
+      "sha256": "3f3d9e0024b1921b067d6f7f88deb4a60cbe7a78e76c64e3f1d7fc3b779b9d04",
+      "url": "https://www.mozilla.org/media/MPL/2.0/index.txt"
+    }
+  ],
+  "npm_lock_hash_mode": "sha256-lf",
+  "npm_lock_sha256": "a5674df005444ef08d71a67a38da90a5ad4e0e097359ed65f93f0c0ff42acff5",
+  "npm_sources": [
+    {
+      "name": "LarsKoelpin-magic-bytes-3ff4492e0fbae8007ed9303f67407881041e8217.tar.gz",
+      "packages": [
+        "magic-bytes.js@1.13.1"
+      ],
+      "receipts": [
+        {
+          "basis": "npm gitHead",
+          "metadata_url": "https://registry.npmjs.org/magic-bytes.js/1.13.1",
+          "npm_integrity": "sha512-x5sn4UX2k5gCWlcfmoFwG4TPie8+dctESyqOBdhB5p6MsgWXdBKGmt9nXPObj/JI50TTL928lc5Yt1WntMn1bw==",
+          "package": "magic-bytes.js@1.13.1",
+          "source_commit": "3ff4492e0fbae8007ed9303f67407881041e8217"
+        }
+      ],
+      "sha256": "b03ea86b073bbce6bc38b03de528e9f5b1f82f8376ac44fbbb938d0e08f65dba",
+      "source_member": "magic-bytes-3ff4492e0fbae8007ed9303f67407881041e8217/src/index.spec.ts",
+      "url": "https://codeload.github.com/LarsKoelpin/magic-bytes/tar.gz/3ff4492e0fbae8007ed9303f67407881041e8217"
+    },
+    {
+      "name": "Microsoft-tslib-d72d6f70b36286bc3f94a3dda1e64dcb568b1370.tar.gz",
+      "packages": [
+        "tslib@2.8.1"
+      ],
+      "receipts": [
+        {
+          "basis": "npm gitHead",
+          "metadata_url": "https://registry.npmjs.org/tslib/2.8.1",
+          "npm_integrity": "sha512-oJFu94HQb+KVduSUQL7wnpmqnfmLsOA/nAh6b6EH0wCEoK0/mPeXU6c3wKDV83MkOuHPRHtSXKKU99IBazS/2w==",
+          "package": "tslib@2.8.1",
+          "source_commit": "d72d6f70b36286bc3f94a3dda1e64dcb568b1370"
+        }
+      ],
+      "sha256": "a22b3db9f9bfd489b3015bb12d7c3c03a3a469a15d13e9149a76f4b42781d3f7",
+      "source_member": "tslib-d72d6f70b36286bc3f94a3dda1e64dcb568b1370/tslib.d.ts",
+      "url": "https://codeload.github.com/Microsoft/tslib/tar.gz/d72d6f70b36286bc3f94a3dda1e64dcb568b1370"
+    },
+    {
+      "name": "abalabahaha-opusscript-b9cf55f521d44f531a9faa8823f5cc8ba6f99fcd.tar.gz",
+      "packages": [
+        "opusscript@0.0.8"
+      ],
+      "receipts": [
+        {
+          "basis": "npm gitHead",
+          "metadata_url": "https://registry.npmjs.org/opusscript/0.0.8",
+          "npm_integrity": "sha512-VSTi1aWFuCkRCVq+tx/BQ5q9fMnQ9pVZ3JU4UHKqTkf0ED3fKEPdr+gKAAl3IA2hj9rrP6iyq3hlcJq3HELtNQ==",
+          "package": "opusscript@0.0.8",
+          "source_commit": "b9cf55f521d44f531a9faa8823f5cc8ba6f99fcd"
+        }
+      ],
+      "sha256": "1571c06ab63104ab76dc91b013c5fefc9852942f1c5d2f4dd882deddf596c716",
+      "source_member": "opusscript-b9cf55f521d44f531a9faa8823f5cc8ba6f99fcd/src/opusscript_encoder.cpp",
+      "url": "https://codeload.github.com/abalabahaha/opusscript/tar.gz/b9cf55f521d44f531a9faa8823f5cc8ba6f99fcd"
+    },
+    {
+      "embedded_source_maps": [],
+      "name": "discord-api-types-0.38.54.tgz",
+      "packages": [],
+      "receipts": [
+        {
+          "basis": "exact npm publication; source maps retain original sourcesContent where present",
+          "metadata_url": "https://registry.npmjs.org/discord-api-types/0.38.54",
+          "npm_integrity": "sha512-3704EKdPtVl0Mozoe6uBJQ8GNmUkH8c81nfXkdSBx+Um8GN3FI/003uTY0Pg0A4KjL8g2Q+4v5cHR247kv6vwA==",
+          "package": "discord-api-types@0.38.54"
+        }
+      ],
+      "sha256": "4e8d1ee480276bffe997543e90c712b6bdd646b011ec7375a41cc6150f7114da",
+      "source_member": "package/_generated_/rest/v10/interfaces.d.ts",
+      "url": "https://registry.npmjs.org/discord-api-types/-/discord-api-types-0.38.54.tgz"
+    },
+    {
+      "embedded_source_maps": [],
+      "name": "discord.js-14.27.0.tgz",
+      "packages": [],
+      "receipts": [
+        {
+          "basis": "exact npm publication; source maps retain original sourcesContent where present",
+          "metadata_url": "https://registry.npmjs.org/discord.js/14.27.0",
+          "npm_integrity": "sha512-qHbFlFG2N7y3LjPySYsL6A1+BnX6bkTVgo842EX0CqVPk/KTMwZkojPHEXKsQUpWZNyz5BISNHK1cPpQw0+m4A==",
+          "package": "discord.js@14.27.0"
+        }
+      ],
+      "sha256": "f3dfe660ab52496c81d17fd1749c7b63487cfcdf97be64022011e4dd093912a7",
+      "source_member": "package/src/client/actions/Action.js",
+      "url": "https://registry.npmjs.org/discord.js/-/discord.js-14.27.0.tgz"
+    },
+    {
+      "embedded_source_maps": [
+        "package/dist/index.js.map",
+        "package/dist/index.mjs.map"
+      ],
+      "name": "discordjs-builders-1.14.1.tgz",
+      "packages": [],
+      "receipts": [
+        {
+          "basis": "exact npm publication; source maps retain original sourcesContent where present",
+          "metadata_url": "https://registry.npmjs.org/@discordjs/builders/1.14.1",
+          "npm_integrity": "sha512-gSKkhXLqs96TCzk66VZuHHl8z2bQMJFGwrXC0f33ngK+FLNau4hU1PYny3DNJfNdSH+gVMzE85/d5FQ2BpcNwQ==",
+          "package": "@discordjs/builders@1.14.1"
+        }
+      ],
+      "sha256": "3e3558eaf6e20f32f0261dc285fd617fb8dc018f7491bd8b0798f02dec3dd61f",
+      "source_member": "package/dist/index.js.map",
+      "url": "https://registry.npmjs.org/@discordjs/builders/-/builders-1.14.1.tgz"
+    },
+    {
+      "embedded_source_maps": [
+        "package/dist/index.js.map",
+        "package/dist/index.mjs.map"
+      ],
+      "name": "discordjs-collection-1.5.3.tgz",
+      "packages": [],
+      "receipts": [
+        {
+          "basis": "exact npm publication; source maps retain original sourcesContent where present",
+          "metadata_url": "https://registry.npmjs.org/@discordjs/collection/1.5.3",
+          "npm_integrity": "sha512-SVb428OMd3WO1paV3rm6tSjM4wC+Kecaa1EUGX7vc6/fddvw/6lg90z4QtCqm21zvVe92vMMDt9+DkIvjXImQQ==",
+          "package": "@discordjs/collection@1.5.3"
+        }
+      ],
+      "sha256": "dcacbf4e0d1b3d77ed35a4c2021f3d2cf12b464334f1a299cfb3ae0f3bb5180c",
+      "source_member": "package/dist/index.js.map",
+      "url": "https://registry.npmjs.org/@discordjs/collection/-/collection-1.5.3.tgz"
+    },
+    {
+      "embedded_source_maps": [
+        "package/dist/index.js.map",
+        "package/dist/index.mjs.map"
+      ],
+      "name": "discordjs-collection-2.1.1.tgz",
+      "packages": [],
+      "receipts": [
+        {
+          "basis": "exact npm publication; source maps retain original sourcesContent where present",
+          "metadata_url": "https://registry.npmjs.org/@discordjs/collection/2.1.1",
+          "npm_integrity": "sha512-LiSusze9Tc7qF03sLCujF5iZp7K+vRNEDBZ86FT9aQAv3vxMLihUvKvpsCWiQ2DJq1tVckopKm1rxomgNUc9hg==",
+          "package": "@discordjs/collection@2.1.1"
+        }
+      ],
+      "sha256": "331bac8902d74dc93bd22b405d18021f134d3880bc9ba7f0a94e3fac3f0c200f",
+      "source_member": "package/dist/index.js.map",
+      "url": "https://registry.npmjs.org/@discordjs/collection/-/collection-2.1.1.tgz"
+    },
+    {
+      "name": "discordjs-discord-api-types-5906dd83942f2be0b01d54039476526d41db3448.tar.gz",
+      "packages": [
+        "discord-api-types@0.38.54"
+      ],
+      "receipts": [
+        {
+          "basis": "npm gitHead",
+          "metadata_url": "https://registry.npmjs.org/discord-api-types/0.38.54",
+          "npm_integrity": "sha512-3704EKdPtVl0Mozoe6uBJQ8GNmUkH8c81nfXkdSBx+Um8GN3FI/003uTY0Pg0A4KjL8g2Q+4v5cHR247kv6vwA==",
+          "package": "discord-api-types@0.38.54",
+          "source_commit": "5906dd83942f2be0b01d54039476526d41db3448"
+        }
+      ],
+      "sha256": "aa7e5775b50a14fac41dbe7b7611e784cdf807c444a1f749d1d47287c1c63f36",
+      "source_member": "discord-api-types-5906dd83942f2be0b01d54039476526d41db3448/website/src/index.d.ts",
+      "url": "https://codeload.github.com/discordjs/discord-api-types/tar.gz/5906dd83942f2be0b01d54039476526d41db3448"
+    },
+    {
+      "name": "discordjs-discord.js-0830fe8dbc7c6db591d16a892203b6da95e5d570.tar.gz",
+      "packages": [
+        "@discordjs/ws@1.2.3"
+      ],
+      "receipts": [
+        {
+          "basis": "npm SLSA provenance build commit",
+          "metadata_url": "https://registry.npmjs.org/-/npm/v1/attestations/@discordjs%2fws@1.2.3",
+          "npm_integrity": "sha512-wPlQDxEmlDg5IxhJPuxXr3Vy9AjYq5xCvFWGJyD7w7Np8ZGu+Mc+97LCoEc/+AYCo2IDpKioiH0/c/mj5ZR9Uw==",
+          "package": "@discordjs/ws@1.2.3",
+          "source_commit": "0830fe8dbc7c6db591d16a892203b6da95e5d570"
+        }
+      ],
+      "sha256": "59bac2bf135e7c059fe915566598b03879f92a591d7599158dd1dabdb4c1c507",
+      "source_member": "discord.js-0830fe8dbc7c6db591d16a892203b6da95e5d570/apps/guide/src/middleware.ts",
+      "url": "https://codeload.github.com/discordjs/discord.js/tar.gz/0830fe8dbc7c6db591d16a892203b6da95e5d570"
+    },
+    {
+      "name": "discordjs-discord.js-18ce10a9afeadd4cbd0cd4f42cf42a54ec0c1690.tar.gz",
+      "packages": [
+        "@discordjs/collection@2.1.1"
+      ],
+      "receipts": [
+        {
+          "basis": "npm SLSA provenance build commit",
+          "metadata_url": "https://registry.npmjs.org/-/npm/v1/attestations/@discordjs%2fcollection@2.1.1",
+          "npm_integrity": "sha512-LiSusze9Tc7qF03sLCujF5iZp7K+vRNEDBZ86FT9aQAv3vxMLihUvKvpsCWiQ2DJq1tVckopKm1rxomgNUc9hg==",
+          "package": "@discordjs/collection@2.1.1",
+          "source_commit": "18ce10a9afeadd4cbd0cd4f42cf42a54ec0c1690"
+        }
+      ],
+      "sha256": "d521e10a94ce5683a4b19e90804d8bd6417042a1442880df255a146f95ada57d",
+      "source_member": "discord.js-18ce10a9afeadd4cbd0cd4f42cf42a54ec0c1690/apps/guide/src/middleware.ts",
+      "url": "https://codeload.github.com/discordjs/discord.js/tar.gz/18ce10a9afeadd4cbd0cd4f42cf42a54ec0c1690"
+    },
+    {
+      "name": "discordjs-discord.js-2a067216c410e402f3ada7cd9eb29f566636b0ad.tar.gz",
+      "packages": [
+        "@discordjs/voice@0.19.2"
+      ],
+      "receipts": [
+        {
+          "basis": "npm SLSA provenance build commit",
+          "metadata_url": "https://registry.npmjs.org/-/npm/v1/attestations/@discordjs%2fvoice@0.19.2",
+          "npm_integrity": "sha512-3yJ255e4ag3wfZu/DSxeOZK1UtnqNxnspmLaQetGT0pDkThNZoHs+Zg6dgZZ19JEVomXygvfHn9lNpICZuYtEA==",
+          "package": "@discordjs/voice@0.19.2",
+          "source_commit": "2a067216c410e402f3ada7cd9eb29f566636b0ad"
+        }
+      ],
+      "sha256": "58e637a33125251cf04f72cd8c2ac09e13f3cdfd559e6ca49e9ac8fb2111acaa",
+      "source_member": "discord.js-2a067216c410e402f3ada7cd9eb29f566636b0ad/apps/guide/src/middleware.ts",
+      "url": "https://codeload.github.com/discordjs/discord.js/tar.gz/2a067216c410e402f3ada7cd9eb29f566636b0ad"
+    },
+    {
+      "name": "discordjs-discord.js-339b8b565562dee4f585f9d8b3541e52bd0d08c3.tar.gz",
+      "packages": [
+        "@discordjs/builders@1.14.1"
+      ],
+      "receipts": [
+        {
+          "basis": "npm SLSA provenance build commit",
+          "metadata_url": "https://registry.npmjs.org/-/npm/v1/attestations/@discordjs%2fbuilders@1.14.1",
+          "npm_integrity": "sha512-gSKkhXLqs96TCzk66VZuHHl8z2bQMJFGwrXC0f33ngK+FLNau4hU1PYny3DNJfNdSH+gVMzE85/d5FQ2BpcNwQ==",
+          "package": "@discordjs/builders@1.14.1",
+          "source_commit": "339b8b565562dee4f585f9d8b3541e52bd0d08c3"
+        }
+      ],
+      "sha256": "fac3bde44cbd6465b8d5e6984c2dc10d6b63d5947a14cc97fd628270273da207",
+      "source_member": "discord.js-339b8b565562dee4f585f9d8b3541e52bd0d08c3/apps/guide/src/middleware.ts",
+      "url": "https://codeload.github.com/discordjs/discord.js/tar.gz/339b8b565562dee4f585f9d8b3541e52bd0d08c3"
+    },
+    {
+      "name": "discordjs-discord.js-5cd6382d1d05cb094e4a7cd52be2c41759c4435d.tar.gz",
+      "packages": [
+        "@discordjs/collection@1.5.3"
+      ],
+      "receipts": [
+        {
+          "basis": "npm gitHead",
+          "metadata_url": "https://registry.npmjs.org/@discordjs/collection/1.5.3",
+          "npm_integrity": "sha512-SVb428OMd3WO1paV3rm6tSjM4wC+Kecaa1EUGX7vc6/fddvw/6lg90z4QtCqm21zvVe92vMMDt9+DkIvjXImQQ==",
+          "package": "@discordjs/collection@1.5.3",
+          "source_commit": "5cd6382d1d05cb094e4a7cd52be2c41759c4435d"
+        }
+      ],
+      "sha256": "2705c115f5af415612933b6b842387a07fae007a77deb4872b956ee46f3bfee8",
+      "source_member": "discord.js-5cd6382d1d05cb094e4a7cd52be2c41759c4435d/apps/guide/src/middleware.ts",
+      "url": "https://codeload.github.com/discordjs/discord.js/tar.gz/5cd6382d1d05cb094e4a7cd52be2c41759c4435d"
+    },
+    {
+      "name": "discordjs-discord.js-6e81ea771da9cddd8ac0dda10f581dd667bca599.tar.gz",
+      "packages": [
+        "discord.js@14.27.0"
+      ],
+      "receipts": [
+        {
+          "basis": "npm SLSA provenance build commit",
+          "metadata_url": "https://registry.npmjs.org/-/npm/v1/attestations/discord.js@14.27.0",
+          "npm_integrity": "sha512-qHbFlFG2N7y3LjPySYsL6A1+BnX6bkTVgo842EX0CqVPk/KTMwZkojPHEXKsQUpWZNyz5BISNHK1cPpQw0+m4A==",
+          "package": "discord.js@14.27.0",
+          "source_commit": "6e81ea771da9cddd8ac0dda10f581dd667bca599"
+        }
+      ],
+      "sha256": "c274144ca9511b9d34af434fcb9aee2d8e5e7c6bf808c1b65756a0e88472ffe8",
+      "source_member": "discord.js-6e81ea771da9cddd8ac0dda10f581dd667bca599/apps/guide/src/middleware.ts",
+      "url": "https://codeload.github.com/discordjs/discord.js/tar.gz/6e81ea771da9cddd8ac0dda10f581dd667bca599"
+    },
+    {
+      "name": "discordjs-discord.js-974a8c891ff6191e3f93170c302cec25053d1943.tar.gz",
+      "packages": [
+        "@discordjs/rest@2.6.3"
+      ],
+      "receipts": [
+        {
+          "basis": "npm SLSA provenance build commit",
+          "metadata_url": "https://registry.npmjs.org/-/npm/v1/attestations/@discordjs%2frest@2.6.3",
+          "npm_integrity": "sha512-wvOylxNYJkwKjctS/Mn5GP1w9r3/rzyH+ThD1JlAca6zEdlHs8QWBBUQJpU5Q+W6DoIj/Ljh1IPlZs7hTU+UAg==",
+          "package": "@discordjs/rest@2.6.3",
+          "source_commit": "974a8c891ff6191e3f93170c302cec25053d1943"
+        }
+      ],
+      "sha256": "c37fec8ac5a33262c7e9e564c7a07d0788f2198e6be2f2f5e93c0dc319f9b4fb",
+      "source_member": "discord.js-974a8c891ff6191e3f93170c302cec25053d1943/apps/guide/src/middleware.ts",
+      "url": "https://codeload.github.com/discordjs/discord.js/tar.gz/974a8c891ff6191e3f93170c302cec25053d1943"
+    },
+    {
+      "name": "discordjs-discord.js-9d5c6b4588ee6f90bf194702622d2e9789e2d1c3.tar.gz",
+      "packages": [
+        "@discordjs/formatters@0.6.2",
+        "@discordjs/util@1.2.0"
+      ],
+      "receipts": [
+        {
+          "basis": "npm SLSA provenance build commit",
+          "metadata_url": "https://registry.npmjs.org/-/npm/v1/attestations/@discordjs%2fformatters@0.6.2",
+          "npm_integrity": "sha512-y4UPwWhH6vChKRkGdMB4odasUbHOUwy7KL+OVwF86PvT6QVOwElx+TiI1/6kcmcEe+g5YRXJFiXSXUdabqZOvQ==",
+          "package": "@discordjs/formatters@0.6.2",
+          "source_commit": "9d5c6b4588ee6f90bf194702622d2e9789e2d1c3"
+        },
+        {
+          "basis": "npm SLSA provenance build commit",
+          "metadata_url": "https://registry.npmjs.org/-/npm/v1/attestations/@discordjs%2futil@1.2.0",
+          "npm_integrity": "sha512-3LKP7F2+atl9vJFhaBjn4nOaSWahZ/yWjOvA4e5pnXkt2qyXRCHLxoBQy81GFtLGCq7K9lPm9R517M1U+/90Qg==",
+          "package": "@discordjs/util@1.2.0",
+          "source_commit": "9d5c6b4588ee6f90bf194702622d2e9789e2d1c3"
+        }
+      ],
+      "sha256": "9870167c26663b36befed90d0e39cfd13e0e006491838bfe4b0e3a0b05f9972f",
+      "source_member": "discord.js-9d5c6b4588ee6f90bf194702622d2e9789e2d1c3/apps/guide/src/middleware.ts",
+      "url": "https://codeload.github.com/discordjs/discord.js/tar.gz/9d5c6b4588ee6f90bf194702622d2e9789e2d1c3"
+    },
+    {
+      "embedded_source_maps": [
+        "package/dist/index.js.map",
+        "package/dist/index.mjs.map"
+      ],
+      "name": "discordjs-formatters-0.6.2.tgz",
+      "packages": [],
+      "receipts": [
+        {
+          "basis": "exact npm publication; source maps retain original sourcesContent where present",
+          "metadata_url": "https://registry.npmjs.org/@discordjs/formatters/0.6.2",
+          "npm_integrity": "sha512-y4UPwWhH6vChKRkGdMB4odasUbHOUwy7KL+OVwF86PvT6QVOwElx+TiI1/6kcmcEe+g5YRXJFiXSXUdabqZOvQ==",
+          "package": "@discordjs/formatters@0.6.2"
+        }
+      ],
+      "sha256": "09b16425b62cc57d283e11c6a5af668c31087d6c2528b2f190cd6428f42edc58",
+      "source_member": "package/dist/index.js.map",
+      "url": "https://registry.npmjs.org/@discordjs/formatters/-/formatters-0.6.2.tgz"
+    },
+    {
+      "embedded_source_maps": [
+        "package/dist/index.js.map",
+        "package/dist/index.mjs.map",
+        "package/dist/strategies/undiciRequest.js.map",
+        "package/dist/strategies/undiciRequest.mjs.map",
+        "package/dist/web.js.map",
+        "package/dist/web.mjs.map"
+      ],
+      "name": "discordjs-rest-2.6.3.tgz",
+      "packages": [],
+      "receipts": [
+        {
+          "basis": "exact npm publication; source maps retain original sourcesContent where present",
+          "metadata_url": "https://registry.npmjs.org/@discordjs/rest/2.6.3",
+          "npm_integrity": "sha512-wvOylxNYJkwKjctS/Mn5GP1w9r3/rzyH+ThD1JlAca6zEdlHs8QWBBUQJpU5Q+W6DoIj/Ljh1IPlZs7hTU+UAg==",
+          "package": "@discordjs/rest@2.6.3"
+        }
+      ],
+      "sha256": "d28cc0bdc66dd29be551b5612b86360da0c3348c758b9d183b30dc858a3f8b93",
+      "source_member": "package/dist/index.js.map",
+      "url": "https://registry.npmjs.org/@discordjs/rest/-/rest-2.6.3.tgz"
+    },
+    {
+      "embedded_source_maps": [
+        "package/dist/index.js.map",
+        "package/dist/index.mjs.map"
+      ],
+      "name": "discordjs-util-1.2.0.tgz",
+      "packages": [],
+      "receipts": [
+        {
+          "basis": "exact npm publication; source maps retain original sourcesContent where present",
+          "metadata_url": "https://registry.npmjs.org/@discordjs/util/1.2.0",
+          "npm_integrity": "sha512-3LKP7F2+atl9vJFhaBjn4nOaSWahZ/yWjOvA4e5pnXkt2qyXRCHLxoBQy81GFtLGCq7K9lPm9R517M1U+/90Qg==",
+          "package": "@discordjs/util@1.2.0"
+        }
+      ],
+      "sha256": "5cd8ecc3da81eef642e18265ccf52512e18e4a313b952c46317a272d40f4227f",
+      "source_member": "package/dist/index.js.map",
+      "url": "https://registry.npmjs.org/@discordjs/util/-/util-1.2.0.tgz"
+    },
+    {
+      "embedded_source_maps": [
+        "package/dist/index.js.map",
+        "package/dist/index.mjs.map"
+      ],
+      "name": "discordjs-voice-0.19.2.tgz",
+      "packages": [],
+      "receipts": [
+        {
+          "basis": "exact npm publication; source maps retain original sourcesContent where present",
+          "metadata_url": "https://registry.npmjs.org/@discordjs/voice/0.19.2",
+          "npm_integrity": "sha512-3yJ255e4ag3wfZu/DSxeOZK1UtnqNxnspmLaQetGT0pDkThNZoHs+Zg6dgZZ19JEVomXygvfHn9lNpICZuYtEA==",
+          "package": "@discordjs/voice@0.19.2"
+        }
+      ],
+      "sha256": "d73df40425aad46ab0b13e9424731b2855c1c8c52d36b7cf0d2c8cf9a7bf0200",
+      "source_member": "package/dist/index.js.map",
+      "url": "https://registry.npmjs.org/@discordjs/voice/-/voice-0.19.2.tgz"
+    },
+    {
+      "embedded_source_maps": [
+        "package/dist/defaultWorker.js.map",
+        "package/dist/defaultWorker.mjs.map",
+        "package/dist/index.js.map",
+        "package/dist/index.mjs.map"
+      ],
+      "name": "discordjs-ws-1.2.3.tgz",
+      "packages": [],
+      "receipts": [
+        {
+          "basis": "exact npm publication; source maps retain original sourcesContent where present",
+          "metadata_url": "https://registry.npmjs.org/@discordjs/ws/1.2.3",
+          "npm_integrity": "sha512-wPlQDxEmlDg5IxhJPuxXr3Vy9AjYq5xCvFWGJyD7w7Np8ZGu+Mc+97LCoEc/+AYCo2IDpKioiH0/c/mj5ZR9Uw==",
+          "package": "@discordjs/ws@1.2.3"
+        }
+      ],
+      "sha256": "fa880d3742ed138f939501bca0cb380edc3aca8cb125cc13c884de6008de1feb",
+      "source_member": "package/dist/defaultWorker.js.map",
+      "url": "https://registry.npmjs.org/@discordjs/ws/-/ws-1.2.3.tgz"
+    },
+    {
+      "embedded_source_maps": [],
+      "name": "emnapi-core-1.11.3.tgz",
+      "packages": [],
+      "receipts": [
+        {
+          "basis": "exact npm publication; source maps retain original sourcesContent where present",
+          "metadata_url": "https://registry.npmjs.org/@emnapi/core/1.11.3",
+          "npm_integrity": "sha512-zLpS5asjEb7lq8jYLq37N6XKaE41DIexlY1rF/z4/tIl3wo13Sqm28fRyfIsKZD+NZ8mM5RoKkpW/rBcuoSZSg==",
+          "package": "@emnapi/core@1.11.3"
+        }
+      ],
+      "sha256": "2f902aa197cf64722e5afddabecf4af94f8cab161d06b2f036bc29f2039136de",
+      "source_member": "package/dist/emnapi-core.cjs.js",
+      "url": "https://registry.npmjs.org/@emnapi/core/-/core-1.11.3.tgz"
+    },
+    {
+      "embedded_source_maps": [],
+      "name": "emnapi-runtime-1.11.3.tgz",
+      "packages": [],
+      "receipts": [
+        {
+          "basis": "exact npm publication; source maps retain original sourcesContent where present",
+          "metadata_url": "https://registry.npmjs.org/@emnapi/runtime/1.11.3",
+          "npm_integrity": "sha512-Xz4Tpyki7XyrpbUK1jR1AhdAdaXyhhY4lZ3neLodmhpuWfy2PAQN5B46sAiU4liOXGLkHypn/qU+jvfWSCYYLA==",
+          "package": "@emnapi/runtime@1.11.3"
+        }
+      ],
+      "sha256": "e6eb8913a08b551436d65f9a5cfbdcc8006f58e6798226d24e695c25679b5e49",
+      "source_member": "package/dist/emnapi.cjs.js",
+      "url": "https://registry.npmjs.org/@emnapi/runtime/-/runtime-1.11.3.tgz"
+    },
+    {
+      "embedded_source_maps": [],
+      "name": "emnapi-wasi-threads-1.2.3.tgz",
+      "packages": [],
+      "receipts": [
+        {
+          "basis": "exact npm publication; source maps retain original sourcesContent where present",
+          "metadata_url": "https://registry.npmjs.org/@emnapi/wasi-threads/1.2.3",
+          "npm_integrity": "sha512-ELEBe8PsLvvJ6QMr0zLt8ffvOHW/dc1m3CEzNMg7aJUv3bMaoDtw2TXyDAwkYBuroxxuHEwhRTLJSe5sya547g==",
+          "package": "@emnapi/wasi-threads@1.2.3"
+        }
+      ],
+      "sha256": "e1fc19dd8ecfde1313fd6afdf9b41a1a22c690c59cd6b384a5c7c97f96acde33",
+      "source_member": "package/index.js",
+      "url": "https://registry.npmjs.org/@emnapi/wasi-threads/-/wasi-threads-1.2.3.tgz"
+    },
+    {
+      "name": "epoberezkin-fast-deep-equal-d807ffc5013e710deb1c63d463a03f729bcd144d.tar.gz",
+      "packages": [
+        "fast-deep-equal@3.1.3"
+      ],
+      "receipts": [
+        {
+          "basis": "npm gitHead",
+          "metadata_url": "https://registry.npmjs.org/fast-deep-equal/3.1.3",
+          "npm_integrity": "sha512-f3qQ9oQy9j2AhBe/H9VC91wLmKBCCU/gDOnKNAYG5hswO7BLKj09Hc5HYNz9cGI++xlpDCIgDaitVs03ATR84Q==",
+          "package": "fast-deep-equal@3.1.3",
+          "source_commit": "d807ffc5013e710deb1c63d463a03f729bcd144d"
+        }
+      ],
+      "sha256": "671092ac55cf21aa7ebbef546d8ae2f11dbb13f7133b2adfde86b52db1fefaf6",
+      "source_member": "fast-deep-equal-d807ffc5013e710deb1c63d463a03f729bcd144d/build.js",
+      "url": "https://codeload.github.com/epoberezkin/fast-deep-equal/tar.gz/d807ffc5013e710deb1c63d463a03f729bcd144d"
+    },
+    {
+      "embedded_source_maps": [],
+      "name": "fast-deep-equal-3.1.3.tgz",
+      "packages": [],
+      "receipts": [
+        {
+          "basis": "exact npm publication; source maps retain original sourcesContent where present",
+          "metadata_url": "https://registry.npmjs.org/fast-deep-equal/3.1.3",
+          "npm_integrity": "sha512-f3qQ9oQy9j2AhBe/H9VC91wLmKBCCU/gDOnKNAYG5hswO7BLKj09Hc5HYNz9cGI++xlpDCIgDaitVs03ATR84Q==",
+          "package": "fast-deep-equal@3.1.3"
+        }
+      ],
+      "sha256": "b019a0980f27638dc3f85836b0e478f188e00d7a6e5852c0819fa86f56e47b8f",
+      "source_member": "package/es6/index.js",
+      "url": "https://registry.npmjs.org/fast-deep-equal/-/fast-deep-equal-3.1.3.tgz"
+    },
+    {
+      "embedded_source_maps": [],
+      "name": "lodash-4.18.1.tgz",
+      "packages": [],
+      "receipts": [
+        {
+          "basis": "exact npm publication; source maps retain original sourcesContent where present",
+          "metadata_url": "https://registry.npmjs.org/lodash/4.18.1",
+          "npm_integrity": "sha512-dMInicTPVE8d1e5otfwmmjlxkZoUpiVLwyeTdUsi/Caj/gfzzblBcCE5sRHV/AsjuCmxWrte2TNGSYuCeCq+0Q==",
+          "package": "lodash@4.18.1"
+        }
+      ],
+      "sha256": "696942c2a488c9d7428e9ca5f12ccf03b52de01dcdbfe4d4751d392f0491ae16",
+      "source_member": "package/fp/__.js",
+      "url": "https://registry.npmjs.org/lodash/-/lodash-4.18.1.tgz"
+    },
+    {
+      "name": "lodash-lodash-4f0b76e2eca13de1c1fe8b4305abc1f7d63f4b86.tar.gz",
+      "packages": [
+        "lodash@4.18.1"
+      ],
+      "receipts": [
+        {
+          "basis": "npm gitHead",
+          "metadata_url": "https://registry.npmjs.org/lodash/4.18.1",
+          "npm_integrity": "sha512-dMInicTPVE8d1e5otfwmmjlxkZoUpiVLwyeTdUsi/Caj/gfzzblBcCE5sRHV/AsjuCmxWrte2TNGSYuCeCq+0Q==",
+          "package": "lodash@4.18.1",
+          "source_commit": "4f0b76e2eca13de1c1fe8b4305abc1f7d63f4b86"
+        }
+      ],
+      "sha256": "ab6eeea34d3e08cae382c0dff81843aa4dd4fc4e387a98e59a5440c9942f41bc",
+      "source_member": "lodash-4f0b76e2eca13de1c1fe8b4305abc1f7d63f4b86/_DataView.js",
+      "url": "https://codeload.github.com/lodash/lodash/tar.gz/4f0b76e2eca13de1c1fe8b4305abc1f7d63f4b86"
+    },
+    {
+      "name": "lodash.snakecase-4.1.1.tgz",
+      "packages": [
+        "lodash.snakecase@4.1.1"
+      ],
+      "receipts": [
+        {
+          "basis": "published editable JavaScript or TypeScript declarations",
+          "metadata_url": "https://registry.npmjs.org/lodash.snakecase/4.1.1",
+          "npm_integrity": "sha512-QZ1d4xoBHYUeuouhEq3lk3Uq7ldgyFXGBhg04+oRLnIz8o9T65Eh+8YdroUwn846zchkA9yDsDl5CVVaV2nqYw==",
+          "package": "lodash.snakecase@4.1.1",
+          "source_commit": null
+        }
+      ],
+      "sha256": "53032c788083a49a22af5b896cafebd905dafad3510d70459a384afd5c302c2c",
+      "source_member": "package/index.js",
+      "url": "https://registry.npmjs.org/lodash.snakecase/-/lodash.snakecase-4.1.1.tgz"
+    },
+    {
+      "embedded_source_maps": [],
+      "name": "magic-bytes.js-1.13.1.tgz",
+      "packages": [],
+      "receipts": [
+        {
+          "basis": "exact npm publication; source maps retain original sourcesContent where present",
+          "metadata_url": "https://registry.npmjs.org/magic-bytes.js/1.13.1",
+          "npm_integrity": "sha512-x5sn4UX2k5gCWlcfmoFwG4TPie8+dctESyqOBdhB5p6MsgWXdBKGmt9nXPObj/JI50TTL928lc5Yt1WntMn1bw==",
+          "package": "magic-bytes.js@1.13.1"
+        }
+      ],
+      "sha256": "9faab3d72eec1b9fa6847b86ce5bee8a1b658aeb2374c44b1ee78cf9c2f5d2d8",
+      "source_member": "package/dist/index.js",
+      "url": "https://registry.npmjs.org/magic-bytes.js/-/magic-bytes.js-1.13.1.tgz"
+    },
+    {
+      "name": "napi-rs-napi-rs-70c149321ca4e361f6726349cf9b2258467fb24f.tar.gz",
+      "packages": [
+        "@napi-rs/wasm-runtime@1.2.3"
+      ],
+      "receipts": [
+        {
+          "basis": "npm gitHead",
+          "metadata_url": "https://registry.npmjs.org/@napi-rs/wasm-runtime/1.2.3",
+          "npm_integrity": "sha512-UMduMbqO5s5zF2NkNacMT/yK5Y5QiKvWr2+50bzIIxFDwVJ2h49b+oyjaCGPhJxd2/gC2x39EHv/gHVuu36x2Q==",
+          "package": "@napi-rs/wasm-runtime@1.2.3",
+          "source_commit": "70c149321ca4e361f6726349cf9b2258467fb24f"
+        }
+      ],
+      "sha256": "d395abc3038652dfda838929524245135d8263168d83542fe0fcc4f6351f67a6",
+      "source_member": "napi-rs-70c149321ca4e361f6726349cf9b2258467fb24f/cli/src/cli.ts",
+      "url": "https://codeload.github.com/napi-rs/napi-rs/tar.gz/70c149321ca4e361f6726349cf9b2258467fb24f"
+    },
+    {
+      "embedded_source_maps": [],
+      "name": "napi-rs-wasm-runtime-1.2.3.tgz",
+      "packages": [],
+      "receipts": [
+        {
+          "basis": "exact npm publication; source maps retain original sourcesContent where present",
+          "metadata_url": "https://registry.npmjs.org/@napi-rs/wasm-runtime/1.2.3",
+          "npm_integrity": "sha512-UMduMbqO5s5zF2NkNacMT/yK5Y5QiKvWr2+50bzIIxFDwVJ2h49b+oyjaCGPhJxd2/gC2x39EHv/gHVuu36x2Q==",
+          "package": "@napi-rs/wasm-runtime@1.2.3"
+        }
+      ],
+      "sha256": "434e1f4532cef2e9505ad597735cdad0eab0b3cfe3b6708f9dfb399f737346b2",
+      "source_member": "package/dist/emnapi-plugins.js",
+      "url": "https://registry.npmjs.org/@napi-rs/wasm-runtime/-/wasm-runtime-1.2.3.tgz"
+    },
+    {
+      "name": "nodejs-undici-01a912e49a50c48009ed2639d2a457a6ec26752a.tar.gz",
+      "packages": [
+        "undici@6.28.0"
+      ],
+      "receipts": [
+        {
+          "basis": "npm gitHead",
+          "metadata_url": "https://registry.npmjs.org/undici/6.28.0",
+          "npm_integrity": "sha512-LIY910g9TI13YS95lrMFrs8Rm/u/irgHeTWoKCoteeJ04CUJ92eEfj0rVn+7VKMPBpUPiUoBKfhNyLI23EE/KA==",
+          "package": "undici@6.28.0",
+          "source_commit": "01a912e49a50c48009ed2639d2a457a6ec26752a"
+        }
+      ],
+      "sha256": "ffc2c2cc67ba8e3489b6302148fb14a903032f0950d2ccfe3089ce66d09d11c0",
+      "source_member": "undici-01a912e49a50c48009ed2639d2a457a6ec26752a/deps/llhttp/src/api.c",
+      "url": "https://codeload.github.com/nodejs/undici/tar.gz/01a912e49a50c48009ed2639d2a457a6ec26752a"
+    },
+    {
+      "name": "nodejs-undici-aa33b19549ef5c37b73599a6deba768e85f46f92.tar.gz",
+      "packages": [
+        "undici-types@8.3.0"
+      ],
+      "receipts": [
+        {
+          "basis": "npm gitHead",
+          "metadata_url": "https://registry.npmjs.org/undici-types/8.3.0",
+          "npm_integrity": "sha512-j375ScV60dom+YkPFIfTLcOiPxkN/buHz5GobjLhixFuANaNs3C9l4GmrWqejgXWJ7BbJcFYpTEUkS1Ge8bpZQ==",
+          "package": "undici-types@8.3.0",
+          "source_commit": "aa33b19549ef5c37b73599a6deba768e85f46f92"
+        }
+      ],
+      "sha256": "28aa521a97a7b27e7c7203821b5753d21b9a7fcc9c05215a2dbc07fadd94f17d",
+      "source_member": "undici-aa33b19549ef5c37b73599a6deba768e85f46f92/deps/llhttp/src/api.c",
+      "url": "https://codeload.github.com/nodejs/undici/tar.gz/aa33b19549ef5c37b73599a6deba768e85f46f92"
+    },
+    {
+      "embedded_source_maps": [],
+      "name": "opusscript-0.0.8.tgz",
+      "packages": [],
+      "receipts": [
+        {
+          "basis": "exact npm publication; source maps retain original sourcesContent where present",
+          "metadata_url": "https://registry.npmjs.org/opusscript/0.0.8",
+          "npm_integrity": "sha512-VSTi1aWFuCkRCVq+tx/BQ5q9fMnQ9pVZ3JU4UHKqTkf0ED3fKEPdr+gKAAl3IA2hj9rrP6iyq3hlcJq3HELtNQ==",
+          "package": "opusscript@0.0.8"
+        }
+      ],
+      "sha256": "55a4af7ee21af23b8f8f68f0793ef5db8d12fa97221e96e8c6db5b89f889e1fe",
+      "source_member": "package/index.js",
+      "url": "https://registry.npmjs.org/opusscript/-/opusscript-0.0.8.tgz"
+    },
+    {
+      "name": "prism-media-1.3.5.tgz",
+      "packages": [
+        "prism-media@1.3.5"
+      ],
+      "receipts": [
+        {
+          "basis": "published editable JavaScript or TypeScript declarations",
+          "metadata_url": "https://registry.npmjs.org/prism-media/1.3.5",
+          "npm_integrity": "sha512-IQdl0Q01m4LrkN1EGIE9lphov5Hy7WWlH6ulf5QdGePLlPas9p2mhgddTEHrlaXYjjFToM1/rWuwF37VF4taaA==",
+          "package": "prism-media@1.3.5",
+          "source_commit": null
+        }
+      ],
+      "sha256": "cb092328f50c6f8d29a7e78f1cc0be5f41373c8eb9eedf9ff3364784e301b432",
+      "source_member": "package/src/index.js",
+      "url": "https://registry.npmjs.org/prism-media/-/prism-media-1.3.5.tgz"
+    },
+    {
+      "embedded_source_maps": [
+        "package/dist/cjs/index.cjs.map",
+        "package/dist/esm/index.mjs.map",
+        "package/dist/iife/index.global.js.map"
+      ],
+      "name": "sapphire-async-queue-1.5.5.tgz",
+      "packages": [],
+      "receipts": [
+        {
+          "basis": "exact npm publication; source maps retain original sourcesContent where present",
+          "metadata_url": "https://registry.npmjs.org/@sapphire/async-queue/1.5.5",
+          "npm_integrity": "sha512-cvGzxbba6sav2zZkH8GPf2oGk9yYoD5qrNWdu9fRehifgnFZJMV+nuy2nON2roRO4yQQ+v7MK/Pktl/HgfsUXg==",
+          "package": "@sapphire/async-queue@1.5.5"
+        }
+      ],
+      "sha256": "afc845231d005a663693992c7e743acbfdc67fa03be12f7ccce758f8fdfcfe2a",
+      "source_member": "package/dist/cjs/index.cjs.map",
+      "url": "https://registry.npmjs.org/@sapphire/async-queue/-/async-queue-1.5.5.tgz"
+    },
+    {
+      "embedded_source_maps": [
+        "package/dist/cjs/index.cjs.map",
+        "package/dist/esm/index.mjs.map",
+        "package/dist/iife/index.global.js.map"
+      ],
+      "name": "sapphire-shapeshift-4.0.0.tgz",
+      "packages": [],
+      "receipts": [
+        {
+          "basis": "exact npm publication; source maps retain original sourcesContent where present",
+          "metadata_url": "https://registry.npmjs.org/@sapphire/shapeshift/4.0.0",
+          "npm_integrity": "sha512-d9dUmWVA7MMiKobL3VpLF8P2aeanRTu6ypG2OIaEv/ZHH/SUQ2iHOVyi5wAPjQ+HmnMuL0whK9ez8I/raWbtIg==",
+          "package": "@sapphire/shapeshift@4.0.0"
+        }
+      ],
+      "sha256": "7db5bc5206e1f0b7eb2ba3258035a6623051e55740292040eba3993fbce4d60b",
+      "source_member": "package/dist/cjs/index.cjs.map",
+      "url": "https://registry.npmjs.org/@sapphire/shapeshift/-/shapeshift-4.0.0.tgz"
+    },
+    {
+      "embedded_source_maps": [
+        "package/dist/cjs/index.cjs.map",
+        "package/dist/esm/index.mjs.map",
+        "package/dist/iife/index.global.js.map"
+      ],
+      "name": "sapphire-snowflake-3.5.5.tgz",
+      "packages": [],
+      "receipts": [
+        {
+          "basis": "exact npm publication; source maps retain original sourcesContent where present",
+          "metadata_url": "https://registry.npmjs.org/@sapphire/snowflake/3.5.5",
+          "npm_integrity": "sha512-xzvBr1Q1c4lCe7i6sRnrofxeO1QTP/LKQ6A6qy0iB4x5yfiSfARMEQEghojzTNALDTcv8En04qYNIco9/K9eZQ==",
+          "package": "@sapphire/snowflake@3.5.5"
+        }
+      ],
+      "sha256": "0a42cfdf9dc2b03031e03b3a6e119a8d9ef8e23cfea363f1d6fb15fc41101fa0",
+      "source_member": "package/dist/cjs/index.cjs.map",
+      "url": "https://registry.npmjs.org/@sapphire/snowflake/-/snowflake-3.5.5.tgz"
+    },
+    {
+      "name": "sapphiredev-shapeshift-3f771acb090425d9fe188519b557ae967a2349d4.tar.gz",
+      "packages": [
+        "@sapphire/shapeshift@4.0.0"
+      ],
+      "receipts": [
+        {
+          "basis": "npm gitHead",
+          "metadata_url": "https://registry.npmjs.org/@sapphire/shapeshift/4.0.0",
+          "npm_integrity": "sha512-d9dUmWVA7MMiKobL3VpLF8P2aeanRTu6ypG2OIaEv/ZHH/SUQ2iHOVyi5wAPjQ+HmnMuL0whK9ez8I/raWbtIg==",
+          "package": "@sapphire/shapeshift@4.0.0",
+          "source_commit": "3f771acb090425d9fe188519b557ae967a2349d4"
+        }
+      ],
+      "sha256": "e1a66b331f4a705c89d642148d6287264110e483fa2ce477f194b7cd469ba328",
+      "source_member": "shapeshift-3f771acb090425d9fe188519b557ae967a2349d4/src/index.ts",
+      "url": "https://codeload.github.com/sapphiredev/shapeshift/tar.gz/3f771acb090425d9fe188519b557ae967a2349d4"
+    },
+    {
+      "name": "sapphiredev-utilities-36268acb83cc613e06836f6ebbdafeeba99c2365.tar.gz",
+      "packages": [
+        "@sapphire/async-queue@1.5.5"
+      ],
+      "receipts": [
+        {
+          "basis": "npm gitHead",
+          "metadata_url": "https://registry.npmjs.org/@sapphire/async-queue/1.5.5",
+          "npm_integrity": "sha512-cvGzxbba6sav2zZkH8GPf2oGk9yYoD5qrNWdu9fRehifgnFZJMV+nuy2nON2roRO4yQQ+v7MK/Pktl/HgfsUXg==",
+          "package": "@sapphire/async-queue@1.5.5",
+          "source_commit": "36268acb83cc613e06836f6ebbdafeeba99c2365"
+        }
+      ],
+      "sha256": "3f64973bc63b506e5f94ca283570f87c2c9198783c92cecf96c9f931f7b06367",
+      "source_member": "utilities-36268acb83cc613e06836f6ebbdafeeba99c2365/packages/async-queue/src/index.ts",
+      "url": "https://codeload.github.com/sapphiredev/utilities/tar.gz/36268acb83cc613e06836f6ebbdafeeba99c2365"
+    },
+    {
+      "name": "sapphiredev-utilities-dd52b66fc63099b2f95163eebd4df23c26b1cd16.tar.gz",
+      "packages": [
+        "@sapphire/snowflake@3.5.5"
+      ],
+      "receipts": [
+        {
+          "basis": "npm gitHead",
+          "metadata_url": "https://registry.npmjs.org/@sapphire/snowflake/3.5.5",
+          "npm_integrity": "sha512-xzvBr1Q1c4lCe7i6sRnrofxeO1QTP/LKQ6A6qy0iB4x5yfiSfARMEQEghojzTNALDTcv8En04qYNIco9/K9eZQ==",
+          "package": "@sapphire/snowflake@3.5.5",
+          "source_commit": "dd52b66fc63099b2f95163eebd4df23c26b1cd16"
+        }
+      ],
+      "sha256": "db3b751b9a570ffc4124f7422166e1ac2c0f1eb7c8d56a950e45c10a2d5cd382",
+      "source_member": "utilities-dd52b66fc63099b2f95163eebd4df23c26b1cd16/packages/async-queue/src/index.ts",
+      "url": "https://codeload.github.com/sapphiredev/utilities/tar.gz/dd52b66fc63099b2f95163eebd4df23c26b1cd16"
+    },
+    {
+      "name": "tannerntannern-ts-mixer-6798034f99b3017c4ef54c69ce2864d6e620ab40.tar.gz",
+      "packages": [
+        "ts-mixer@6.0.4"
+      ],
+      "receipts": [
+        {
+          "basis": "npm gitHead",
+          "metadata_url": "https://registry.npmjs.org/ts-mixer/6.0.4",
+          "npm_integrity": "sha512-ufKpbmrugz5Aou4wcr5Wc1UUFWOLhq+Fm6qa6P0w0K5Qw2yhaUoiWszhCVuNQyNwrlGiscHOmqYoAox1PtvgjA==",
+          "package": "ts-mixer@6.0.4",
+          "source_commit": "6798034f99b3017c4ef54c69ce2864d6e620ab40"
+        }
+      ],
+      "sha256": "a74ce6e21ac6d4ce441214fce7457d642a561ba20b6c45c053ad8833a2d42f74",
+      "source_member": "ts-mixer-6798034f99b3017c4ef54c69ce2864d6e620ab40/src/decorator.ts",
+      "url": "https://codeload.github.com/tannerntannern/ts-mixer/tar.gz/6798034f99b3017c4ef54c69ce2864d6e620ab40"
+    },
+    {
+      "name": "toyobayashi-emnapi-b2011ea96d28fe60a6b8eabb82c2d6264daf7460.tar.gz",
+      "packages": [
+        "@emnapi/core@1.11.3",
+        "@emnapi/runtime@1.11.3",
+        "@emnapi/wasi-threads@1.2.3"
+      ],
+      "receipts": [
+        {
+          "basis": "npm gitHead",
+          "metadata_url": "https://registry.npmjs.org/@emnapi/core/1.11.3",
+          "npm_integrity": "sha512-zLpS5asjEb7lq8jYLq37N6XKaE41DIexlY1rF/z4/tIl3wo13Sqm28fRyfIsKZD+NZ8mM5RoKkpW/rBcuoSZSg==",
+          "package": "@emnapi/core@1.11.3",
+          "source_commit": "b2011ea96d28fe60a6b8eabb82c2d6264daf7460"
+        },
+        {
+          "basis": "npm gitHead",
+          "metadata_url": "https://registry.npmjs.org/@emnapi/runtime/1.11.3",
+          "npm_integrity": "sha512-Xz4Tpyki7XyrpbUK1jR1AhdAdaXyhhY4lZ3neLodmhpuWfy2PAQN5B46sAiU4liOXGLkHypn/qU+jvfWSCYYLA==",
+          "package": "@emnapi/runtime@1.11.3",
+          "source_commit": "b2011ea96d28fe60a6b8eabb82c2d6264daf7460"
+        },
+        {
+          "basis": "npm gitHead",
+          "metadata_url": "https://registry.npmjs.org/@emnapi/wasi-threads/1.2.3",
+          "npm_integrity": "sha512-ELEBe8PsLvvJ6QMr0zLt8ffvOHW/dc1m3CEzNMg7aJUv3bMaoDtw2TXyDAwkYBuroxxuHEwhRTLJSe5sya547g==",
+          "package": "@emnapi/wasi-threads@1.2.3",
+          "source_commit": "b2011ea96d28fe60a6b8eabb82c2d6264daf7460"
+        }
+      ],
+      "sha256": "83e8952bab1f13b8196701d50d93a6edbfc327376751f7224dbc8bc089c3512d",
+      "source_member": "emnapi-b2011ea96d28fe60a6b8eabb82c2d6264daf7460/packages/bench/src/bind.cpp",
+      "url": "https://codeload.github.com/toyobayashi/emnapi/tar.gz/b2011ea96d28fe60a6b8eabb82c2d6264daf7460"
+    },
+    {
+      "name": "toyobayashi-wasm-util-efb17cc128a30fb16b58127738f09c8871a3f7d1.tar.gz",
+      "packages": [
+        "@tybys/wasm-util@0.10.3"
+      ],
+      "receipts": [
+        {
+          "basis": "npm gitHead",
+          "metadata_url": "https://registry.npmjs.org/@tybys/wasm-util/0.10.3",
+          "npm_integrity": "sha512-F3fo1MYrRJYL3zER0OUOmkutjr1Vp23m7OsSgp7nq4SP6OqX6C/56XFIPAl5bt3zaBRjmW7SGz3u/6LwFpYcOg==",
+          "package": "@tybys/wasm-util@0.10.3",
+          "source_commit": "efb17cc128a30fb16b58127738f09c8871a3f7d1"
+        }
+      ],
+      "sha256": "2d37860057559291e8586ac6ea0e87ae1406e31a1b7c65ca621f9cf7b1b29239",
+      "source_member": "wasm-util-efb17cc128a30fb16b58127738f09c8871a3f7d1/src/asyncify.ts",
+      "url": "https://codeload.github.com/toyobayashi/wasm-util/tar.gz/efb17cc128a30fb16b58127738f09c8871a3f7d1"
+    },
+    {
+      "embedded_source_maps": [],
+      "name": "ts-mixer-6.0.4.tgz",
+      "packages": [],
+      "receipts": [
+        {
+          "basis": "exact npm publication; source maps retain original sourcesContent where present",
+          "metadata_url": "https://registry.npmjs.org/ts-mixer/6.0.4",
+          "npm_integrity": "sha512-ufKpbmrugz5Aou4wcr5Wc1UUFWOLhq+Fm6qa6P0w0K5Qw2yhaUoiWszhCVuNQyNwrlGiscHOmqYoAox1PtvgjA==",
+          "package": "ts-mixer@6.0.4"
+        }
+      ],
+      "sha256": "d21ee7cf1bcf347e8ae95e9b532b824c474d9c10be075b938c903a0b47b15435",
+      "source_member": "package/dist/cjs/decorator.js",
+      "url": "https://registry.npmjs.org/ts-mixer/-/ts-mixer-6.0.4.tgz"
+    },
+    {
+      "embedded_source_maps": [],
+      "name": "tslib-2.8.1.tgz",
+      "packages": [],
+      "receipts": [
+        {
+          "basis": "exact npm publication; source maps retain original sourcesContent where present",
+          "metadata_url": "https://registry.npmjs.org/tslib/2.8.1",
+          "npm_integrity": "sha512-oJFu94HQb+KVduSUQL7wnpmqnfmLsOA/nAh6b6EH0wCEoK0/mPeXU6c3wKDV83MkOuHPRHtSXKKU99IBazS/2w==",
+          "package": "tslib@2.8.1"
+        }
+      ],
+      "sha256": "66f635d5eeabae44807534976913a102cf615b9a045368359c9f79ae6ee2119e",
+      "source_member": "package/modules/index.js",
+      "url": "https://registry.npmjs.org/tslib/-/tslib-2.8.1.tgz"
+    },
+    {
+      "embedded_source_maps": [],
+      "name": "tybys-wasm-util-0.10.3.tgz",
+      "packages": [],
+      "receipts": [
+        {
+          "basis": "exact npm publication; source maps retain original sourcesContent where present",
+          "metadata_url": "https://registry.npmjs.org/@tybys/wasm-util/0.10.3",
+          "npm_integrity": "sha512-F3fo1MYrRJYL3zER0OUOmkutjr1Vp23m7OsSgp7nq4SP6OqX6C/56XFIPAl5bt3zaBRjmW7SGz3u/6LwFpYcOg==",
+          "package": "@tybys/wasm-util@0.10.3"
+        }
+      ],
+      "sha256": "509f6b8f8fca49118dbb2a7fd7726e5b6fe4b5a22344c9ce91eefdd8dcd34761",
+      "source_member": "package/lib/cjs/asyncify.js",
+      "url": "https://registry.npmjs.org/@tybys/wasm-util/-/wasm-util-0.10.3.tgz"
+    },
+    {
+      "name": "types-node-26.4.0.tgz",
+      "packages": [
+        "@types/node@26.4.0"
+      ],
+      "receipts": [
+        {
+          "basis": "published editable JavaScript or TypeScript declarations",
+          "metadata_url": "https://registry.npmjs.org/@types/node/26.4.0",
+          "npm_integrity": "sha512-faiGnoIrLH/V8cibOMEAZ8pMw6oXqSukl29ra4mN8GdaB2ZewzeaLj+INpV5N+Z1eKWzY+IzaIZH2EIR6YZRNQ==",
+          "package": "@types/node@26.4.0",
+          "source_commit": null
+        }
+      ],
+      "sha256": "1a8fb7b2f30b4589cb454f09c6935d7381aea673f2bbee086fb2a1d1b0f1adc3",
+      "source_member": "node/assert.d.ts",
+      "url": "https://registry.npmjs.org/@types/node/-/node-26.4.0.tgz"
+    },
+    {
+      "name": "types-ws-8.18.1.tgz",
+      "packages": [
+        "@types/ws@8.18.1"
+      ],
+      "receipts": [
+        {
+          "basis": "published editable JavaScript or TypeScript declarations",
+          "metadata_url": "https://registry.npmjs.org/@types/ws/8.18.1",
+          "npm_integrity": "sha512-ThVF6DCVhA8kUGy+aazFQ4kXQ7E1Ty7A3ypFOe0IcJV8O/M511G99AW24irKrW56Wt44yG9+ij8FaqoBGkuBXg==",
+          "package": "@types/ws@8.18.1",
+          "source_commit": null
+        }
+      ],
+      "sha256": "dc2763952a24bf15dc920830a2d2884c23bccc08a853e8556e34771401254fa5",
+      "source_member": "ws/index.d.ts",
+      "url": "https://registry.npmjs.org/@types/ws/-/ws-8.18.1.tgz"
+    },
+    {
+      "embedded_source_maps": [],
+      "name": "undici-6.28.0.tgz",
+      "packages": [],
+      "receipts": [
+        {
+          "basis": "exact npm publication; source maps retain original sourcesContent where present",
+          "metadata_url": "https://registry.npmjs.org/undici/6.28.0",
+          "npm_integrity": "sha512-LIY910g9TI13YS95lrMFrs8Rm/u/irgHeTWoKCoteeJ04CUJ92eEfj0rVn+7VKMPBpUPiUoBKfhNyLI23EE/KA==",
+          "package": "undici@6.28.0"
+        }
+      ],
+      "sha256": "32a86c6fa28fd48b915555048c05bbd37ad35457d9e945953831a4374c886a9c",
+      "source_member": "package/lib/api/abort-signal.js",
+      "url": "https://registry.npmjs.org/undici/-/undici-6.28.0.tgz"
+    },
+    {
+      "embedded_source_maps": [],
+      "name": "undici-types-8.3.0.tgz",
+      "packages": [],
+      "receipts": [
+        {
+          "basis": "exact npm publication; source maps retain original sourcesContent where present",
+          "metadata_url": "https://registry.npmjs.org/undici-types/8.3.0",
+          "npm_integrity": "sha512-j375ScV60dom+YkPFIfTLcOiPxkN/buHz5GobjLhixFuANaNs3C9l4GmrWqejgXWJ7BbJcFYpTEUkS1Ge8bpZQ==",
+          "package": "undici-types@8.3.0"
+        }
+      ],
+      "sha256": "07a721cb2cd0dd798c24757de34d14e8b640ff8fddef85d662e00b392562a1f2",
+      "source_member": "package/agent.d.ts",
+      "url": "https://registry.npmjs.org/undici-types/-/undici-types-8.3.0.tgz"
+    },
+    {
+      "embedded_source_maps": [
+        "package/dist/index.cjs.map",
+        "package/dist/index.global.js.map",
+        "package/dist/index.mjs.map"
+      ],
+      "name": "vladfrangu-async_event_emitter-2.4.7.tgz",
+      "packages": [],
+      "receipts": [
+        {
+          "basis": "exact npm publication; source maps retain original sourcesContent where present",
+          "metadata_url": "https://registry.npmjs.org/@vladfrangu/async_event_emitter/2.4.7",
+          "npm_integrity": "sha512-Xfe6rpCTxSxfbswi/W/Pz7zp1WWSNn4A0eW4mLkQUewCrXXtMj31lCg+iQyTkh/CkusZSq9eDflu7tjEDXUY6g==",
+          "package": "@vladfrangu/async_event_emitter@2.4.7"
+        }
+      ],
+      "sha256": "9c2f350ccfcab84529f813951fd4b541a45573b4a6eb423bda9e9d02b7fbef6b",
+      "source_member": "package/dist/index.cjs.map",
+      "url": "https://registry.npmjs.org/@vladfrangu/async_event_emitter/-/async_event_emitter-2.4.7.tgz"
+    },
+    {
+      "name": "vladfrangu-async_event_emitter-9dc35929d04ea71bfa8e7e4a842343e40da9f305.tar.gz",
+      "packages": [
+        "@vladfrangu/async_event_emitter@2.4.7"
+      ],
+      "receipts": [
+        {
+          "basis": "npm gitHead",
+          "metadata_url": "https://registry.npmjs.org/@vladfrangu/async_event_emitter/2.4.7",
+          "npm_integrity": "sha512-Xfe6rpCTxSxfbswi/W/Pz7zp1WWSNn4A0eW4mLkQUewCrXXtMj31lCg+iQyTkh/CkusZSq9eDflu7tjEDXUY6g==",
+          "package": "@vladfrangu/async_event_emitter@2.4.7",
+          "source_commit": "9dc35929d04ea71bfa8e7e4a842343e40da9f305"
+        }
+      ],
+      "sha256": "10c28b0758c14ca86cda17644c26f5fd9aa8e1413fb1a41a62171abcf8bf7ffe",
+      "source_member": "async_event_emitter-9dc35929d04ea71bfa8e7e4a842343e40da9f305/src/index.ts",
+      "url": "https://codeload.github.com/vladfrangu/async_event_emitter/tar.gz/9dc35929d04ea71bfa8e7e4a842343e40da9f305"
+    },
+    {
+      "name": "websockets-ws-c791e707eab3c13dd9a261d2479c3cc4a49a6fed.tar.gz",
+      "packages": [
+        "ws@8.21.3"
+      ],
+      "receipts": [
+        {
+          "basis": "npm gitHead",
+          "metadata_url": "https://registry.npmjs.org/ws/8.21.3",
+          "npm_integrity": "sha512-201TZ/kPWxoPr/OKWjquZR1SWKXcvxdH+e1xrx89b3YbmzLMFCLfnaG1HFIgWzJOEWZ7MvpK++odZufgYR50Rw==",
+          "package": "ws@8.21.3",
+          "source_commit": "c791e707eab3c13dd9a261d2479c3cc4a49a6fed"
+        }
+      ],
+      "sha256": "a2007888eb34f4b091fc17625add33be4050a9fa42fdd07d9a1fe14df71b9f5a",
+      "source_member": "ws-c791e707eab3c13dd9a261d2479c3cc4a49a6fed/browser.js",
+      "url": "https://codeload.github.com/websockets/ws/tar.gz/c791e707eab3c13dd9a261d2479c3cc4a49a6fed"
+    },
+    {
+      "embedded_source_maps": [],
+      "name": "ws-8.21.3.tgz",
+      "packages": [],
+      "receipts": [
+        {
+          "basis": "exact npm publication; source maps retain original sourcesContent where present",
+          "metadata_url": "https://registry.npmjs.org/ws/8.21.3",
+          "npm_integrity": "sha512-201TZ/kPWxoPr/OKWjquZR1SWKXcvxdH+e1xrx89b3YbmzLMFCLfnaG1HFIgWzJOEWZ7MvpK++odZufgYR50Rw==",
+          "package": "ws@8.21.3"
+        }
+      ],
+      "sha256": "df3454ef205791ce50b5b9241762dcf9bfe1aa9f7f01d3057229be7dac0c2dc3",
+      "source_member": "package/browser.js",
+      "url": "https://registry.npmjs.org/ws/-/ws-8.21.3.tgz"
+    },
+    {
+      "name": "xiph-opus-e85ed7726db5d677c9c0677298ea0cb9c65bdd23.tar.gz",
+      "packages": [],
+      "receipts": [
+        {
+          "basis": "opus-native gitlink in opusscript npm gitHead",
+          "metadata_url": "https://github.com/abalabahaha/opusscript/tree/b9cf55f521d44f531a9faa8823f5cc8ba6f99fcd/opus-native",
+          "package": "opusscript@0.0.8",
+          "source_commit": "e85ed7726db5d677c9c0677298ea0cb9c65bdd23"
+        }
+      ],
+      "sha256": "c6d574b17d70b8c289d997a8ac81314cf1fd8c52237c421b2ee34e69cea85bf8",
+      "source_member": "opus-e85ed7726db5d677c9c0677298ea0cb9c65bdd23/src/analysis.c",
+      "url": "https://codeload.github.com/xiph/opus/tar.gz/e85ed7726db5d677c9c0677298ea0cb9c65bdd23"
+    }
+  ],
+  "python_sources": [
+    {
+      "metadata_url": "https://pypi.org/pypi/websockets/13.1/json",
+      "name": "websockets-13.1.tar.gz",
+      "package": "websockets==13.1",
+      "sha256": "a3b3366087c1bc0a2795111edcadddb8b3b59509d5db5d7ea3fdd69f954a8878",
+      "source_member": "websockets-13.1/src/websockets/speedups.c",
+      "url": "https://files.pythonhosted.org/packages/e2/73/9223dbc7be3dcaf2a7bbf756c351ec8da04b1fa573edaf545b95f6b0c7fd/websockets-13.1.tar.gz"
+    }
+  ],
+  "schema": 1
+}

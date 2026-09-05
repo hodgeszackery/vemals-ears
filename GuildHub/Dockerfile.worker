@@ -42,6 +42,8 @@ RUN git init \
        -DWHISPER_BUILD_TESTS=OFF \
     && cmake --build build --parallel 2 \
     && cmake --install build \
+    && cp LICENSE /opt/whisper/LICENSE \
+    && git archive --format=tar.gz --output=/opt/whisper/whisper-source.tar.gz HEAD \
     && test -x /opt/whisper/bin/whisper-server \
     && test -e /opt/whisper/lib/libwhisper.so \
     && test -e /opt/whisper/lib/libggml.so \
@@ -71,10 +73,25 @@ RUN curl --fail --location --proto '=https' --tlsv1.2 --retry 3 \
        | sha256sum --check --strict -
 
 
+FROM node:22.12.0-bookworm-slim AS worker-sources
+
+# Keep editable source for locked npm/Python dependencies, including native
+# MPL-covered cryptography. This stage copies no operator configuration.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates python3 \
+    && rm -rf /var/lib/apt/lists/*
+WORKDIR /build
+COPY packaging/worker_sources.py packaging/worker-sources.lock.json /build/packaging/
+COPY VoiceCaptions/discord_adapter/package-lock.json /build/VoiceCaptions/discord_adapter/
+RUN python3 packaging/worker_sources.py \
+    --output /opt/vemals-ears/third-party/discord-native
+
+
 FROM node:22.12.0-bookworm-slim AS caption-worker
 
 LABEL org.opencontainers.image.title="Vemal's Ears Caption Worker"
 LABEL org.opencontainers.image.description="Private consent-gated Discord speech worker for Vemal's Ears"
+LABEL org.opencontainers.image.licenses="GPL-3.0-only"
 
 ENV DEBIAN_FRONTEND=noninteractive \
     PYTHONDONTWRITEBYTECODE=1 \
@@ -113,6 +130,12 @@ RUN apt-get update \
 
 COPY --from=whisper-builder /opt/whisper /opt/whisper
 COPY --from=model-assets /opt/vemals-ears/models /opt/vemals-ears/models
+COPY --from=worker-sources /opt/vemals-ears/third-party/discord-native /opt/vemals-ears/third-party/discord-native
+COPY GuildHub/third-party/ /opt/vemals-ears/third-party/model-notices/
+COPY LICENSE /app/LICENSE
+COPY docs/WORKER-SOURCE.txt /app/docs/WORKER-SOURCE.txt
+COPY GuildHub/Dockerfile.worker /app/GuildHub/Dockerfile.worker
+COPY packaging/worker_sources.py packaging/worker-sources.lock.json /app/packaging/
 
 COPY --chown=vemalsears:vemalsears \
     GuildHub/__init__.py \

@@ -34,8 +34,10 @@ from ci.test_inventory import PYTHON_TEST_ROOTS  # noqa: E402
 # Standalone VE inventory after the repository split. The original combined
 # floor and transferred coverage are recorded in docs/TEST-MIGRATION.txt.
 # Each owned root remains mandatory; the Node suite is a separate CI step.
-EXPECTED_UNITS = 59
-EXPECTED_TESTS = 1179
+# GPL readiness adds three source/notice modules and exercises archived
+# modified builds, legal UI, and retained-runtime refresh contracts.
+EXPECTED_UNITS = 62
+EXPECTED_TESTS = 1220
 
 
 def discover_modules(relative: str, prefix: str) -> list[tuple[str, list[str]]]:

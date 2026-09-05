@@ -1,0 +1,87 @@
+Vemal's Ears source and rebuilding
+=================================
+
+Vemal's Ears is free software under GNU GPL version 3 only. See LICENSE.
+You may use, study, change and redistribute it under those terms, including
+redistributing modified versions. The program comes WITHOUT ANY WARRANTY.
+
+GET THE MATCHING SOURCE
+
+Each member ZIP and Windows installer includes Source/vemals-ears-source.zip.
+Extract that archive to obtain the client source, original artwork, native
+launcher source, installer scripts, dependency lock and build instructions
+used for that distribution. The release also produces a standalone
+vemals-ears-source.zip. Source access does not require a GitHub account,
+repository permission, signing certificate or payment.
+
+The development repository is https://github.com/hodgeszackery/vemals-ears.
+It may be private. It is not the source-access mechanism promised to people
+who receive a release. A source archive from an unrelated later commit is
+not a replacement for the matching source provided with your copy.
+
+The source archive contains the client and its build inputs. The separately
+operated voice worker and shared guild server are not needed to build the
+client. Bot tokens, device credentials, recordings, operator databases,
+signing credentials and private configuration are not source inputs and
+are not included.
+
+BUILD A CLIENT ZIP
+
+Use Windows with Python 3 and run these commands in the extracted
+VemalsEars-source directory:
+
+    python build_release.py --member
+
+This builds a development ZIP. To include the same private Python runtime
+and packages used by distributed builds, with an Internet connection:
+
+    python packaging/build_runtime.py
+    python build_release.py --member --require-runtime
+    python packaging/verify_bundle.py
+
+The runtime builder downloads the exact artifacts and verifies the hashes
+in Installer/runtime-lock.json. It also downloads and verifies the matching
+upstream source inputs in Installer/runtime-sources.lock.json, preserving
+them in runtime/Source. Read runtime/Source/README.txt and MANIFEST.json for
+component build instructions, source provenance and verification limits.
+Dependencies retain their own licenses; see Installer/THIRD-PARTY-NOTICES.txt
+and the original license texts in the runtime. If changing a dependency,
+update the editable runtime and source locks together.
+No third-party service account is needed to build or inspect the client.
+Connecting it to a guild still requires that guild's normal pairing.
+
+BUILD AN UNSIGNED WINDOWS INSTALLER
+
+Install Inno Setup 7.1.0, the Visual Studio C++ build tools and Windows SDK,
+then run:
+
+    powershell -NoProfile -File Installer/build_installer.ps1
+
+The build script uses the pinned Inno Setup compiler and runtime inputs.
+Read Installer/README.md for build options and prerequisites. Signing is
+optional for a local modified build; the original publisher's certificate
+and private keys are not required to compile or run your modified program.
+Windows may identify an unsigned build differently from a signed release.
+The resulting unsigned installer need not have the same file hash as the
+publisher's signed installer.
+
+MODIFYING AND REDISTRIBUTING
+
+Edit the extracted source and rebuild it with the same commands. Preserve
+the copyright, license and dependency notices, identify your changes, and
+provide the corresponding source for the version you distribute. Do not
+claim your modified build is the original publisher's signed release.
+See the full license for the distribution conditions.
+
+MAINTAINING SOURCE WITH DEVELOPMENT REFRESHES
+
+A refresh of an installer-managed copy keeps its installed native launcher,
+runtime and reported version. It updates the embedded client source archive
+alongside the changed application files. That path requires an existing
+source archive and unchanged native/build/runtime inputs; otherwise build
+and install an updated installer. An older managed installation without a
+source archive needs this installer update once before source-aware refresh
+can be used. Unmanaged development copies can still use the refresh tool.
+Copies carrying a runtime also require its matching source and unchanged
+runtime locks before a refresh; otherwise rebuild the runtime-bearing ZIP
+or installer. Development copies without a bundled runtime remain usable.

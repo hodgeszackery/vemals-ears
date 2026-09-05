@@ -33,6 +33,9 @@ import urllib.request
 import zipfile
 from pathlib import Path
 
+from runtime_licenses import preserve_incorporated_notice, validate_runtime_licenses
+from runtime_sources import stage_runtime_sources, validate_runtime_sources
+
 ROOT = Path(__file__).resolve().parent.parent
 DIST = ROOT / "dist"
 LOCK = ROOT / "Installer" / "runtime-lock.json"
@@ -230,7 +233,12 @@ def main() -> int:
 
     stage_interpreter(lock, runtime, cache)
     wheels = vendor_wheels(lock, runtime, cache)
+    preserve_incorporated_notice(runtime)
+    validate_runtime_licenses(runtime, lock)
     dropped = prune(runtime)
+    validate_runtime_licenses(runtime, lock)
+    stage_runtime_sources(runtime, cache)
+    validate_runtime_sources(runtime)
     smoke_test(runtime, wheels)
     purge_bytecode(runtime)
 

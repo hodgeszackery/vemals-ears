@@ -3,19 +3,43 @@ Vemal's Ears - Third-Party Notices
 
 Vemal's Ears itself is licensed under the GNU General Public License,
 version 3 only. See LICENSE at the repository root. The corresponding
-source is the public repository this build was made from.
+source for the client is included in Source/vemals-ears-source.zip beside
+the application. See docs/SOURCE.txt for access and rebuilding instructions.
+The development repository may be private; no repository account is needed
+to read the source provided with your copy.
 
 The Windows installer includes these third-party components:
 
-- CPython 3.14.7, licensed under the Python Software Foundation License.
+- CPython 3.14.7, under the PSF license and its preserved historical and
+  incorporated-component licenses.
 - websockets 13.1, licensed under the BSD 3-Clause License.
-- Pillow 12.3.0, licensed under the HPND License.
-- pywin32 312, licensed under the Python Software Foundation License.
+- Pillow 12.3.0, under MIT-CMU and the embedded libraries' own licenses.
+- pywin32 312, including Mark Hammond's BSD-style license and component
+  licenses. Its adodbapi component is LGPL-2.1 and remains in source form.
 
 The complete license text shipped by each component remains in the private
-runtime beside the component. CPython's license is runtime\LICENSE.txt. The
-Python package licenses are under runtime\Lib\site-packages in each package's
-dist-info directory.
+runtime beside the component. CPython's license is runtime\LICENSE.txt;
+its additional incorporated-component notices are preserved in
+runtime\PYTHON-INCORPORATED-LICENSES.txt before the HTML documentation is
+pruned. Python package licenses are under runtime\Lib\site-packages in each
+package's dist-info directory, its licenses subdirectory where used, and
+the original component locations.
+These components retain their own copyright notices and license terms;
+the GPL declaration for VE does not replace those terms.
+
+Pillow includes FreeType, the Independent JPEG Group's work and other native
+libraries whose full notices remain in Pillow's bundled LICENSE file.
+This software is based in part on the work of the Independent JPEG Group.
+Portions of this software are copyright (C) The FreeType Project
+(https://freetype.org/). All rights reserved.
+
+Matching upstream runtime source archives, build inputs and provenance are
+included in runtime/Source. Its README.txt and MANIFEST.json describe the
+exact inputs and upstream build procedures. See docs/SOURCE.txt.
+
+The Windows setup executable is created with Inno Setup 7.1.0. Its original
+copyright and license are preserved in Installer/INNO-SETUP-LICENSE.txt.
+https://jrsoftware.org/isinfo.php
 
 Project pages:
 
@@ -41,10 +65,11 @@ server operator's tooling pins its downloads in VoiceCaptions/runtime_installer.
 - Silero VAD 6.2.0, licensed under the MIT License. Used as the local
   speech gate, so silence never reaches the transcriber.
 
-Bundling any of these into the installer instead of the server downloading them
-would make this project a redistributor of them, and this file would
-have to carry their full terms. That is the
-reason the download happens at runtime.
+These downloads and proprietary GPU libraries are not in the member
+installer or member ZIP. A runtime download is not a general exemption from
+license terms. Operators and redistributors must follow the terms of the
+actual artifacts they use or distribute. A separately packaged worker or
+container needs its own dependency notices and distribution review.
 
 https://github.com/ggml-org/whisper.cpp
 https://github.com/openai/whisper

@@ -33,6 +33,8 @@ $installerRoot = $PSScriptRoot
 $repoRoot = (Resolve-Path -LiteralPath (Join-Path $installerRoot "..")).Path
 $lockPath = Join-Path $installerRoot "runtime-lock.json"
 $lock = Get-Content -Raw -LiteralPath $lockPath | ConvertFrom-Json
+$runtimeSourcesLockPath = Join-Path $installerRoot "runtime-sources.lock.json"
+$runtimeSourcesLockHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $runtimeSourcesLockPath).Hash
 
 # Argument validation comes before any tool is probed: a wrong flag
 # combination should fail in milliseconds, and be testable on a machine
@@ -44,7 +46,7 @@ if ($AllowUnsigned -and $Signed) {
     throw "-AllowUnsigned describes a build with no signature; drop one of the two."
 }
 if ($AllowUnsigned -and $TestBuild) {
-    throw "-TestBuild installs to an isolated throwaway location and must never be handed to a member."
+    throw "-TestBuild uses an isolated test location and cannot select the distribution filename."
 }
 if ($AllowUntrustedSigner -and -not $Signed) {
     throw "-AllowUntrustedSigner only means something for a -Signed proof build."
@@ -182,6 +184,10 @@ $privatePython = Join-Path $runtimeRoot "python.exe"
 if ($LASTEXITCODE -ne 0) {
     throw "The locked Python wheels could not be installed."
 }
+& $privatePython -E -s -B (Join-Path $repoRoot "packaging\runtime_licenses.py") $runtimeRoot --preserve
+if ($LASTEXITCODE -ne 0) {
+    throw "Required bundled-runtime license notices could not be preserved."
+}
 
 foreach ($relative in @("Doc", "include", "libs", "Lib\ensurepip", "Lib\idlelib", "Scripts")) {
     $target = Join-Path $runtimeRoot $relative
@@ -198,6 +204,15 @@ foreach ($relative in @("Lib\site-packages\pip", "Lib\site-packages\pip-26.2.1.d
 & $privatePython -E -s -B -c "import tkinter, websockets, PIL, win32api, win32gui; tkinter.Tcl()"
 if ($LASTEXITCODE -ne 0) {
     throw "The relocated private runtime failed its import check."
+}
+& $privatePython -E -s -B (Join-Path $repoRoot "packaging\runtime_licenses.py") $runtimeRoot
+if ($LASTEXITCODE -ne 0) {
+    throw "Required bundled-runtime license notices did not survive pruning."
+}
+& $privatePython -E -s -B (Join-Path $repoRoot "packaging\runtime_sources.py") `
+    --runtime $runtimeRoot --cache $cacheRoot
+if ($LASTEXITCODE -ne 0) {
+    throw "The matching upstream runtime sources could not be staged and verified."
 }
 
 Get-ChildItem -LiteralPath $runtimeRoot -Recurse -File -Filter "direct_url.json" |
@@ -221,6 +236,19 @@ if ($Signed) {
 if ($LASTEXITCODE -ne 0) {
     throw "The generic application payload could not be staged."
 }
+$installerBuildRoot = Join-Path $stageRoot "source\Installer"
+$sourceArchivePath = Join-Path $stageRoot "app\Source\vemals-ears-source.zip"
+# Compile the exact first-party source snapshot distributed in the app.
+# The runtime was staged from this lock before the source snapshot was made.
+$snapshotLock = Get-Content -Raw -LiteralPath (Join-Path $installerBuildRoot "runtime-lock.json") | ConvertFrom-Json
+if (($lock | ConvertTo-Json -Depth 20 -Compress) -cne ($snapshotLock | ConvertTo-Json -Depth 20 -Compress)) {
+    throw "The runtime lock changed while preparing the corresponding source."
+}
+$snapshotSourcesLockHash = (Get-FileHash -Algorithm SHA256 -LiteralPath `
+    (Join-Path $installerBuildRoot "runtime-sources.lock.json")).Hash
+if ($runtimeSourcesLockHash -cne $snapshotSourcesLockHash) {
+    throw "The upstream source lock changed while preparing the corresponding source."
+}
 
 $versionParts = @($Version.Split('.') | ForEach-Object { [int]$_ })
 while ($versionParts.Count -lt 4) {
@@ -242,13 +270,17 @@ $launcherPath = Join-Path $stageRoot "VemalsEars.exe"
 $rcDefines = "/dAPP_VERSION_MAJOR=$($versionParts[0]) /dAPP_VERSION_MINOR=$($versionParts[1]) /dAPP_VERSION_PATCH=$($versionParts[2]) /dAPP_VERSION_BUILD=$($versionParts[3])"
 $compile = 'call "' + $vcvars + '" >nul && cd /d "' + $stageRoot +
     '" && rc.exe /nologo ' + $rcDefines + ' /fo"' + $resourcePath + '" "' +
-    (Join-Path $installerRoot "launcher.rc") + '" && cl.exe /nologo /O2 /MT /W4 /WX ' +
+    (Join-Path $installerBuildRoot "launcher.rc") + '" && cl.exe /nologo /O2 /MT /W4 /WX ' +
     '/Fe:"' + $launcherPath + '" "' +
-    (Join-Path $installerRoot "launcher.c") + '" "' + $resourcePath +
+    (Join-Path $installerBuildRoot "launcher.c") + '" "' + $resourcePath +
     '" /link user32.lib shell32.lib advapi32.lib /SUBSYSTEM:WINDOWS /DYNAMICBASE /NXCOMPAT /HIGHENTROPYVA'
 & cmd.exe /d /s /c $compile
 if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $launcherPath -PathType Leaf)) {
     throw "The native Vemal's Ears launcher could not be compiled."
+}
+& $privatePython -E -s -B (Join-Path $stageRoot "source\source_distribution.py") --verify-stage $stageRoot
+if ($LASTEXITCODE -ne 0) {
+    throw "The final installer source, payload or runtime distribution verification failed."
 }
 
 $isccArguments = @(
@@ -271,7 +303,7 @@ if ($Signed) {
     # signonce), the uninstaller (SignedUninstaller=yes) and the setup
     # executable itself. $q and $f are Inno's placeholders for a quote
     # and the file being signed - they are literal here on purpose.
-    $signScript = Join-Path $installerRoot "sign_file.ps1"
+    $signScript = Join-Path $installerBuildRoot "sign_file.ps1"
     $signCommand = 'powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $q' +
         $signScript + '$q -Provider ' + $SigningProvider
     if ($SigningProvider -eq "artifact") {
@@ -293,7 +325,7 @@ if ($Signed) {
     $isccArguments += "/DSignedBuild=1"
     $isccArguments += "/Sartifact=$signCommand"
 }
-$isccArguments += Join-Path $installerRoot "VemalsEars.iss"
+$isccArguments += Join-Path $installerBuildRoot "VemalsEars.iss"
 & $IsccPath @isccArguments
 if ($LASTEXITCODE -ne 0) {
     throw "Inno Setup could not build the installer."
@@ -319,7 +351,7 @@ if (-not (Test-Path -LiteralPath $installerPath -PathType Leaf)) {
 }
 
 if ($Signed) {
-    $verifyScript = Join-Path $installerRoot "verify_signature.ps1"
+    $verifyScript = Join-Path $installerBuildRoot "verify_signature.ps1"
     $verifyArguments = @{ ExpectedPublisher = $ExpectedPublisher }
     if ($SigningProvider -eq "store") {
         $verifyArguments.ExpectedThumbprint = $SigningThumbprint
@@ -337,7 +369,7 @@ if ($Signed) {
         [System.Text.Encoding]::ASCII
     )
     if ($AllowUntrustedSigner) {
-        Write-Warning "PROOF BUILD signed by an untrusted certificate - it must not be distributed."
+        Write-Warning "PROOF BUILD signed by an untrusted certificate - this is not an official release."
     }
     Write-Output "Signed installer: $installerPath"
     Write-Output "Post-sign checksum: $checksumPath"
@@ -367,6 +399,8 @@ elseif ($AllowUnsigned) {
     Write-Output "warned reads it as expected; somebody who was not reads it as a virus."
 }
 else {
-    Write-Warning "This installer is unsigned and must not be distributed. Use -AllowUnsigned if that is deliberate."
+    Write-Warning "This installer is unsigned and is not an official release. Use -AllowUnsigned for the distribution filename."
     Write-Output "Unsigned test installer: $installerPath"
 }
+Copy-Item -LiteralPath $sourceArchivePath -Destination (Join-Path $OutputDirectory "vemals-ears-source.zip") -Force
+Write-Output "Matching source archive: $(Join-Path $OutputDirectory 'vemals-ears-source.zip')"

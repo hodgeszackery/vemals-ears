@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-3.0-only
+# Copyright (C) 2026 Zackery Hodges
 """Launch Vemal's Ears with its own voice UI and Windows identity."""
 
 from pathlib import Path

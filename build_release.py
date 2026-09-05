@@ -8,6 +8,8 @@ import sys
 import zipfile
 from pathlib import Path
 
+import source_distribution
+
 
 ROOT = Path(__file__).resolve().parent
 DIST = ROOT / "dist"
@@ -46,6 +48,10 @@ VEMALS_EARS_CLIENT_FILES = (
 
 
 VEMALS_EARS_MEMBER_APP_FILES = (
+    "LICENSE",
+    "docs/SOURCE.txt",
+    "Installer/THIRD-PARTY-NOTICES.txt",
+    "Installer/INNO-SETUP-LICENSE.txt",
     "Vemals-Ears.pyw",
     "WoW-Companion.pyw",
     "Windows/VemalsEars.png",
@@ -65,7 +71,6 @@ VEMALS_EARS_MEMBER_APP_FILES = (
 
 WINDOWS_INSTALLER_APP_FILES = (
     *VEMALS_EARS_MEMBER_APP_FILES,
-    "Installer/THIRD-PARTY-NOTICES.txt",
     "Installer/uninstall_cleanup.py",
 )
 
@@ -131,14 +136,17 @@ def build_member_companion(require_runtime: bool = False) -> tuple[Path, list[st
             "no staged runtime at " + str(runtime) + " - run "
             "packaging/build_runtime.py first (the relay serves this zip, "
             "so it must never silently need an installed Python)")
+    if runtime.exists() and not bundled:
+        raise SystemExit("the staged runtime is incomplete: runtime/pythonw.exe is missing")
+    if bundled:
+        source_distribution.validate_runtime(runtime, ROOT)
 
-    with zipfile.ZipFile(target, "w", zipfile.ZIP_DEFLATED) as archive:
+    source_files = source_distribution.snapshot(ROOT, WINDOWS_INSTALLER_APP_FILES)
+    source_archive = source_distribution.archive_bytes(source_files)
+    with zipfile.ZipFile(target, "w", zipfile.ZIP_DEFLATED, strict_timestamps=False) as archive:
         for relative in VEMALS_EARS_MEMBER_APP_FILES:
-            path = ROOT / relative
-            if path.is_symlink() or not path.is_file():
-                missing.append(relative)
-                continue
-            archive.write(path, MEMBER_PREFIX + relative)
+            archive.writestr(MEMBER_PREFIX + relative, source_files[relative])
+        archive.writestr(MEMBER_PREFIX + source_distribution.EMBEDDED_PATH, source_archive)
         archive.writestr(
             MEMBER_PREFIX + "vemals-ears-member.json",
             json.dumps({"edition": "member", "schema": 1}, separators=(",", ":"))
@@ -160,6 +168,10 @@ def build_member_companion(require_runtime: bool = False) -> tuple[Path, list[st
         archive.writestr(MEMBER_PREFIX + "HOW-TO-RUN.txt",
                          member_readme(bundled))
 
+    with zipfile.ZipFile(target) as archive:
+        source_distribution.verify_payload(source_files, lambda relative: archive.read(MEMBER_PREFIX + relative),
+                                           VEMALS_EARS_MEMBER_APP_FILES)
+    (DIST / source_distribution.ARCHIVE_NAME).write_bytes(source_archive)
     return target, missing
 
 

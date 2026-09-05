@@ -2889,6 +2889,117 @@ class AppFeatureUiTests(unittest.TestCase):
                     root.destroy()
 
 
+class LicenseSourcePreferencesTests(unittest.TestCase):
+    """A member can read their rights and obtain source without an account."""
+
+    def setUp(self):
+        import tkinter as tk
+
+        self.companion = self.enterContext(isolated_companion("member"))
+        original_init = tk.Toplevel.__init__
+
+        def hidden_toplevel(widget, *args, **kwargs):
+            original_init(widget, *args, **kwargs)
+            widget.withdraw()
+            widget.attributes("-alpha", 0.0)
+
+        self.enterContext(mock.patch.object(tk.Toplevel, "__init__", hidden_toplevel))
+        self.enterContext(mock.patch.object(tk.Toplevel, "focus_force"))
+        try:
+            self.root = tk.Tk()
+        except tk.TclError as error:
+            self.skipTest("Native Tk is unavailable: " + str(error))
+        self.root.withdraw()
+        self.root.attributes("-alpha", 0.0)
+        self.addCleanup(self.close_preview)
+
+    def close_preview(self):
+        for callback in self.root.tk.splitlist(self.root.tk.call("after", "info")):
+            self.root.after_cancel(callback)
+        self.root.destroy()
+
+    def preferences(self, edition="member"):
+        window = self.companion.CompanionWindow(self.root, edition=edition, preview=True)
+        window.open_settings()
+        self.root.update_idletasks()
+        return window, window.menu
+
+    def test_member_can_read_rights_and_open_each_matching_local_document(self):
+        window, menu = self.preferences()
+        notice = menu.license_notice.cget("text")
+        self.assertIn("GPL-3.0-only", notice)
+        self.assertIn("Copyright (C) 2026 Zackery Hodges", notice)
+        self.assertIn("modify and redistribute", notice)
+        self.assertIn("WITHOUT ANY WARRANTY", notice)
+        self.assertEqual(window.theme.panel_alt, menu.license_notice.cget("bg"))
+        with tempfile.TemporaryDirectory() as folder:
+            local_root = Path(folder)
+            with mock.patch.object(self.companion, "ROOT", local_root), mock.patch.object(
+                self.companion.os, "startfile", create=True,
+            ) as opened, mock.patch.object(self.companion.webbrowser, "open") as browser:
+                for label, name in (
+                    ("License", "LICENSE"),
+                    ("Source guide", "docs/SOURCE.txt"),
+                    ("Source archive", "Source/vemals-ears-source.zip"),
+                ):
+                    with self.subTest(document=name):
+                        target = local_root / name
+                        target.parent.mkdir(parents=True, exist_ok=True)
+                        target.write_bytes(b"local document fixture")
+                        menu.license_buttons[label].invoke()
+                        opened.assert_called_with(str(target))
+                        self.assertIn("Opened " + name, menu.license_status.cget("text"))
+                self.assertEqual(3, opened.call_count)
+                browser.assert_not_called()
+
+    def test_missing_source_archive_explains_how_to_obtain_it(self):
+        _, menu = self.preferences()
+        with tempfile.TemporaryDirectory() as folder, mock.patch.object(
+            self.companion, "ROOT", Path(folder),
+        ), mock.patch.object(self.companion.os, "startfile", create=True) as opened:
+            menu.license_buttons["Source archive"].invoke()
+        opened.assert_not_called()
+        detail = menu.license_status.cget("text")
+        self.assertIn("not present", detail)
+        self.assertIn("distributed member ZIPs and installers", detail)
+        self.assertIn("Source guide", detail)
+        self.assertEqual(self.companion.DANGER, menu.license_status.cget("fg"))
+        self.assertTrue(menu.license_status.winfo_manager())
+
+    def test_missing_license_and_guide_are_reported_without_starting_an_opener(self):
+        _, menu = self.preferences()
+        with tempfile.TemporaryDirectory() as folder, mock.patch.object(
+            self.companion, "ROOT", Path(folder),
+        ), mock.patch.object(self.companion.os, "startfile", create=True) as opened:
+            for label, name in (("License", "LICENSE"), ("Source guide", "docs/SOURCE.txt")):
+                with self.subTest(document=name):
+                    menu.license_buttons[label].invoke()
+                    self.assertIn(name + " is missing", menu.license_status.cget("text"))
+                    self.assertEqual(self.companion.DANGER, menu.license_status.cget("fg"))
+        opened.assert_not_called()
+
+    def test_open_failure_is_visible_and_a_successful_retry_clears_it(self):
+        window, menu = self.preferences()
+        with tempfile.TemporaryDirectory() as folder:
+            local_root = Path(folder)
+            (local_root / "LICENSE").write_text("local license fixture", encoding="ascii")
+            with mock.patch.object(self.companion, "ROOT", local_root), mock.patch.object(
+                self.companion.os, "startfile", create=True,
+                side_effect=[OSError("no document association"), None],
+            ):
+                menu.license_buttons["License"].invoke()
+                self.assertIn("Could not open LICENSE", menu.license_status.cget("text"))
+                self.assertIn("no document association", menu.license_status.cget("text"))
+                self.assertEqual(self.companion.DANGER, menu.license_status.cget("fg"))
+                menu.license_buttons["License"].invoke()
+                self.assertEqual("Opened LICENSE.", menu.license_status.cget("text"))
+                self.assertEqual(window.theme.muted, menu.license_status.cget("fg"))
+
+    def test_retained_other_edition_does_not_claim_ve_source(self):
+        _, menu = self.preferences("full-local")
+        self.assertFalse(hasattr(menu, "license_buttons"))
+
+
 class QuickChatTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -5348,8 +5459,10 @@ class OneVersionOnlyTests(unittest.TestCase):
     def definitions(self):
         found = []
         for path in self.ROOT.rglob("*.py"):
-            parts = path.parts
-            if "dist" in parts or "build" in parts or "node_modules" in parts:
+            parts = path.relative_to(self.ROOT).parts
+            # Archived-source rebuild evidence contains independent copies.
+            # It is generated output, just like dist and build.
+            if {"dist", "build", "node_modules", ".ci-results"}.intersection(parts):
                 continue
             for number, line in enumerate(
                 path.read_text(encoding="utf-8", errors="replace").splitlines(), 1
@@ -5357,6 +5470,18 @@ class OneVersionOnlyTests(unittest.TestCase):
                 if line.startswith("CLIENT_VERSION = "):
                     found.append("%s:%d" % (path.relative_to(self.ROOT), number))
         return found
+
+    def test_generated_source_evidence_does_not_hide_a_real_duplicate(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            for relative in ("GuildHub/version.py", ".ci-results/rebuild/GuildHub/version.py"):
+                path = root / relative
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text('CLIENT_VERSION = "1.2.3"\n', encoding="ascii")
+            with mock.patch.object(self, "ROOT", root):
+                self.assertEqual(1, len(self.definitions()))
+                (root / "other.py").write_text('CLIENT_VERSION = "1.2.3"\n', encoding="ascii")
+                self.assertEqual(2, len(self.definitions()))
 
     def test_exactly_one_definition_exists(self):
         found = self.definitions()
