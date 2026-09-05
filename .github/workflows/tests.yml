@@ -1,0 +1,96 @@
+name: Tests
+
+on:
+  pull_request:
+  push:
+    branches: [master]
+  merge_group:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  PYTHONUNBUFFERED: '1'
+
+concurrency:
+  group: tests-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Validate workflow syntax and expressions
+        run: python3 -m ci.lint_workflows
+      - name: Test suite inventory and result gate
+        run: python3 -m unittest tests.test_ci_plan_tests tests.test_ci_results tests.test_ci_lint GuildHub.tests.test_deployment -v
+      - name: Require complete standalone test inventory
+        run: python3 -m ci.plan_tests
+
+  python-and-node:
+    needs: validate
+    runs-on: windows-latest
+    timeout-minutes: 15
+    outputs:
+      discord: ${{ steps.discord.outcome }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: ci/requirements-windows.txt
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: VoiceCaptions/discord_adapter/package-lock.json
+      - name: Install hash-locked Python test dependencies
+        run: >-
+          python -m pip install --disable-pip-version-check --only-binary=:all:
+          --require-hashes -r ci/requirements-windows.txt
+      - name: Install locked adapter dependencies
+        working-directory: VoiceCaptions/discord_adapter
+        run: npm ci --no-audit --no-fund
+      - name: Require integration-test dependencies
+        run: python -m ci.check_dependencies
+      - name: All Python suites
+        run: python tests/run_all_tests.py --jobs 8 --timeout 180 --report .ci-results/python.json
+      - name: Discord adapter suite
+        id: discord
+        working-directory: VoiceCaptions/discord_adapter
+        run: node --test
+      - name: Record test timing summary
+        if: always()
+        run: python -m ci.test_summary .ci-results/python.json
+      - name: Keep Python timing evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: test-timings-python
+          path: .ci-results/python.json
+          include-hidden-files: true
+          if-no-files-found: warn
+          retention-days: 14
+
+  ci:
+    name: CI
+    if: always()
+    needs: [validate, python-and-node]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Require every owned suite to pass
+        env:
+          CI_NEEDS: ${{ toJSON(needs) }}
+        run: python3 -m ci.check_results

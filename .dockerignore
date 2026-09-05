@@ -1,0 +1,13 @@
+.git
+**/__pycache__
+**/*.pyc
+**/node_modules
+**/.env
+**/relay.env
+**/*.sqlite3*
+**/secrets
+**/data
+dist
+Installer/build
+Installer/cache
+.ci-results

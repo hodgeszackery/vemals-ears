@@ -1,0 +1,18 @@
+VE continuous integration
+=========================
+
+The Tests workflow runs the complete Python and Discord suites on each pull
+request, default-branch push and manual run. VE has no addon/Lua/Warpsim jobs.
+Dependency locks, nonempty test inventories and compact result reports are
+checked. The final CI job requires both the Python job and the explicit Node
+step to succeed; cancellation, skipped steps and missing output cannot pass.
+
+Windows installer build/signing automation is separate. This new GitHub
+repository does not inherit the old repository's environment secrets or OIDC
+configuration. Do not describe an unsigned CI build as publisher-signed.
+Tests do not publish artifacts to the live download directory or alter services.
+
+The extraction preserves existing tests at the product boundary. Shared GUI,
+pairing and protocol behavior may be tested in both repositories because each
+ships its own copy. The migration test ledger explains ownership transfers and
+the measured floors, so reductions in the old suite are auditable.

@@ -1,0 +1,54 @@
+VE repository split - test ownership and floor accounting
+2026-09-05
+
+The pre-split repository recorded 88 Python modules and 2,132 tests, plus a
+Lua runner. This standalone repository owns 59 Python modules with a floor
+of 1,179 tests, and the Discord adapter has 184 Node tests. Downtime retains
+65 Python modules with a floor of 1,468 tests, its 24 Lua suites and Warpsim.
+Shared UI and protocol tests run in both repositories; totals are not unique
+coverage counts. No test imports or executes code from a sibling checkout.
+
+VE owns caption runtime, STT, the Discord adapter, member client, caption
+worker, member installer, native VE identity, visual geometry and voice
+controls. Small shared contracts and the cached UI fixture are local copies.
+The fixture isolates data directories, restores exact application globals,
+and mocks the process identity setter. Tests own their Tk/services/credential
+cleanup. Empty roots, zero-test children and shrinking full suites fail CI.
+
+The initial migration ledger found 662 original IDs transferred unchanged
+and 27 removed or rewritten IDs requiring review. Their replacement coverage:
+
+- Five deployment/doc IDs retain external worker Compose hardening, secret
+  files and health-state behavior under renamed Downtime tests. VE additionally
+  checks its Docker file list and imports the extracted worker payload in an
+  isolated subprocess. Ubuntu CI runs this contract.
+- Seven CI IDs now describe independent product pipelines. Every VE change
+  runs Python and Node. The aggregate gate rejects missing/skipped/failed jobs
+  and requires the explicit successful Node-step result. The real Opus PCM
+  cross-language test still requires installed locked dependencies.
+- One combined icon ID is split into local Downtime-clock and VE shipped-icon
+  contracts, including the legacy-cache regression.
+- Six combined installer/refresh IDs are covered by standalone allowlists,
+  foreign-product rejection, source preflight and damaged-marker handling.
+- Eight old advertising-gap IDs assumed shared product versions. Three
+  parser cases remain in Downtime; five checks requiring Downtime to advertise
+  VE are obsolete. Replacement promotion tests preserve VE's independent
+  version and advertised state.
+
+Validation evidence:
+
+The full standalone snapshot passed 59 modules and 1,175 Python tests with
+zero skips in 69.2s locally. Four subsequent refresh-isolation cases passed
+in the packaging module (27 tests), yielding the 1,179 floor. The two worker
+installation cases, three Docker cases and four VE hero cases were included
+in that full snapshot. All 184 Node tests passed with zero skips. Actionlint
+passed. Hosted CI and native build results are recorded separately.
+All seven companion regression witnesses were caught with assertion failures,
+no test errors and unchanged production source in both repositories.
+
+Downtime's full snapshot passed 1,462 Python tests plus all 24 Lua suites;
+six subsequent promotion/refresh cases passed in its affected modules.
+
+Run python dev.py check to validate this repository. Use --dry-run to inspect
+commands, python dev.py doctor to check dependencies, or
+python tests/run_all_tests.py --list to inspect owned Python modules.

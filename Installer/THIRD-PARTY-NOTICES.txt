@@ -1,0 +1,51 @@
+Vemal's Ears - Third-Party Notices
+==================================
+
+Vemal's Ears itself is licensed under the GNU General Public License,
+version 3 only. See LICENSE at the repository root. The corresponding
+source is the public repository this build was made from.
+
+The Windows installer includes these third-party components:
+
+- CPython 3.14.7, licensed under the Python Software Foundation License.
+- websockets 13.1, licensed under the BSD 3-Clause License.
+- Pillow 12.3.0, licensed under the HPND License.
+- pywin32 312, licensed under the Python Software Foundation License.
+
+The complete license text shipped by each component remains in the private
+runtime beside the component. CPython's license is runtime\LICENSE.txt. The
+Python package licenses are under runtime\Lib\site-packages in each package's
+dist-info directory.
+
+Project pages:
+
+https://www.python.org/
+https://github.com/python-websockets/websockets
+https://python-pillow.github.io/
+https://github.com/mhammond/pywin32
+
+
+Separate guild server components, NOT included in this installer
+----------------------------------------------------------------
+
+Speech recognition runs on the guild server. The Vemal's Ears member app
+receives caption text and never downloads these server components. The
+server operator's tooling pins its downloads in VoiceCaptions/runtime_installer.py:
+
+- whisper.cpp (build b4938), licensed under the MIT License.
+  Two builds: a CPU one, and a CUDA/cuBLAS one shown by server tooling as
+  the "NVIDIA speech engine". The NVIDIA CUDA runtime libraries inside
+  that second archive remain subject to NVIDIA's own licence terms.
+- Whisper large-v3-turbo speech model, by OpenAI, licensed under the MIT
+  License. Obtained as the ggml quantisation ggml-large-v3-turbo-q5_0.
+- Silero VAD 6.2.0, licensed under the MIT License. Used as the local
+  speech gate, so silence never reaches the transcriber.
+
+Bundling any of these into the installer instead of the server downloading them
+would make this project a redistributor of them, and this file would
+have to carry their full terms. That is the
+reason the download happens at runtime.
+
+https://github.com/ggml-org/whisper.cpp
+https://github.com/openai/whisper
+https://github.com/snakers4/silero-vad

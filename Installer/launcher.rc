@@ -1,0 +1,55 @@
+#include <windows.h>
+
+#ifndef APP_VERSION_MAJOR
+#define APP_VERSION_MAJOR 0
+#endif
+#ifndef APP_VERSION_MINOR
+#define APP_VERSION_MINOR 0
+#endif
+#ifndef APP_VERSION_PATCH
+#define APP_VERSION_PATCH 0
+#endif
+#ifndef APP_VERSION_BUILD
+#define APP_VERSION_BUILD 0
+#endif
+
+#define STRINGIFY_(value) #value
+#define STRINGIFY(value) STRINGIFY_(value)
+#define VERSION_TEXT \
+    STRINGIFY(APP_VERSION_MAJOR) "." STRINGIFY(APP_VERSION_MINOR) "." \
+    STRINGIFY(APP_VERSION_PATCH) "." STRINGIFY(APP_VERSION_BUILD)
+
+1 ICON "VemalsEars.ico"
+
+1 VERSIONINFO
+ FILEVERSION APP_VERSION_MAJOR,APP_VERSION_MINOR,APP_VERSION_PATCH,APP_VERSION_BUILD
+ PRODUCTVERSION APP_VERSION_MAJOR,APP_VERSION_MINOR,APP_VERSION_PATCH,APP_VERSION_BUILD
+ FILEFLAGSMASK 0x3fL
+ FILEFLAGS 0x0L
+ FILEOS VOS_NT_WINDOWS32
+ FILETYPE VFT_APP
+ FILESUBTYPE 0x0L
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "040904b0"
+        BEGIN
+            VALUE "CompanyName", "Zackery Hodges\0"
+            VALUE "FileDescription", "Vemal's Ears\0"
+            VALUE "InternalName", "VemalsEars\0"
+            VALUE "OriginalFilename", "VemalsEars.exe\0"
+            VALUE "ProductName", "Vemal's Ears\0"
+            /* Explorer's Details tab and most tools read these STRINGS,
+               not the binary FILEVERSION field above, so leaving them out
+               showed a blank version on a file a member is asked to trust
+               and run. STRINGIFY goes through two macros on purpose: one
+               level only would stringify the macro NAME. */
+            VALUE "FileVersion", VERSION_TEXT "\0"
+            VALUE "ProductVersion", VERSION_TEXT "\0"
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x409, 1200
+    END
+END
