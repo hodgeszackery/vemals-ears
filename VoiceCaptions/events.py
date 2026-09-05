@@ -338,6 +338,14 @@ class CaptionBoard:
             return False
         self.last_sequence[event.speaker_id] = event.sequence
         line = DisplayLine(event=event, updated_at=now)
+        # A speaker owns one card. When they begin a new clause, their older
+        # completed clause must leave both the visible rows and the backlog;
+        # otherwise that final reappears beside the new final when they stop.
+        self.finals = deque(
+            existing
+            for existing in self.finals
+            if existing.event.speaker_id != event.speaker_id
+        )
         if event.final:
             self.partials.pop(event.speaker_id, None)
             if event.speaker_id in self.live_slots:

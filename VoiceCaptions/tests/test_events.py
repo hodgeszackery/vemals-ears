@@ -140,6 +140,66 @@ class BoardTests(unittest.TestCase):
         self.assertFalse(board.ingest(caption("mira", 4, "Old text"), now=0.1))
         self.assertEqual("New text", board.visible(0.2)[0].event.text)
 
+    def test_new_speech_replaces_the_same_speakers_older_final(self):
+        board = CaptionBoard(max_rows=2, final_hold_seconds=10.0)
+        board.ingest(caption("mira", 1, "First thought", final=True), now=0.0)
+        self.assertEqual(
+            ["First thought"],
+            [line.event.text for line in board.visible(0.1)],
+        )
+
+        board.ingest(caption("mira", 2, "Second thought"), now=0.2)
+        self.assertEqual([], list(board.finals))
+        self.assertEqual(
+            ["Second thought"],
+            [line.event.text for line in board.visible(0.3)],
+        )
+
+        board.ingest(
+            caption("mira", 3, "Second thought complete", final=True),
+            now=0.4,
+        )
+        rows = board.visible(0.5)
+        self.assertEqual(["mira"], [line.event.speaker_id for line in rows])
+        self.assertEqual(
+            ["Second thought complete"],
+            [line.event.text for line in rows],
+        )
+        self.assertEqual(1, len(board.finals))
+
+    def test_same_speaker_replacement_preserves_other_speakers_backlog(self):
+        board = CaptionBoard(max_rows=1, final_hold_seconds=10.0)
+        board.ingest(caption("mira", 1, "Mira first", final=True), now=0.0)
+        board.visible(0.01)
+        board.ingest(caption("drex", 1, "Drex callout", final=True), now=0.1)
+
+        board.ingest(caption("mira", 2, "Mira again"), now=0.2)
+        self.assertEqual(
+            ["drex"],
+            [line.event.speaker_id for line in board.finals],
+        )
+        self.assertEqual(
+            ["Mira again"],
+            [line.event.text for line in board.visible(0.3)],
+        )
+
+        board.ingest(caption("mira", 3, "Mira done", final=True), now=0.4)
+        self.assertEqual(
+            ["drex", "mira"],
+            [line.event.speaker_id for line in board.finals],
+        )
+        self.assertEqual(
+            ["Drex callout"],
+            [line.event.text for line in board.visible(0.5)],
+        )
+        self.assertFalse(
+            board.ingest(caption("mira", 2, "Reordered"), now=0.6)
+        )
+        self.assertEqual(
+            ["Mira done"],
+            [line.event.text for line in board.visible(2.51)],
+        )
+
     def test_third_speaker_final_waits_without_growing_the_overlay(self):
         board = CaptionBoard(
             max_rows=2,
