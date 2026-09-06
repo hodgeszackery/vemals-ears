@@ -164,12 +164,10 @@ class ExplodingSessions extends EventEmitter {
 
   matchesSessionBinding() {
     this.calls += 1;
-    // Healthy for bind, then broken while the post is in flight - the
-    // shape a gateway reconnect actually has.
-    if (this.calls > 1) {
-      throw new Error("session state is gone");
-    }
-    return true;
+    // Broken the moment the status check runs - the shape a gateway
+    // reconnect actually has. (Typed chat is no longer mirrored into
+    // Discord, so this is the only session touch left on the path.)
+    throw new Error("session state is gone");
   }
 }
 
