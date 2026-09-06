@@ -1450,11 +1450,19 @@ class VoiceCaptionCoordinator:
             self._parts.pop(completed.global_sequence, None)
             final = True
             prefix = parts.total or 0
+            first_new = 0
         else:
             final = False
             prefix = parts.known_prefix()
             if prefix <= parts.shown or prefix > _MAX_PART_INDEX:
                 return
+            # The live line shows what is NEW. It used to show every
+            # part so far joined, so a long utterance grew on screen five
+            # seconds at a time - Shino, 2026-09-06: "the spliced text
+            # keeps appending rather than just showing the new streamed
+            # text". The whole utterance still arrives once, as the
+            # final, which is the line that stays.
+            first_new = parts.shown
             parts.shown = prefix
         # Names are corrected after the join and before the cap: a name can
         # be split across two streamed parts, so the halves are only adjacent
@@ -1471,7 +1479,7 @@ class VoiceCaptionCoordinator:
         # empty" tolerance a few lines up could never actually work while
         # this raised. Live worker log, 2026-09-04: sessions dying seconds
         # after someone spoke, over and over.
-        joined = apply_pronunciations(_join_parts(parts.slots[:prefix], 320))
+        joined = apply_pronunciations(_join_parts(parts.slots[first_new:prefix], 320))
         if not isinstance(joined, str) or not joined.strip():
             return
         # Everything else still fails closed: a non-string, or control

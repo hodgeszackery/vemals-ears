@@ -1424,10 +1424,9 @@ class CaptionOverlay:
         """
         event = line.event
         live = line.live
-        base_font = "caption" if live else "previous"
         caption_font = self.fonts.get(
             caption_font_key(live, event.speech_style),
-            self.fonts[base_font],
+            self.fonts["previous"],
         )
         # A name allowed to run the length of the card silently deletes
         # the words it belongs to. Bound it before measuring anything.
@@ -1438,7 +1437,7 @@ class CaptionOverlay:
         )
         speaker_width = self.fonts["speaker"].measure(speaker)
         tally_width = self.recording_tally_size()[0] if recording else 0
-        trailing = tally_width + 12 if recording else (18 if live else 10)
+        trailing = tally_width + 12 if recording else 10
         chrome = 58 + speaker_width + trailing
         desired = chrome + caption_font.measure(event.text)
         if desired <= self.metrics.max_card_width:
@@ -1521,7 +1520,12 @@ class CaptionOverlay:
         x2 = x1 + width
         y2 = y1 + height
         fill = self.settings.caption_background_color
-        outline = event.color if live else SLATE
+        # The settled card's look for every card. The role colour stays
+        # on the accent bar at the left, which is what focus mode filters
+        # on; the class colour stays on a mapped name. Everything that
+        # made a live card a different shape - the coloured outline, the
+        # larger avatar, the larger face, the trailing dot - is gone.
+        outline = SLATE
         # Card opacity is a dithered backdrop while caption text stays solid.
         # The REC privacy tally and the status card stay opaque on purpose -
         # a privacy indicator at half strength reads as half true.
@@ -1555,7 +1559,7 @@ class CaptionOverlay:
         base_height = self.metrics.row_height(line, 1)
         first_text_y = y1 + base_height // 2
 
-        avatar = 24 if live else 18
+        avatar = 18
         avatar_x = x1 + 13
         avatar_y = first_text_y - avatar // 2
         self.canvas.create_oval(
@@ -1563,7 +1567,7 @@ class CaptionOverlay:
             avatar_y,
             avatar_x + avatar,
             avatar_y + avatar,
-            fill=event.color if live else SLATE,
+            fill=SLATE,
             outline=event.color,
             width=1,
         )
@@ -1571,7 +1575,7 @@ class CaptionOverlay:
             avatar_x + avatar // 2,
             avatar_y + avatar // 2,
             text=speaker[:1] or "?",
-            fill=VOID if live else MUTED,
+            fill=MUTED,
             font=self.fonts["initial"],
         )
         shadow_id = self.canvas.create_text(
@@ -1596,7 +1600,7 @@ class CaptionOverlay:
             # the two would lose the distinction the reader is using. A
             # mapped name keeps its class colour in scrollback; unmapped
             # finished names retain the existing muted treatment.
-            fill=(event.name_color if live or event.wow_class else MUTED),
+            fill=(event.name_color if event.wow_class else MUTED),
             font=self.fonts["speaker"],
             anchor="w",
         )
@@ -1612,7 +1616,7 @@ class CaptionOverlay:
             self.canvas.tag_lower(shadow_id, name_id)
         caption_x = name_x + speaker_width + 9
         recording = card.get("recording", False)
-        reserve = card.get("tally_width", 0) + 12 if recording else (18 if live else 9)
+        reserve = card.get("tally_width", 0) + 12 if recording else 9
         available = max(x2 - caption_x - reserve, 0)
         # Continuation lines start under the name rather than under the
         # caption, so the second line does not read as a new speaker.
@@ -1640,15 +1644,7 @@ class CaptionOverlay:
                 self.canvas.tag_lower(shadow_id, text_id)
         if recording:
             self.draw_recording_tally(right=x2 - 6, center_y=text_y)
-        elif live:
-            self.canvas.create_oval(
-                x2 - 11,
-                text_y - 3,
-                x2 - 5,
-                text_y + 3,
-                fill=FROST,
-                outline="",
-            )
+        del live
 
 
 def read_json_lines(target: queue.Queue, exit_on_eof: bool) -> None:

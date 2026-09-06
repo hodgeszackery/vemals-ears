@@ -194,11 +194,16 @@ class LayoutTests(unittest.TestCase):
         )
         self.assertLessEqual(height, 90)
 
-    def test_active_and_previous_rows_are_even_smaller(self):
-        height = DEFAULT_METRICS.stack_height(
+    def test_live_and_settled_rows_are_the_same_height(self):
+        """Two speakers on screen are two cards of one shape."""
+        mixed = DEFAULT_METRICS.stack_height(
             [line("old", final=True), line("live", final=False)]
         )
-        self.assertEqual(78, height)
+        settled = DEFAULT_METRICS.stack_height(
+            [line("old", final=True), line("older", final=True)]
+        )
+        self.assertEqual(settled, mixed)
+        self.assertEqual(68, mixed)
 
     def test_text_is_ellipsized_to_one_measured_line(self):
         measure = lambda value: len(value) * 10
@@ -249,10 +254,11 @@ class LayoutTests(unittest.TestCase):
                         for call in canvas.text_calls
                         if call.get("text") == display_name
                     )
+                    # A mapped name carries its class colour on every
+                    # row; an unmapped one is muted on every row. Live no
+                    # longer changes the answer.
                     expected_name = (
-                        CLASS_COLORS["rogue"]
-                        if wow_class
-                        else (overlay.MUTED if final else ROLE_COLORS["HEALER"])
+                        CLASS_COLORS["rogue"] if wow_class else overlay.MUTED
                     )
                     self.assertEqual(expected_name, name.get("fill"))
                     caption = next(
@@ -277,11 +283,11 @@ class LayoutTests(unittest.TestCase):
             }
         )
         for final, style, expected in (
-            (False, "whisper", "caption_whisper"),
-            (False, "shout", "caption_shout"),
+            (False, "whisper", "previous_whisper"),
+            (False, "shout", "previous_shout"),
             (True, "whisper", "previous_whisper"),
             (True, "shout", "previous_shout"),
-            (False, "normal", "caption"),
+            (False, "normal", "previous"),
         ):
             with self.subTest(final=final, style=style):
                 event = CaptionEvent(
@@ -530,8 +536,11 @@ class CardTransparencyTests(unittest.TestCase):
         self.assertEqual("#123456", body["fill"])
         self.assertEqual("gray75", body["stipple"])
         self.assertEqual("#abcdef", caption["fill"])
-        self.assertEqual(row.event.name_color, name["fill"])
-        self.assertEqual(row.event.color, body["outline"])
+        # One card style: a live card's outline is the same slate as a
+        # settled one, and an unmapped name is muted on both. The role
+        # colour stays on the accent bar at the left of every card.
+        self.assertEqual(overlay.MUTED, name["fill"])
+        self.assertEqual(overlay.SLATE, body["outline"])
 
 
 class RecordingTallyTests(unittest.TestCase):
@@ -629,8 +638,16 @@ class RecordingTallyTests(unittest.TestCase):
 
         CaptionOverlay.draw_lines(subject, rows)
 
-        self.assertNotIn("SPEAKER14", canvas.texts)
-        self.assertIn("SPEAKER15", canvas.texts)
+        # Whatever the row height, the oldest rows are the ones dropped
+        # and the newest is always there: the drawn names are a suffix
+        # of the feed, and it is a proper suffix at this font size.
+        drawn = []
+        for name in canvas.texts:
+            if name.startswith("SPEAKER") and name not in drawn:
+                drawn.append(name)
+        names = [f"SPEAKER{index}" for index in range(MAX_VISIBLE_SPEAKERS)]
+        self.assertEqual(names[-len(drawn):], drawn)
+        self.assertLess(len(drawn), MAX_VISIBLE_SPEAKERS, "nothing was capped")
         self.assertIn("SPEAKER19", canvas.texts)
         tally = next(
             call for call in canvas.text_calls if call.get("text") == "REC"
@@ -814,7 +831,7 @@ class PlacementRecordingTallyTests(unittest.TestCase):
             y1=0,
             height=DEFAULT_METRICS.for_font_size(
                 MAX_CAPTION_FONT_SIZE
-            ).live_height,
+            ).final_height,
             width=width,
             speaker="Mira",
             text="Move out of the dangerous ground effect immediately",
@@ -825,13 +842,13 @@ class PlacementRecordingTallyTests(unittest.TestCase):
         caption = next(
             call
             for call in canvas.text_calls
-            if call.get("font") is subject.fonts["caption"]
+            if call.get("font") is subject.fonts["previous"]
         )
         tally_width, _height = subject.recording_tally_size()
         tally_left = x2 - 6 - tally_width
         caption_right = (
             caption["coords"][0]
-            + subject.fonts["caption"].measure(caption["text"])
+            + subject.fonts["previous"].measure(caption["text"])
         )
         self.assertLessEqual(caption_right, tally_left - 6)
         self.assertTrue(caption["text"].endswith("..."))
@@ -993,7 +1010,8 @@ class FontSizeScalingTests(unittest.TestCase):
         self.assertEqual("bold", specs["caption_shout"]["weight"])
         self.assertEqual("italic", specs["previous_whisper"]["slant"])
         self.assertEqual("bold", specs["previous_shout"]["weight"])
-        self.assertEqual("caption_whisper", caption_font_key(True, "whisper"))
+        # The same face whether the line is live or settled.
+        self.assertEqual("previous_whisper", caption_font_key(True, "whisper"))
         self.assertEqual("previous_shout", caption_font_key(False, "shout"))
         metrics = metrics_for_target(48, (0, 0, 1920, 1080))
         self.assertEqual(1920, metrics.canvas_width)

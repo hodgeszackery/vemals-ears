@@ -878,10 +878,8 @@ class PlacementWindow:
         # shows the real count rather than silently capping at four.
         wanted = max(1, self.settings.max_visible_speakers)
         shown = [examples[index % len(examples)] for index in range(wanted)]
-        heights = (
-            [metrics.final_height] * max(len(shown) - 1, 0)
-            + [metrics.live_height]
-        )
+        # WYSIWYG with the overlay: every card is the settled shape now.
+        heights = [metrics.final_height] * len(shown)
         while (
             len(shown) > 1
             and metrics.stacked(heights) > self.canvas_height
@@ -944,7 +942,7 @@ class PlacementWindow:
             y2,
             8,
             fill=self.settings.caption_background_color,
-            outline=color if live else SLATE,
+            outline=SLATE,
             stipple=background_stipple(
                 self.settings.caption_background_opacity
             ),
@@ -980,10 +978,9 @@ class PlacementWindow:
         tally_width = self.recording_tally_size()[0] if live else 0
         reserve = tally_width + 12 if live else 9
         available = max(x2 - caption_x - reserve, 0)
-        base_font = "caption" if live else "previous"
         caption_font = self.fonts.get(
             caption_font_key(live, speech_style),
-            self.fonts[base_font],
+            self.fonts["previous"],
         )
         self.canvas.create_text(
             caption_x,
