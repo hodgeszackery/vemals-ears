@@ -6,7 +6,7 @@ small movable window above World of Warcraft, plus typed guild chat for
 the moments voice is down. Windows only.
 
 Source:  https://github.com/hodgeszackery/vemals-ears
-License: GNU GPL version 3 only (see LICENSE). No warranty.
+License: GPL-3.0-only; see LICENSE. GNU GPL version 3 only, no warranty.
 
 WHAT IS IN THIS REPOSITORY
 
