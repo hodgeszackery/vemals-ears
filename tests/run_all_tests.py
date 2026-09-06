@@ -40,8 +40,9 @@ from ci.test_inventory import PYTHON_TEST_ROOTS  # noqa: E402
 # module joined the suite (the ghost capture session fix).
 # Measured 2026-09-06: 65 units, 1287 cases, after the one-card-style module.
 # Measured 2026-09-06: 66 units, 1297 cases, after the part-hold and frame-loop module.
-EXPECTED_UNITS = 66
-EXPECTED_TESTS = 1297
+# Measured 2026-09-06: 67 units, 1308 cases, after streamed parts began taking free rows.
+EXPECTED_UNITS = 67
+EXPECTED_TESTS = 1308
 
 
 def discover_modules(relative: str, prefix: str) -> list[tuple[str, list[str]]]:

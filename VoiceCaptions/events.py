@@ -277,6 +277,14 @@ class CaptionBoard:
         )
         self.max_queued_finals = max_queued_finals
         self.partials: dict[str, DisplayLine] = {}
+        # Earlier streamed parts of each speaker's CURRENT utterance,
+        # oldest first. They take rows nobody else needs, directly above
+        # that speaker's live line - Shino, 2026-09-06: "can the
+        # streaming text take up as many free spaces as is possible?"
+        # A long sentence then reads down the overlay part by part until
+        # its final collapses them into one line. Bounded per speaker so
+        # a monologue cannot grow memory: at most max_rows - 1 kept.
+        self.parts: dict[str, list[DisplayLine]] = {}
         self.finals: deque[DisplayLine] = deque()
         self.last_sequence: dict[str, int] = {}
         self.live_slots: list[str] = []
@@ -303,6 +311,8 @@ class CaptionBoard:
             # deliberately shrinks the overlay.
             self.live_slots.clear()
         self.max_rows = max_rows
+        for speaker_id in list(self.parts):
+            self._trim_parts(speaker_id)
         self.final_hold_seconds = float(final_hold_seconds)
         if not self._explicit_partial_hold:
             self.partial_stale_seconds = self._partial_hold(self.final_hold_seconds)
@@ -331,8 +341,16 @@ class CaptionBoard:
         """
         return max(float(final_hold_seconds), cls.STREAM_PART_SECONDS + 1.0)
 
+    def _trim_parts(self, speaker_id: str) -> None:
+        kept = self.parts.get(speaker_id, [])[-max(self.max_rows - 1, 0):]
+        if kept:
+            self.parts[speaker_id] = kept
+        else:
+            self.parts.pop(speaker_id, None)
+
     def clear(self) -> None:
         self.partials.clear()
+        self.parts.clear()
         self.finals.clear()
         self.last_sequence.clear()
         self.live_slots.clear()
@@ -346,6 +364,9 @@ class CaptionBoard:
         for speaker_id in speaker_ids:
             if speaker_id in self.partials:
                 self.partials.pop(speaker_id, None)
+                changed = True
+            if speaker_id in self.parts:
+                self.parts.pop(speaker_id, None)
                 changed = True
         kept = deque(
             line for line in self.finals if line.event.speaker_id not in speaker_ids
@@ -384,13 +405,22 @@ class CaptionBoard:
             if existing.event.speaker_id != event.speaker_id
         )
         if event.final:
+            # The whole utterance, once: its streamed parts leave with it.
             self.partials.pop(event.speaker_id, None)
+            self.parts.pop(event.speaker_id, None)
             if event.speaker_id in self.live_slots:
                 self.live_slots.remove(event.speaker_id)
             self.finals.append(line)
             while len(self.finals) > self.max_queued_finals:
                 self.finals.popleft()
         else:
+            previous = self.partials.get(event.speaker_id)
+            if previous is not None:
+                # The part that was live becomes an earlier part of the
+                # same utterance, keeping its own timestamp so it ages
+                # from when it was said, not from now.
+                self.parts.setdefault(event.speaker_id, []).append(previous)
+                self._trim_parts(event.speaker_id)
             self.partials[event.speaker_id] = line
         return True
 
@@ -429,6 +459,18 @@ class CaptionBoard:
             self.partials.pop(speaker_id, None)
             if speaker_id in self.live_slots:
                 self.live_slots.remove(speaker_id)
+        for speaker_id in list(self.parts):
+            fresh = [
+                line
+                for line in self.parts[speaker_id]
+                if now - line.updated_at < self.partial_stale_seconds
+            ]
+            # Earlier parts belong beside a live line; with no live line
+            # left for this speaker there is nothing for them to sit above.
+            if fresh and speaker_id in self.partials:
+                self.parts[speaker_id] = fresh
+            else:
+                self.parts.pop(speaker_id, None)
 
         backlog = any(line.first_shown_at is None for line in self.finals)
         kept: deque[DisplayLine] = deque()
@@ -536,7 +578,30 @@ class CaptionBoard:
         # Finished clauses sit faintly above live text. The newest live
         # speaker is the bottom row, nearest the player's action bars.
         shown_finals.sort(key=lambda line: line.updated_at)
-        return (shown_finals + live)[-self.max_rows :]
+
+        # Rows nobody needs go to the newest earlier parts of the live
+        # utterances, so a long sentence reads down the overlay part by
+        # part. Never at the expense of another speaker: only rows that
+        # would otherwise stand empty, and each part sits directly above
+        # its own live line, oldest first.
+        free = self.max_rows - len(shown_finals) - len(live)
+        chosen_parts: dict[str, list[DisplayLine]] = {}
+        if free > 0:
+            pool = [
+                line
+                for speaker_id in live_speakers
+                for line in self.parts.get(speaker_id, [])
+            ]
+            pool.sort(key=lambda line: line.updated_at, reverse=True)
+            for line in pool[:free]:
+                chosen_parts.setdefault(line.event.speaker_id, []).append(line)
+        rows: list[DisplayLine] = list(shown_finals)
+        for line in live:
+            earlier = chosen_parts.get(line.event.speaker_id, [])
+            earlier.sort(key=lambda part: part.updated_at)
+            rows.extend(earlier)
+            rows.append(line)
+        return rows[-self.max_rows :]
 
 
 def event_to_json(event: ProtocolEvent) -> str:
