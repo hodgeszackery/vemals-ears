@@ -252,7 +252,7 @@ class CaptionBoard:
     def __init__(
         self,
         max_rows: int = 2,
-        partial_stale_seconds: float = 2.4,
+        partial_stale_seconds: float | None = None,
         final_hold_seconds: float = 3.6,
         queued_final_seconds: float = 8.0,
         max_queued_finals: int = 24,
@@ -260,7 +260,15 @@ class CaptionBoard:
         if max_rows < 1 or max_rows > MAX_OVERLAY_ROWS:
             raise ValueError("max_rows must be between 1 and %d" % MAX_OVERLAY_ROWS)
         self.max_rows = max_rows
-        self.partial_stale_seconds = partial_stale_seconds
+        # A caller that names a partial hold keeps it (the tests do, to
+        # drive the board through its states quickly). The overlay never
+        # does: it follows the member's caption duration, below.
+        self._explicit_partial_hold = partial_stale_seconds is not None
+        self.partial_stale_seconds = (
+            float(partial_stale_seconds)
+            if partial_stale_seconds is not None
+            else self._partial_hold(final_hold_seconds)
+        )
         self.final_hold_seconds = final_hold_seconds
         self.minimum_queued_final_seconds = queued_final_seconds
         self.queued_final_seconds = max(
@@ -296,10 +304,32 @@ class CaptionBoard:
             self.live_slots.clear()
         self.max_rows = max_rows
         self.final_hold_seconds = float(final_hold_seconds)
+        if not self._explicit_partial_hold:
+            self.partial_stale_seconds = self._partial_hold(self.final_hold_seconds)
         self.queued_final_seconds = max(
             self.minimum_queued_final_seconds,
             self.final_hold_seconds + 1.0,
         )
+
+    # A long utterance reaches the overlay as streamed parts, one about
+    # every STREAM_PART_SECONDS while the speaker keeps talking. A part
+    # that vanishes before its successor arrives reads as a caption that
+    # blinked off mid-sentence.
+    STREAM_PART_SECONDS = 5.0
+
+    @classmethod
+    def _partial_hold(cls, final_hold_seconds: float) -> float:
+        """How long a streamed part stays when nothing replaces it.
+
+        Shino, 2026-09-06: "the split captions don't respect the caption
+        duration". They held 2.4 seconds, a constant nothing ever set
+        from the member's caption duration, while a new part arrives
+        only every five seconds - so each part flashed and was gone
+        before the next one came. A part now stays at least as long as
+        a settled caption, and never less than the streaming cadence
+        plus a margin, so a sentence in progress reads as one.
+        """
+        return max(float(final_hold_seconds), cls.STREAM_PART_SECONDS + 1.0)
 
     def clear(self) -> None:
         self.partials.clear()
