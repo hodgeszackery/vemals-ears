@@ -36,6 +36,7 @@ from VoiceCaptions.settings import (
     MAX_VISIBLE_SPEAKERS,
     MIN_CAPTION_FONT_SIZE,
     OverlaySettings,
+    load_settings,
     save_settings,
 )
 
@@ -156,6 +157,13 @@ class FakeRoot:
 
     def after(self, delay: int, callback) -> None:
         self.scheduled.append((delay, callback))
+
+
+def geometry_parts(value: str) -> tuple[int, int, int, int]:
+    match = re.match(r"^(\d+)x(\d+)\+?(-?\d+)\+?(-?\d+)$", value)
+    if match is None:
+        raise AssertionError(f"unexpected Tk geometry: {value}")
+    return tuple(int(part) for part in match.groups())
 
 
 def drawing_subject(canvas: FakeCanvas) -> SimpleNamespace:
@@ -595,6 +603,41 @@ class RecordingTallyTests(unittest.TestCase):
         self.assertGreaterEqual(card["height"], height + 4)
         self.assertLessEqual(card["width"], subject.metrics.max_card_width)
 
+    def test_capped_downward_feed_keeps_newest_caption_and_tally_visible(self):
+        subject, _canvas = self.subject("active")
+        canvas = CoordinateCanvas()
+        subject.canvas = canvas
+        subject.font_size = MAX_CAPTION_FONT_SIZE
+        subject.metrics = metrics_for_target(
+            MAX_CAPTION_FONT_SIZE,
+            (0, 0, 1920, 1080),
+        )
+        subject.canvas_height = canvas_height_for_target(
+            MAX_VISIBLE_SPEAKERS,
+            MAX_CAPTION_FONT_SIZE,
+            (0, 0, 1920, 1080),
+        )
+        subject.settings = OverlaySettings(
+            caption_font_size=MAX_CAPTION_FONT_SIZE,
+            max_visible_speakers=MAX_VISIBLE_SPEAKERS,
+            growth="down",
+        )
+        rows = [
+            line(f"SPEAKER{index}", final=False)
+            for index in range(MAX_VISIBLE_SPEAKERS)
+        ]
+
+        CaptionOverlay.draw_lines(subject, rows)
+
+        self.assertNotIn("SPEAKER14", canvas.texts)
+        self.assertIn("SPEAKER15", canvas.texts)
+        self.assertIn("SPEAKER19", canvas.texts)
+        tally = next(
+            call for call in canvas.text_calls if call.get("text") == "REC"
+        )
+        self.assertGreaterEqual(tally["coords"][1], 0)
+        self.assertLessEqual(tally["coords"][1], subject.canvas_height)
+
 
 class SessionStateDrainTests(unittest.TestCase):
     def subject(self, state="ready"):
@@ -977,12 +1020,10 @@ class LiveDisplaySettingTests(unittest.TestCase):
             settings_mtime_ns=-1,
             settings=settings,
             canvas_height=canvas_height,
-            footer_top=canvas_height + placement.FOOTER_GAP,
-            window_height=(
-                canvas_height
-                + placement.FOOTER_GAP
-                + placement.FOOTER_HEIGHT
-            ),
+            window_height=canvas_height,
+            overlay_width=placement.WINDOW_WIDTH,
+            window_width=placement.WINDOW_WIDTH,
+            preview_offset_x=0,
             target_rect=target_rect,
             canvas=mock.Mock(),
             root=FakeRoot(x, y),
@@ -993,6 +1034,7 @@ class LiveDisplaySettingTests(unittest.TestCase):
         subject.update_control_bounds = lambda: (
             placement.PlacementWindow.update_control_bounds(subject)
         )
+        subject.position_controls = lambda *_args: None
         subject.apply_settings = lambda updated, reposition: (
             placement.PlacementWindow.apply_settings(
                 subject, updated, reposition=reposition
@@ -1131,6 +1173,49 @@ class LiveDisplaySettingTests(unittest.TestCase):
             "break", placement.PlacementWindow.release_card(subject, event)
         )
         self.assertIsNone(subject.drag_origin)
+
+    def test_appearance_write_merges_settings_saved_since_the_last_poll(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "overlay-settings.json"
+            stale = OverlaySettings(
+                focus_mode=False,
+                max_visible_speakers=2,
+                muted=False,
+            )
+            latest = OverlaySettings(
+                focus_mode=True,
+                max_visible_speakers=8,
+                muted=True,
+            )
+            self.assertTrue(save_settings(latest, path))
+            subject = SimpleNamespace(
+                preview=False,
+                settings_path=path,
+                settings=stale,
+                target_rect=(0, 0, 1920, 1080),
+                root=FakeRoot(),
+                apply_settings=mock.Mock(),
+                sync_appearance_controls=mock.Mock(),
+                flash=mock.Mock(),
+            )
+
+            self.assertTrue(
+                placement.PlacementWindow.apply_appearance(
+                    subject,
+                    "caption_font_size",
+                    18,
+                )
+            )
+
+            saved = load_settings(path)
+            self.assertTrue(saved.focus_mode)
+            self.assertTrue(saved.muted)
+            self.assertEqual(8, saved.max_visible_speakers)
+            self.assertEqual(18, saved.caption_font_size)
+            subject.apply_settings.assert_called_once_with(
+                saved,
+                reposition=False,
+            )
 
     def test_a_font_size_change_rescales_metrics_and_grows_the_canvas(self):
         """Changing the size in the companion has to reach the live overlay.
@@ -1330,27 +1415,30 @@ class LiveDisplaySettingTests(unittest.TestCase):
 
 
 class PlacementControlWindowTests(unittest.TestCase):
-    def test_hidden_move_window_previews_appearance_immediately(self):
+    TARGET = (2560, 0, 1920, 1040)
+
+    def make_hidden_window(self, *, scaling: float | None = None):
         try:
             root = tk.Tk()
         except tk.TclError as exc:
             self.skipTest(str(exc))
         root.withdraw()
-        try:
-            with mock.patch.object(
-                placement,
-                "resolve_anchor_rect",
-                return_value=(0, 0, 1920, 1040),
-            ):
-                view = placement.PlacementWindow(root, preview=True)
-            root.withdraw()
-            root.update_idletasks()
+        if scaling is not None:
+            root.tk.call("tk", "scaling", scaling)
+        with mock.patch.object(
+            placement,
+            "resolve_anchor_rect",
+            return_value=self.TARGET,
+        ):
+            view = placement.PlacementWindow(root, preview=True)
+        root.update_idletasks()
+        view.controls.update_idletasks()
+        return root, view
 
-            footer = view.footer_shell.winfo_children()[0]
-            self.assertLessEqual(
-                footer.winfo_reqheight() + 2,
-                placement.FOOTER_HEIGHT,
-            )
+    def test_hidden_move_window_previews_appearance_immediately(self):
+        root, view = self.make_hidden_window()
+        try:
+            self.assertEqual("withdrawn", view.controls.state())
             self.assertTrue(view.canvas.find_withtag("caption-preview"))
 
             view.font_size_var.set("18")
@@ -1366,6 +1454,166 @@ class PlacementControlWindowTests(unittest.TestCase):
             self.assertGreater(view.overlay_width, placement.WINDOW_WIDTH)
         finally:
             root.destroy()
+
+    def test_control_panel_uses_natural_size_at_common_dpi_scales(self):
+        # Tk scaling is pixels per point: 1.667, 2.0 and 2.667 correspond
+        # approximately to Windows 125%, 150% and 200% display scaling.
+        for scaling in (1.667, 2.0, 2.667):
+            with self.subTest(scaling=scaling):
+                root, view = self.make_hidden_window(scaling=scaling)
+                try:
+                    try:
+                        root.attributes("-alpha", 0.0)
+                        view.controls.attributes("-alpha", 0.0)
+                    except tk.TclError:
+                        pass
+                    root.deiconify()
+                    root.update()
+                    width, height, _x, _y = geometry_parts(
+                        view.controls.geometry()
+                    )
+                    self.assertGreaterEqual(
+                        width,
+                        view.controls.winfo_reqwidth(),
+                    )
+                    self.assertGreaterEqual(
+                        height,
+                        view.controls.winfo_reqheight(),
+                    )
+                finally:
+                    root.withdraw()
+                    root.destroy()
+
+    def test_spinbox_arrow_changes_size_without_moving_the_preview(self):
+        root, view = self.make_hidden_window()
+        try:
+            try:
+                root.attributes("-alpha", 0.0)
+                view.controls.attributes("-alpha", 0.0)
+            except tk.TclError:
+                pass
+            root.deiconify()
+            view.controls.deiconify()
+            root.update()
+            view.nudge = mock.Mock(return_value="break")
+            view.font_size_spinbox.focus_force()
+            root.update()
+
+            self.assertEqual("10", view.font_size_var.get())
+            view.font_size_spinbox.event_generate("<Up>")
+            root.update()
+
+            self.assertEqual("11", view.font_size_var.get())
+            view.nudge.assert_not_called()
+        finally:
+            root.withdraw()
+            root.destroy()
+
+    def test_control_panel_follows_root_visibility_and_close_protocol(self):
+        root, view = self.make_hidden_window()
+        destroyed = []
+        controls_destroyed = []
+        root.bind(
+            "<Destroy>",
+            lambda event: destroyed.append(event.widget),
+            add="+",
+        )
+        view.controls.bind(
+            "<Destroy>",
+            lambda event: controls_destroyed.append(event.widget),
+            add="+",
+        )
+        try:
+            self.assertTrue(view.controls_owned)
+            try:
+                root.attributes("-alpha", 0.0)
+                view.controls.attributes("-alpha", 0.0)
+            except tk.TclError:
+                pass
+            self.assertEqual("withdrawn", view.controls.state())
+
+            root.deiconify()
+            root.update()
+            self.assertEqual("normal", view.controls.state())
+
+            root.withdraw()
+            root.update()
+            self.assertEqual("withdrawn", view.controls.state())
+
+            close_command = view.controls.protocol("WM_DELETE_WINDOW")
+            self.assertTrue(close_command)
+            view.controls.tk.call(close_command)
+            self.assertIn(root, destroyed)
+            self.assertIn(view.controls, controls_destroyed)
+        finally:
+            try:
+                root.destroy()
+            except tk.TclError:
+                pass
+
+    def test_extreme_preview_stays_exact_while_controls_remain_on_1080p(self):
+        root, view = self.make_hidden_window()
+        try:
+            try:
+                root.attributes("-alpha", 0.0)
+                view.controls.attributes("-alpha", 0.0)
+            except tk.TclError:
+                pass
+            root.deiconify()
+            view.controls.deiconify()
+            root.update()
+            for font_size, rows in ((24, 8), (48, 20)):
+                with self.subTest(font_size=font_size, rows=rows):
+                    settings = OverlaySettings(
+                        caption_font_size=font_size,
+                        max_visible_speakers=rows,
+                        growth="down",
+                    )
+                    view.apply_settings(settings, reposition=True)
+                    root.update()
+                    view.controls.update_idletasks()
+
+                    metrics, height = placement.preview_surface(
+                        root,
+                        settings,
+                        self.TARGET,
+                    )
+                    root_width, root_height, _root_x, _root_y = geometry_parts(
+                        root.geometry()
+                    )
+                    self.assertEqual(metrics.canvas_width, root_width)
+                    self.assertEqual(height, root_height)
+
+                    panel_width, panel_height, panel_x, panel_y = geometry_parts(
+                        view.controls.geometry()
+                    )
+                    left, top, target_width, target_height = self.TARGET
+                    self.assertGreaterEqual(panel_x, left)
+                    self.assertGreaterEqual(panel_y, top)
+                    self.assertLessEqual(panel_x + panel_width, left + target_width)
+                    self.assertLessEqual(panel_y + panel_height, top + target_height)
+                    tally_bounds = view.canvas.bbox("privacy-tally")
+                    self.assertIsNotNone(tally_bounds)
+                    self.assertGreaterEqual(tally_bounds[1], 0)
+                    self.assertLessEqual(tally_bounds[3], root_height)
+        finally:
+            root.destroy()
+
+
+class ControlPanelGeometryTests(unittest.TestCase):
+    def test_panel_is_clamped_inside_positive_and_negative_monitor_origins(self):
+        panel = (841, 239)
+        for target, preview in (
+            ((2560, 0, 1920, 1040), (2560, -72, 1920, 988)),
+            ((-1920, -160, 1920, 1040), (-1920, -232, 1920, 988)),
+        ):
+            with self.subTest(target=target):
+                x, y = placement.control_panel_position(target, preview, panel)
+                left, top, width, height = target
+                self.assertGreaterEqual(x, left)
+                self.assertGreaterEqual(y, top)
+                self.assertLessEqual(x + panel[0], left + width)
+                self.assertLessEqual(y + panel[1], top + height)
 
 
 class MuteRenderTests(unittest.TestCase):

@@ -1470,6 +1470,7 @@ class CaptionOverlay:
         }
 
     def draw_lines(self, lines) -> None:
+        lines = list(lines)
         recording_index = (
             len(lines) - 1
             if _effective_recording_state(self) in {"active", "unknown"}
@@ -1480,6 +1481,17 @@ class CaptionOverlay:
             for index, line in enumerate(lines)
         ]
         stack_height = self.metrics.stacked([card["height"] for card in cards])
+        # A supported large-font/row combination can exceed a short target's
+        # capped canvas. Always retain the newest tail. For a downward-growing
+        # feed, relying on canvas clipping hid the newest live caption and the
+        # REC tally at the bottom; for an upward feed it spent work drawing
+        # oldest rows entirely above the window.
+        while len(cards) > 1 and stack_height > self.canvas_height:
+            lines.pop(0)
+            cards.pop(0)
+            stack_height = self.metrics.stacked(
+                [card["height"] for card in cards]
+            )
         if self.settings.growth == "down":
             # A hanging feed: the first card sits at the very top of the
             # canvas and cross-talk extends downward. This is what lets a
