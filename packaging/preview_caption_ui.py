@@ -26,6 +26,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser().parse_args(argv)
     root = tk.Tk()
     root.withdraw()
+    view = None
     if args.surface == "overlay":
         from VoiceCaptions.events import CaptionEvent
         from VoiceCaptions.overlay import CaptionOverlay
@@ -34,7 +35,6 @@ def main(argv: list[str] | None = None) -> int:
             root,
             queue.Queue(),
             desktop_fallback=True,
-            preview=True,
         )
         view.target_rect = (0, 0, root.winfo_screenwidth(), root.winfo_screenheight())
         now = time.monotonic()
@@ -71,11 +71,11 @@ def main(argv: list[str] | None = None) -> int:
     elif args.surface == "placement":
         from VoiceCaptions.placement import PlacementWindow
 
-        PlacementWindow(root, preview=True)
+        view = PlacementWindow(root, preview=True)
     else:
         from GuildHub.setup import PairingWindow
 
-        PairingWindow(root)
+        view = PairingWindow(root)
     if args.surface != "overlay":
         root.deiconify()
 
@@ -84,10 +84,21 @@ def main(argv: list[str] | None = None) -> int:
         if args.screenshot is not None:
             from PIL import ImageGrab
 
-            left = root.winfo_rootx()
-            top = root.winfo_rooty()
-            right = left + root.winfo_width()
-            bottom = top + root.winfo_height()
+            windows = [root]
+            controls = getattr(view, "controls", None)
+            if args.surface == "placement" and controls is not None:
+                controls.update_idletasks()
+                windows.append(controls)
+            left = min(window.winfo_rootx() for window in windows)
+            top = min(window.winfo_rooty() for window in windows)
+            right = max(
+                window.winfo_rootx() + window.winfo_width()
+                for window in windows
+            )
+            bottom = max(
+                window.winfo_rooty() + window.winfo_height()
+                for window in windows
+            )
             args.screenshot.parent.mkdir(parents=True, exist_ok=True)
             ImageGrab.grab(bbox=(left, top, right, bottom)).save(
                 args.screenshot,

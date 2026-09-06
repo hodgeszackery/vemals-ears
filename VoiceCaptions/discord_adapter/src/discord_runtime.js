@@ -1386,6 +1386,9 @@ export class DiscordAdapterRuntime {
     }
     const previousPhase = session.phase;
     const previousParticipants = new Set(session.participants.map(({ userId }) => userId));
+    // discord.js patches guild.voiceStates and GuildMembers before emitting
+    // VoiceStateUpdate. BaseGuildVoiceChannel.members is therefore the
+    // authoritative post-event roster and also repairs any prior local drift.
     const channel = newState.guild.channels.cache.get(session.voiceChannelId);
     const participantIds = channel?.isVoiceBased()
       ? [...channel.members.values()]
@@ -1393,6 +1396,18 @@ export class DiscordAdapterRuntime {
           .map((participant) => participant.id)
       : [];
     const updated = this.sessions.updateParticipants({ guildId, participantIds });
+    const remainingParticipants = new Set(
+      updated.participants.map(({ userId }) => userId),
+    );
+    for (const userId of previousParticipants) {
+      if (!remainingParticipants.has(userId)) {
+        // Leaving voice ends this person's capture immediately even when the
+        // rest of the session stays active. End the old audience revision
+        // before publishing the new roster so no post-leave audio can cross
+        // the membership boundary.
+        this.#stopSpeakerCapture(guildId, userId, "voice_left");
+      }
+    }
     this.#emitAudienceSnapshot(updated);
     const requiresConnection =
       updated.phase === SessionPhase.ACTIVE && !this.connections.has(guildId);
@@ -1488,6 +1503,17 @@ export class DiscordAdapterRuntime {
           startedBy: entry.startedBy,
           participantIds,
         });
+        if (!participantIds.includes(entry.startedBy)) {
+          // startSession normally repairs a command snapshot by inserting its
+          // starter. During restart the old starter may have left already:
+          // retain their explicit stop authority, then immediately restore
+          // membership to Discord's current voice roster before emitting or
+          // opening capture.
+          session = this.sessions.updateParticipants({
+            guildId: entry.guildId,
+            participantIds,
+          });
+        }
       } catch {
         this.sessions.forgetResumable?.(entry.guildId);
         continue;

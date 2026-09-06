@@ -21,6 +21,13 @@ MAX_TEXT_LINES = 4
 # bigger overlay rather than text overflowing its row.
 BASE_FONT_SIZE = 10
 
+BACKGROUND_STIPPLES = {
+    25: "gray25",
+    50: "gray50",
+    75: "gray75",
+    100: "",
+}
+
 
 @dataclass(frozen=True)
 class OverlayMetrics:
@@ -138,6 +145,98 @@ class OverlayMetrics:
 
 
 DEFAULT_METRICS = OverlayMetrics()
+
+
+def metrics_for_target(
+    font_size: int,
+    target_rect: tuple[int, int, int, int] | None,
+    *,
+    fallback_width: int | None = None,
+) -> OverlayMetrics:
+    """Build the one width model used by both preview and live overlay."""
+    metrics = DEFAULT_METRICS.for_font_size(font_size)
+    available = (
+        target_rect[2]
+        if target_rect is not None and target_rect[2] > 0
+        else fallback_width
+    )
+    if available is None:
+        return metrics
+    return metrics.fitted_to_width(int(available))
+
+
+def canvas_height_for_target(
+    rows: int,
+    font_size: int,
+    target_rect: tuple[int, int, int, int] | None,
+    *,
+    fallback_height: int | None = None,
+) -> int:
+    """Cap the caption surface against the selected target's work area.
+
+    Win32 can report a different work area than Tk's primary-screen query,
+    especially on a 1080p secondary monitor or with per-monitor DPI scaling.
+    Passing the resolved target keeps the editable preview and live overlay on
+    the same dimensions.
+    """
+    ideal = DEFAULT_METRICS.for_font_size(font_size).tallest_stack(rows)
+    available = (
+        target_rect[3]
+        if target_rect is not None and target_rect[3] > 0
+        else fallback_height
+    )
+    if available is None or available <= 0:
+        return ideal
+    return max(1, min(ideal, int(int(available) * 0.95)))
+
+
+def caption_font_specs(size: int, family: str) -> dict[str, dict[str, object]]:
+    """Return shared Tk font specifications without requiring a Tk root."""
+    factor = size / BASE_FONT_SIZE
+
+    def px(base: int) -> int:
+        return max(1, round(base * factor))
+
+    return {
+        "speaker": {"family": family, "size": px(9), "weight": "bold"},
+        "caption": {"family": family, "size": px(10)},
+        "caption_whisper": {
+            "family": family,
+            "size": px(10),
+            "slant": "italic",
+        },
+        "caption_shout": {
+            "family": family,
+            "size": px(10),
+            "weight": "bold",
+        },
+        "previous": {"family": family, "size": px(9)},
+        "previous_whisper": {
+            "family": family,
+            "size": px(9),
+            "slant": "italic",
+        },
+        "previous_shout": {
+            "family": family,
+            "size": px(9),
+            "weight": "bold",
+        },
+        "initial": {"family": family, "size": px(8), "weight": "bold"},
+        "status": {"family": family, "size": px(8), "weight": "bold"},
+    }
+
+
+def caption_font_key(live: bool, speech_style: str) -> str:
+    """Return the font face for one caption without changing its text."""
+    base = "caption" if live else "previous"
+    if speech_style in {"whisper", "shout"}:
+        return base + "_" + speech_style
+    return base
+
+
+def background_stipple(opacity: int) -> str:
+    """Map the supported backdrop opacity to Tk's stable bitmap fills."""
+    return BACKGROUND_STIPPLES.get(opacity, BACKGROUND_STIPPLES[50])
 
 
 def wrap_text(

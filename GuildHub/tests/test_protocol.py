@@ -2,11 +2,14 @@ import json
 import unittest
 
 from GuildHub.protocol import (
+    SUBPROTOCOL,
+    SUBPROTOCOL_V2,
     GuildHubProtocolError,
     caption_envelope,
     cursor_advance,
     decode_message,
     encode_message,
+    event_payload_for_subprotocol,
     parse_caption_envelope,
     parse_cursor_advance,
     parse_audience_update,
@@ -341,9 +344,10 @@ class PublishContractTests(unittest.TestCase):
         fields.update(overrides)
         return CaptionEvent(**fields)
 
-    def published(self, event):
+    def published(self, event, *, subprotocol=SUBPROTOCOL):
         return parse_publish(
-            {"type": "publish", "event": json.loads(event_to_json(event))}
+            {"type": "publish", "event": json.loads(event_to_json(event))},
+            subprotocol=subprotocol,
         )
 
     def test_an_unmapped_speaker_publishes(self):
@@ -354,6 +358,47 @@ class PublishContractTests(unittest.TestCase):
     def test_a_mapped_speaker_publishes_and_keeps_the_class(self):
         restored = self.published(self.caption(wow_class="paladin"))
         self.assertEqual("paladin", restored.wow_class)
+
+    def test_speech_emphasis_publishes_with_or_without_a_class(self):
+        for wow_class in ("", "paladin"):
+            for speech_style in ("whisper", "shout"):
+                with self.subTest(
+                    wow_class=wow_class,
+                    speech_style=speech_style,
+                ):
+                    restored = self.published(
+                        self.caption(
+                            wow_class=wow_class,
+                            speech_style=speech_style,
+                        ),
+                        subprotocol=SUBPROTOCOL_V2,
+                    )
+                    self.assertEqual(speech_style, restored.speech_style)
+
+    def test_v1_refuses_an_unnegotiated_speech_style(self):
+        payload = json.loads(event_to_json(self.caption(speech_style="shout")))
+        with self.assertRaises(GuildHubProtocolError):
+            parse_publish({"type": "publish", "event": payload})
+
+    def test_v1_downconversion_omits_speech_style(self):
+        payload = event_payload_for_subprotocol(
+            self.caption(speech_style="whisper"),
+            SUBPROTOCOL,
+        )
+        self.assertNotIn("speech_style", payload)
+
+    def test_v2_caption_envelope_preserves_speech_style(self):
+        payload = caption_envelope(
+            "stream_one",
+            1,
+            self.caption(speech_style="shout"),
+            subprotocol=SUBPROTOCOL_V2,
+        )
+        restored = parse_caption_envelope(
+            payload,
+            subprotocol=SUBPROTOCOL_V2,
+        )
+        self.assertEqual("shout", restored.event.speech_style)
 
     def test_every_class_the_encoder_can_emit_is_accepted(self):
         for wow_class in CLASS_COLORS:

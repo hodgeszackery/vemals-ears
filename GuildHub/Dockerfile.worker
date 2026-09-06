@@ -151,6 +151,7 @@ COPY --chown=vemalsears:vemalsears \
     VoiceCaptions/credentials.py \
     VoiceCaptions/events.py \
     VoiceCaptions/member_overlay.py \
+    VoiceCaptions/prosody.py \
     VoiceCaptions/runtime_installer.py \
     VoiceCaptions/settings.py \
     VoiceCaptions/voice_captions.py \

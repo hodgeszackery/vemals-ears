@@ -447,6 +447,15 @@ class HealthReportingSink:
             return self._fail()
         if not isinstance(event, SessionEvent):
             return True
+        if event.state == "stopped":
+            # The publisher is queued. Confirm this final state reached the
+            # relay before close() can tear down its socket and strand
+            # connected viewers on the previous active snapshot.
+            try:
+                if self._sink.flush() is not True:
+                    return self._fail()
+            except Exception:
+                return self._fail()
         try:
             if event.state in HEALTHY_STATES:
                 self._marker.set_state(event.state)

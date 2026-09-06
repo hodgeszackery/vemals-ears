@@ -4,6 +4,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
+import { Events } from "discord.js";
 import { VoiceConnectionStatus } from "@discordjs/voice";
 
 import { DiscordAdapterRuntime } from "../src/discord_runtime.js";
@@ -406,6 +407,69 @@ test("participant changes are remembered so a restart sees the current room", as
     manager.updateParticipants({ guildId: GUILD, participantIds: [ALICE, BOB] });
     const [entry] = new SessionLedger({ path: ledgerPath }).recallAll();
     assert.deepEqual(entry.participantIds.sort(), [ALICE, BOB].sort());
+  });
+});
+
+test("restart does not resurrect a departed starter as a phantom participant", async () => {
+  await withLedgerDir(async (ledgerPath) => {
+    const consent = new MemoryConsent();
+    const manager1 = new SessionManager({
+      captureHealthy: true,
+      consentLedger: consent,
+      sessionLedger: new SessionLedger({ path: ledgerPath }),
+    });
+    manager1.startSession({
+      guildId: GUILD,
+      voiceChannelId: VOICE,
+      controlChannelId: CONTROL,
+      startedBy: ALICE,
+      participantIds: [ALICE, BOB],
+    });
+    manager1.setConsent({ guildId: GUILD, userId: ALICE, granted: true });
+    manager1.setConsent({ guildId: GUILD, userId: BOB, granted: true });
+    manager1.updateParticipants({ guildId: GUILD, participantIds: [BOB] });
+
+    const sends = [];
+    const connections = [];
+    const guild = buildGuild({ memberIds: [BOB], sends });
+    const manager2 = new SessionManager({
+      captureHealthy: true,
+      consentLedger: consent,
+      sessionLedger: new SessionLedger({ path: ledgerPath }),
+    });
+    const runtime2 = buildRuntime({
+      sessionManager: manager2,
+      guild,
+      connections,
+      emitter: emitterEvents().emitter,
+    });
+    await runtime2.start();
+    try {
+      assert.deepEqual(
+        manager2.getSession(GUILD).participants.map(({ userId }) => userId),
+        [BOB],
+        "the old starter is stop authority, not current voice membership",
+      );
+      assert.equal(manager2.getSession(GUILD).phase, "active");
+      assert.equal(connections.length, 1);
+
+      guild.channels.cache.get(VOICE).members.delete(BOB);
+      const bob = { id: BOB, user: { id: BOB, bot: false } };
+      runtime2.client.emit(
+        Events.VoiceStateUpdate,
+        { id: BOB, member: bob, guild, channelId: VOICE },
+        { id: BOB, member: bob, guild, channelId: null },
+      );
+      await new Promise((resolve) => setTimeout(resolve, 50));
+
+      const empty = manager2.getSession(GUILD);
+      assert.deepEqual(empty.participants, []);
+      assert.equal(empty.phase, "paused");
+      assert.equal(empty.pauseReason, "voice_channel_empty");
+      assert.equal(runtime2.connections.has(GUILD), false);
+    } finally {
+      await runtime2.shutdown("test_complete");
+    }
   });
 });
 

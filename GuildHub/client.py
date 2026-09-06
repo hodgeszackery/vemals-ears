@@ -67,6 +67,7 @@ from GuildHub.pairing import (
     resolve_pair_link,
 )
 from GuildHub.protocol import (
+    CAPTION_SUBPROTOCOLS,
     CAPTION_PATH,
     MAX_CURSOR,
     MAX_STREAM_ID,
@@ -151,6 +152,15 @@ def _require_websockets() -> None:
             "from a source checkout run: python -m pip install -r "
             "GuildHub/requirements-client.txt"
         )
+
+
+def _require_caption_subprotocol(socket: Any) -> str:
+    subprotocol = getattr(socket, "subprotocol", None)
+    if subprotocol not in CAPTION_SUBPROTOCOLS:
+        raise GuildHubClientError(
+            "The guild server did not negotiate a caption protocol."
+        )
+    return subprotocol
 
 # This is the live signal. A notice frame cannot be used for a shutdown:
 # a message sent before close() is discarded by the client once the close
@@ -846,14 +856,14 @@ class GuildCaptionClient:
         requested_cursor = self._cursor
         async with self._connector(
             _socket_url(credentials.server_url, CAPTION_PATH),
-            subprotocols=[SUBPROTOCOL],
+            subprotocols=list(CAPTION_SUBPROTOCOLS),
             max_size=MAX_WIRE_BYTES,
             open_timeout=self._auth_timeout,
             close_timeout=3,
         ) as socket:
             self._active_socket = socket
             try:
-                _require_subprotocol(socket)
+                subprotocol = _require_caption_subprotocol(socket)
                 await socket.send(
                     encode_message(
                         {
@@ -967,7 +977,10 @@ class GuildCaptionClient:
                                 )
                             self._cursor = advance.cursor
                             continue
-                        envelope = parse_caption_envelope(payload)
+                        envelope = parse_caption_envelope(
+                            payload,
+                            subprotocol=subprotocol,
+                        )
                     except (
                         GuildHubAuthenticationError,
                         GuildHubVoiceChannelRequiredError,

@@ -12,7 +12,7 @@ from unittest.mock import patch
 
 from VoiceCaptions.coordinator import NodeAdapterCapability
 from VoiceCaptions.credentials import DiscordCredentials
-from VoiceCaptions.events import CaptionEvent
+from VoiceCaptions.events import CaptionEvent, SessionEvent
 from VoiceCaptions.member_overlay import _OVERLAY_STOP, OverlaySink
 from VoiceCaptions.stt import BackendCapability, WhisperCppConfig
 from VoiceCaptions.voice_captions import (
@@ -52,6 +52,7 @@ class FakeOverlay:
     def __init__(self):
         self.closed = False
         self.events = []
+        self.events_at_close = None
 
     def send(self, event):
         self.events.append(event)
@@ -61,6 +62,7 @@ class FakeOverlay:
         return not self.closed
 
     def close(self):
+        self.events_at_close = tuple(self.events)
         self.closed = True
 
 
@@ -595,6 +597,11 @@ class OverlaySinkTests(unittest.TestCase):
         self.assertEqual(0, result)
         self.assertEqual(1, len(calls))
         self.assertTrue(overlay.closed)
+        self.assertEqual(
+            (SessionEvent("stopped"),),
+            overlay.events_at_close,
+            "a successful service stop must reach viewers before the publisher closes",
+        )
         self.assertIn("Vemal's Ears host ready", output.getvalue())
         self.assertNotIn(CREDENTIALS.bot_token, output.getvalue())
 

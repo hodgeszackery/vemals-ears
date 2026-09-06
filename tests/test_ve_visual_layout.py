@@ -8,6 +8,9 @@ No screenshots, pairing credentials, or live caption services are involved.
 from contextlib import contextmanager
 import itertools
 import json
+from pathlib import Path
+import subprocess
+import sys
 import tkinter as tk
 from tkinter import font as tkfont
 import unittest
@@ -18,6 +21,7 @@ from tests.support.companion import isolated_companion, load_companion
 
 SCALES = (1.0, 1.25, 1.5)
 LOGICAL_SIZES = ((900, 760), (760, 640))
+ROOT = Path(__file__).resolve().parents[1]
 
 
 def buttons_under(widget):
@@ -208,6 +212,30 @@ class VemalsVisualLayoutTests(unittest.TestCase):
             self.assertEqual("disabled", str(button.cget("state")))
             button.configure(state="normal")
             self.assert_buttons_fit(root)
+
+    def test_overlay_preview_helper_starts_and_exits(self):
+        if sys.platform != "win32":
+            self.skipTest("The caption preview helper is Windows-only.")
+        completed = subprocess.run(
+            [
+                sys.executable,
+                "-E",
+                "-s",
+                "-B",
+                str(ROOT / "packaging" / "preview_caption_ui.py"),
+                "overlay",
+            ],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            timeout=15,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+        self.assertEqual(
+            0,
+            completed.returncode,
+            (completed.stderr or "") + (completed.stdout or ""),
+        )
 
 
 

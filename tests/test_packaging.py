@@ -55,6 +55,39 @@ class CorrespondingSourceTests(unittest.TestCase):
                 for relative in build_release.VEMALS_EARS_MEMBER_APP_FILES:
                     self.assertEqual(package.read('VemalsEars/' + relative), source.read('VemalsEars-source/' + relative))
 
+    def test_member_payload_imports_speech_style_dependencies_without_the_checkout(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            with mock.patch.object(build_release, 'DIST', root):
+                member, missing = build_release.build_member_companion()
+            self.assertEqual([], missing)
+            payload = root / 'payload'
+            with zipfile.ZipFile(member) as package:
+                for relative in build_release.VEMALS_EARS_MEMBER_APP_FILES:
+                    destination = payload / relative
+                    destination.parent.mkdir(parents=True, exist_ok=True)
+                    destination.write_bytes(package.read('VemalsEars/' + relative))
+            probe = "\n".join((
+                "import pathlib, sys",
+                "root = pathlib.Path(sys.argv[1]).resolve()",
+                "sys.path.insert(0, str(root))",
+                "from VoiceCaptions.events import CaptionEvent",
+                "from VoiceCaptions.prosody import SpeechStyleDetector",
+                "assert CaptionEvent.__dataclass_fields__['speech_style']",
+                "assert SpeechStyleDetector().classify_and_observe('speaker', -20.0) == 'normal'",
+                "for name, module in tuple(sys.modules.items()):",
+                "    if name.split('.')[0] == 'VoiceCaptions':",
+                "        assert pathlib.Path(module.__file__).resolve().is_relative_to(root), name",
+                "print('MEMBER-PROSODY-IMPORT-OK')",
+            ))
+            result = subprocess.run(
+                [sys.executable, '-I', '-S', '-B', '-c', probe, str(payload)],
+                cwd=payload, capture_output=True, text=True, timeout=30,
+                creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0),
+            )
+            self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+            self.assertIn('MEMBER-PROSODY-IMPORT-OK', result.stdout)
+
     def test_source_archive_excludes_unlisted_and_operator_files_even_inside_build_roots(self):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)

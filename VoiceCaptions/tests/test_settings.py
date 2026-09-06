@@ -6,6 +6,7 @@ from pathlib import Path
 
 from VoiceCaptions.layout import DEFAULT_METRICS
 from VoiceCaptions.settings import (
+    CAPTION_BACKGROUND_OPACITIES,
     DEFAULT_SPEAK_HOTKEY,
     MAX_CAPTION_FONT_SIZE,
     MAX_VISIBLE_SPEAKERS,
@@ -53,6 +54,10 @@ class SettingsTests(unittest.TestCase):
                     "caption_hold_seconds",
                     "max_visible_speakers",
                     "caption_font_size",
+                    "caption_font_family",
+                    "caption_text_color",
+                    "caption_background_color",
+                    "caption_background_opacity",
                     "muted",
                     # Opaque local HMAC tokens selected by the member. The
                     # separate bounded directory holds only their visible
@@ -114,6 +119,81 @@ class SettingsTests(unittest.TestCase):
                 expected = OverlaySettings(caption_font_size=size)
                 self.assertTrue(save_settings(expected, path))
                 self.assertEqual(size, load_settings(path).caption_font_size)
+
+    def test_caption_appearance_round_trips(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "settings.json"
+            expected = OverlaySettings(
+                caption_font_family="Verdana",
+                caption_text_color="#A1B2C3",
+                caption_background_color="#102030",
+                caption_background_opacity=75,
+            )
+            self.assertTrue(save_settings(expected, path))
+            loaded = load_settings(path)
+            self.assertEqual("Verdana", loaded.caption_font_family)
+            self.assertEqual("#a1b2c3", loaded.caption_text_color)
+            self.assertEqual("#102030", loaded.caption_background_color)
+            self.assertEqual(75, loaded.caption_background_opacity)
+
+    def test_invalid_appearance_values_fall_back_independently(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "settings.json"
+            invalid = (
+                ("", "red", "#12345g", 0),
+                (None, None, 123, 50.0),
+                ("x" * 97, "#123", "#ffffff00", True),
+                ("\n", "#010203", "#010203", 101),
+            )
+            for family, text, background, opacity in invalid:
+                path.write_text(
+                    json.dumps(
+                        {
+                            "schema": 1,
+                            "anchor_x": 0.25,
+                            "anchor_y": 0.75,
+                            "caption_font_family": family,
+                            "caption_text_color": text,
+                            "caption_background_color": background,
+                            "caption_background_opacity": opacity,
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+                loaded = load_settings(path)
+                self.assertEqual(
+                    DEFAULT_SETTINGS.caption_font_family,
+                    loaded.caption_font_family,
+                )
+                self.assertEqual(
+                    DEFAULT_SETTINGS.caption_text_color,
+                    loaded.caption_text_color,
+                )
+                self.assertEqual(
+                    DEFAULT_SETTINGS.caption_background_color,
+                    loaded.caption_background_color,
+                )
+                self.assertEqual(
+                    DEFAULT_SETTINGS.caption_background_opacity,
+                    loaded.caption_background_opacity,
+                )
+
+    def test_every_supported_background_opacity_round_trips(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "settings.json"
+            for opacity in CAPTION_BACKGROUND_OPACITIES:
+                self.assertTrue(
+                    save_settings(
+                        OverlaySettings(
+                            caption_background_opacity=opacity
+                        ),
+                        path,
+                    )
+                )
+                self.assertEqual(
+                    opacity,
+                    load_settings(path).caption_background_opacity,
+                )
 
     def test_an_out_of_range_font_size_falls_back_without_touching_the_rest(self):
         """A bad font size must not cost the member their other settings.
@@ -183,6 +263,22 @@ class SettingsTests(unittest.TestCase):
             # just by updating.
             self.assertEqual(
                 DEFAULT_SETTINGS.caption_font_size, loaded.caption_font_size
+            )
+            self.assertEqual(
+                DEFAULT_SETTINGS.caption_font_family,
+                loaded.caption_font_family,
+            )
+            self.assertEqual(
+                DEFAULT_SETTINGS.caption_text_color,
+                loaded.caption_text_color,
+            )
+            self.assertEqual(
+                DEFAULT_SETTINGS.caption_background_color,
+                loaded.caption_background_color,
+            )
+            self.assertEqual(
+                DEFAULT_SETTINGS.caption_background_opacity,
+                loaded.caption_background_opacity,
             )
 
     def test_invalid_display_values_default_independently(self):

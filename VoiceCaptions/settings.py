@@ -42,12 +42,20 @@ MAX_ANCHOR_EXECUTABLE_CHARS = 64
 MIN_CAPTION_FONT_SIZE = 6
 MAX_CAPTION_FONT_SIZE = 48
 DEFAULT_CAPTION_FONT_SIZE = 10
+DEFAULT_CAPTION_FONT_FAMILY = "Segoe UI"
+DEFAULT_CAPTION_TEXT_COLOR = "#ffffff"
+DEFAULT_CAPTION_BACKGROUND_COLOR = "#11161d"
+CAPTION_BACKGROUND_OPACITIES = (25, 50, 75, 100)
+DEFAULT_CAPTION_BACKGROUND_OPACITY = 50
+MAX_CAPTION_FONT_FAMILY_CHARS = 96
 # Caption placement is intentionally allowed beyond the selected game window.
 # This is intentionally not a display boundary. The generous guard prevents a
 # corrupted file from handing the window manager an overflowing coordinate.
 MAX_SAFE_POSITION_RATIO = 1000.0
 MAX_MUTED_SPEAKERS = 128
 SPEAKER_TOKEN_PATTERN = re.compile(r"^[0-9a-f]{24}$")
+COLOR_PATTERN = re.compile(r"^#[0-9a-fA-F]{6}$")
+RESERVED_TRANSPARENT_COLOR = "#010203"
 
 
 @dataclass(frozen=True)
@@ -70,6 +78,12 @@ class OverlaySettings:
     # The caption text size. Every other font and the row heights scale
     # from it, so a bigger number is a bigger overlay, not clipped text.
     caption_font_size: int = DEFAULT_CAPTION_FONT_SIZE
+    # Appearance is local display state. The text colour applies only to
+    # caption copy; class-coloured names and role accents stay intact.
+    caption_font_family: str = DEFAULT_CAPTION_FONT_FAMILY
+    caption_text_color: str = DEFAULT_CAPTION_TEXT_COLOR
+    caption_background_color: str = DEFAULT_CAPTION_BACKGROUND_COLOR
+    caption_background_opacity: int = DEFAULT_CAPTION_BACKGROUND_OPACITY
     # The anchor chain's first two decisions. Mode "window" reads
     # anchor_executable; mode "monitor" reads anchor_monitor; "auto"
     # reads neither. A mode that cannot resolve falls through to
@@ -248,6 +262,36 @@ def _valid_font_size(value) -> int | None:
     return value
 
 
+def _valid_font_family(value: object) -> str:
+    if not isinstance(value, str):
+        return DEFAULT_SETTINGS.caption_font_family
+    family = value.strip()
+    if (
+        not family
+        or len(family) > MAX_CAPTION_FONT_FAMILY_CHARS
+        or not family.isprintable()
+    ):
+        return DEFAULT_SETTINGS.caption_font_family
+    return family
+
+
+def _valid_color(value: object, fallback: str) -> str:
+    if not isinstance(value, str) or not COLOR_PATTERN.fullmatch(value):
+        return fallback
+    colour = value.lower()
+    return fallback if colour == RESERVED_TRANSPARENT_COLOR else colour
+
+
+def _valid_background_opacity(value: object) -> int:
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, int)
+        or value not in CAPTION_BACKGROUND_OPACITIES
+    ):
+        return DEFAULT_SETTINGS.caption_background_opacity
+    return int(value)
+
+
 def _valid_anchor_mode(value: object) -> str:
     return value if value in ANCHOR_MODES else DEFAULT_SETTINGS.anchor_mode
 
@@ -333,6 +377,18 @@ def load_settings(path: Path | None = None) -> OverlaySettings:
     caption_font_size = _valid_font_size(payload.get("caption_font_size"))
     if caption_font_size is None:
         caption_font_size = DEFAULT_SETTINGS.caption_font_size
+    caption_font_family = _valid_font_family(payload.get("caption_font_family"))
+    caption_text_color = _valid_color(
+        payload.get("caption_text_color"),
+        DEFAULT_SETTINGS.caption_text_color,
+    )
+    caption_background_color = _valid_color(
+        payload.get("caption_background_color"),
+        DEFAULT_SETTINGS.caption_background_color,
+    )
+    caption_background_opacity = _valid_background_opacity(
+        payload.get("caption_background_opacity")
+    )
     growth = _valid_growth(payload.get("growth"))
     anchor_x = _valid_ratio(payload.get("anchor_x"))
     anchor_y = _valid_ratio(payload.get("anchor_y"))
@@ -344,6 +400,10 @@ def load_settings(path: Path | None = None) -> OverlaySettings:
             caption_hold_seconds=caption_hold_seconds,
             max_visible_speakers=max_visible_speakers,
             caption_font_size=caption_font_size,
+            caption_font_family=caption_font_family,
+            caption_text_color=caption_text_color,
+            caption_background_color=caption_background_color,
+            caption_background_opacity=caption_background_opacity,
             muted=muted,
             muted_speaker_ids=muted_speaker_ids,
             anchor_mode=anchor_mode,
@@ -358,6 +418,10 @@ def load_settings(path: Path | None = None) -> OverlaySettings:
         caption_hold_seconds=caption_hold_seconds,
         max_visible_speakers=max_visible_speakers,
         caption_font_size=caption_font_size,
+        caption_font_family=caption_font_family,
+        caption_text_color=caption_text_color,
+        caption_background_color=caption_background_color,
+        caption_background_opacity=caption_background_opacity,
         muted=muted,
         muted_speaker_ids=muted_speaker_ids,
         anchor_mode=anchor_mode,
@@ -378,6 +442,18 @@ def save_settings(settings: OverlaySettings, path: Path | None = None) -> bool:
     caption_font_size = _valid_font_size(settings.caption_font_size)
     if caption_font_size is None:
         caption_font_size = DEFAULT_SETTINGS.caption_font_size
+    caption_font_family = _valid_font_family(settings.caption_font_family)
+    caption_text_color = _valid_color(
+        settings.caption_text_color,
+        DEFAULT_SETTINGS.caption_text_color,
+    )
+    caption_background_color = _valid_color(
+        settings.caption_background_color,
+        DEFAULT_SETTINGS.caption_background_color,
+    )
+    caption_background_opacity = _valid_background_opacity(
+        settings.caption_background_opacity
+    )
     anchor_x = _valid_ratio(settings.anchor_x)
     if anchor_x is None:
         anchor_x = DEFAULT_SETTINGS.anchor_x
@@ -392,6 +468,10 @@ def save_settings(settings: OverlaySettings, path: Path | None = None) -> bool:
         "caption_hold_seconds": round(caption_hold_seconds, 3),
         "max_visible_speakers": max_visible_speakers,
         "caption_font_size": caption_font_size,
+        "caption_font_family": caption_font_family,
+        "caption_text_color": caption_text_color,
+        "caption_background_color": caption_background_color,
+        "caption_background_opacity": caption_background_opacity,
         "muted": settings.muted is True,
         "muted_speaker_ids": list(
             _valid_muted_speaker_ids(settings.muted_speaker_ids)

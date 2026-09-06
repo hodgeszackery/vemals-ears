@@ -37,6 +37,7 @@ from .settings import default_consent_state_path, default_mapping_state_path
 CONSENT_STATE_PATH_ENV = "CAPTIONS_CONSENT_STATE_PATH"
 MAPPING_STATE_PATH_ENV = "CAPTIONS_MAPPING_STATE_PATH"
 from .events import CaptionEvent, ProtocolEvent, SessionEvent
+from .prosody import NORMAL_STYLE, SpeechStyleDetector, speech_level_dbfs
 from .stt import AudioSegment, TranscriptResult, TranscriptionService
 from .stt.vocabulary import apply_pronunciations
 from .stt.contracts import (
@@ -260,13 +261,24 @@ class _SegmentParts:
     """
 
     slots: list[str | None] = field(default_factory=list)
+    levels: list[float | None] = field(default_factory=list)
     total: int | None = None
     shown: int = 0
+    speech_style: str | None = None
 
-    def fill(self, part_index: int, text: str, *, last: bool) -> None:
+    def fill(
+        self,
+        part_index: int,
+        text: str,
+        *,
+        level_dbfs: float | None,
+        last: bool,
+    ) -> None:
         while len(self.slots) < part_index:
             self.slots.append(None)
+            self.levels.append(None)
         self.slots[part_index - 1] = text
+        self.levels[part_index - 1] = level_dbfs
         if last:
             self.total = part_index
 
@@ -1071,6 +1083,9 @@ class VoiceCaptionCoordinator:
         self._segments_by_task: dict[asyncio.Task[None], CompletedSegment] = {}
         # Keyed by global_sequence, which is unique across every speaker.
         self._parts: dict[int, _SegmentParts] = {}
+        self._speech_styles = SpeechStyleDetector()
+        self._speech_style_speakers: set[str] | None = None
+        self._speech_style_suppressed: set[str] = set()
         self._failure: CoordinatorError | None = None
         self._failure_event = asyncio.Event()
         self._closed = False
@@ -1138,8 +1153,34 @@ class VoiceCaptionCoordinator:
                 self._adapter_ready = True
             if envelope.event_type in _VOICE_STATE_TYPES:
                 self._report_voice_state(envelope.event_type)
+            if envelope.event_type in {
+                "consent.declined",
+                "consent.forgotten",
+            }:
+                user_id = envelope.payload.get("userId")
+                if isinstance(user_id, str) and _USER_ID.fullmatch(user_id):
+                    speaker_id = self._speaker_token(user_id)
+                    self._speech_styles.forget(speaker_id)
+                    if (
+                        self._speech_style_speakers is not None
+                        and speaker_id in self._speech_style_speakers
+                    ):
+                        # An STT task already in flight can finish after the
+                        # withdrawal event. Keep it from recreating the
+                        # derived baseline until this person grants again.
+                        self._speech_style_suppressed.add(speaker_id)
+            elif envelope.event_type == "consent.granted":
+                user_id = envelope.payload.get("userId")
+                if isinstance(user_id, str) and _USER_ID.fullmatch(user_id):
+                    self._speech_style_suppressed.discard(
+                        self._speaker_token(user_id)
+                    )
             event = _session_event(envelope)
             if event is not None:
+                if event.state == "stopped":
+                    self._speech_styles.clear()
+                    self._speech_style_speakers = set()
+                    self._speech_style_suppressed.clear()
                 self._emit(event)
             capture_blocked = (
                 envelope.event_type == "health.changed"
@@ -1187,10 +1228,13 @@ class VoiceCaptionCoordinator:
             or len(set(participant_ids)) != len(participant_ids)
         ):
             raise CoordinatorError("invalid_audience")
+        tokens = tuple(self._speaker_token(user_id) for user_id in participant_ids)
+        self._speech_styles.retain(tokens)
+        self._speech_style_speakers = set(tokens)
+        self._speech_style_suppressed.intersection_update(tokens)
         update = getattr(self.event_sink, "update_audience", None)
         if not callable(update):
             return
-        tokens = tuple(self._speaker_token(user_id) for user_id in participant_ids)
         try:
             updated = update(generation, revision, tokens)
         except Exception:
@@ -1264,6 +1308,7 @@ class VoiceCaptionCoordinator:
         try:
             speaker_id = self._speaker_token(completed.speaker.user_id)
             text = ""
+            level_dbfs = speech_level_dbfs(completed.pcm)
             # An empty last part is the assembler saying the tail after
             # the final cut was too short to be speech; nothing to send.
             if completed.pcm:
@@ -1299,7 +1344,7 @@ class VoiceCaptionCoordinator:
                         self._report_drop_reason("invalid_transcript")
                     else:
                         text = result.text
-            self._complete_part(completed, speaker_id, text)
+            self._complete_part(completed, speaker_id, text, level_dbfs)
         except asyncio.CancelledError:
             raise
         except CoordinatorError:
@@ -1361,12 +1406,21 @@ class VoiceCaptionCoordinator:
             pass
 
     def _complete_part(
-        self, completed: CompletedSegment, speaker_id: str, text: str
+        self,
+        completed: CompletedSegment,
+        speaker_id: str,
+        text: str,
+        level_dbfs: float | None,
     ) -> None:
         parts = self._parts.get(completed.global_sequence)
         if parts is None:
             parts = self._parts[completed.global_sequence] = _SegmentParts()
-        parts.fill(completed.part_index, text, last=completed.last)
+        parts.fill(
+            completed.part_index,
+            text,
+            level_dbfs=level_dbfs,
+            last=completed.last,
+        )
         if parts.complete:
             self._parts.pop(completed.global_sequence, None)
             final = True
@@ -1400,6 +1454,33 @@ class VoiceCaptionCoordinator:
         transcript = _safe_transcript(joined, 320, "invalid_transcript")
         if not transcript:
             return
+        if parts.speech_style is None:
+            utterance_level = next(
+                (
+                    level
+                    for text, level in zip(
+                        parts.slots[:prefix],
+                        parts.levels[:prefix],
+                    )
+                    if text and text.strip() and level is not None
+                ),
+                None,
+            )
+            style_allowed = (
+                speaker_id not in self._speech_style_suppressed
+                and (
+                    self._speech_style_speakers is None
+                    or speaker_id in self._speech_style_speakers
+                )
+            )
+            parts.speech_style = (
+                self._speech_styles.classify_and_observe(
+                    speaker_id,
+                    utterance_level,
+                )
+                if style_allowed
+                else NORMAL_STYLE
+            )
         self._emit(
             CaptionEvent(
                 speaker_id=speaker_id,
@@ -1412,6 +1493,7 @@ class VoiceCaptionCoordinator:
                 + (_FINAL_SLOT if final else prefix),
                 timestamp=self.clock(),
                 wow_class=completed.speaker.wow_class,
+                speech_style=parts.speech_style,
                 audience_generation=completed.audience_generation,
                 audience_revision=completed.audience_revision,
             )
@@ -1484,6 +1566,9 @@ class VoiceCaptionCoordinator:
             completed.wipe()
         self._segments_by_task.clear()
         self._parts.clear()
+        self._speech_styles.clear()
+        self._speech_style_speakers = set()
+        self._speech_style_suppressed.clear()
         await self.stt_service.close()
 
 

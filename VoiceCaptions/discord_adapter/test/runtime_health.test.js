@@ -1,7 +1,13 @@
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
 import test from "node:test";
-import { Events, MessageFlags } from "discord.js";
+import {
+  ChannelType,
+  Client,
+  Events,
+  GatewayIntentBits,
+  MessageFlags,
+} from "discord.js";
 import { VoiceConnectionStatus } from "@discordjs/voice";
 
 import { captionsCommandJson } from "../src/command_schema.js";
@@ -1341,6 +1347,185 @@ test("participant pause is emitted only after Discord capture is destroyed", asy
 
   assert.deepEqual(order, ["connection.destroyed", "session.paused"]);
   assert.equal(sessions.getSession(guildId).phase, "paused");
+});
+
+test("Discord VoiceStateUpdate preserves remaining consented members and capture", async () => {
+  const guildId = "723456789012345678";
+  const voiceChannelId = "733456789012345678";
+  const controlChannelId = "743456789012345678";
+  const starterId = "753456789012345678";
+  const remainingId = "763456789012345678";
+  const botId = "923456789012345678";
+  const handled = deferred();
+  const output = new JsonlEmitter({
+    writer: {
+      write: (chunk) => {
+        if (JSON.parse(chunk).type === "session.participants.changed") {
+          handled.resolve();
+        }
+      },
+    },
+  });
+  const client = new Client({
+    intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildVoiceStates],
+  });
+  client.user = client.users._add({
+    id: botId,
+    username: "caption-bot",
+    discriminator: "0",
+    avatar: null,
+    bot: true,
+  });
+  const memberPayload = (id, bot = false) => ({
+    user: { id, username: id, discriminator: "0", avatar: null, bot },
+    roles: [guildId],
+    joined_at: "2026-09-05T00:00:00.000Z",
+    deaf: false,
+    mute: false,
+    flags: 0,
+  });
+  const voiceStatePayload = (id) => ({
+    user_id: id,
+    channel_id: voiceChannelId,
+    session_id: `voice-${id}`,
+    deaf: false,
+    mute: false,
+    self_deaf: false,
+    self_mute: false,
+    self_video: false,
+    suppress: false,
+  });
+  const guild = client.guilds._add({
+    id: guildId,
+    name: "Voice cache fixture",
+    unavailable: false,
+    owner_id: starterId,
+    roles: [{
+      id: guildId,
+      name: "@everyone",
+      color: 0,
+      hoist: false,
+      position: 0,
+      permissions: "0",
+      managed: false,
+      mentionable: false,
+    }],
+    emojis: [],
+    stickers: [],
+    features: [],
+    channels: [{
+      id: voiceChannelId,
+      guild_id: guildId,
+      type: ChannelType.GuildVoice,
+      name: "Voice",
+      position: 0,
+      permission_overwrites: [],
+      bitrate: 64_000,
+      user_limit: 0,
+      rtc_region: null,
+      nsfw: false,
+    }],
+    // Discord includes the bot and every user in voice in Guild Create even
+    // without the privileged GuildMembers intent. discord.js then resolves
+    // BaseGuildVoiceChannel.members from these two caches.
+    members: [
+      memberPayload(botId, true),
+      memberPayload(starterId),
+      memberPayload(remainingId),
+    ],
+    voice_states: [
+      voiceStatePayload(botId),
+      voiceStatePayload(starterId),
+      voiceStatePayload(remainingId),
+    ],
+  });
+  const voiceChannel = guild.channels.cache.get(voiceChannelId);
+  const initialParticipantIds = [...voiceChannel.members.values()]
+    .filter((member) => !member.user.bot)
+    .map((member) => member.id);
+  assert.deepEqual(initialParticipantIds, [starterId, remainingId]);
+
+  const sessions = new SessionManager({ captureHealthy: true });
+  const runtime = new DiscordAdapterRuntime({
+    config: {
+      token: "unused-test-token",
+      applicationId: "123456789012345678",
+      guildId,
+      silenceMs: 750,
+      connectTimeoutMs: 5_000,
+      maxSegmentMs: 30_000,
+    },
+    emitter: output,
+    audioSink: healthySink(),
+    client,
+    sessionManager: sessions,
+  });
+
+  sessions.startSession({
+    guildId,
+    voiceChannelId,
+    controlChannelId,
+    startedBy: starterId,
+    participantIds: initialParticipantIds,
+  });
+  sessions.setConsent({ guildId, userId: starterId, granted: true });
+  sessions.setConsent({ guildId, userId: remainingId, granted: true });
+
+  const captureFor = (userId) => {
+    const session = sessions.getSession(guildId);
+    const segment = runtime.speakers.begin({
+      guildId,
+      userId,
+      audienceGeneration: session.generation,
+      audienceRevision: session.audienceRevision,
+    });
+    const stream = { destroyed: false, destroy() { this.destroyed = true; } };
+    runtime.streams.set(segment.segmentId, {
+      segment,
+      stream,
+      timer: null,
+      finished: false,
+    });
+    return { segment, stream };
+  };
+  const starterCapture = captureFor(starterId);
+  const remainingCapture = captureFor(remainingId);
+
+  let destroyCount = 0;
+  runtime.connections.set(guildId, {
+    voiceChannelId,
+    connection: { destroy: () => { destroyCount += 1; } },
+  });
+  // Exercise discord.js's real action: it clones the old VoiceState, patches
+  // the voice-state and member caches, and only then emits VoiceStateUpdate.
+  client.actions.VoiceStateUpdate.handle({
+    ...voiceStatePayload(starterId),
+    guild_id: guildId,
+    channel_id: null,
+    member: memberPayload(starterId),
+  });
+  await handled.promise;
+
+  assert.deepEqual(
+    [...voiceChannel.members.keys()],
+    [botId, remainingId],
+    "the real post-action channel roster retains the remaining member",
+  );
+
+  const session = sessions.getSession(guildId);
+  assert.equal(session.phase, "active");
+  assert.equal(session.startedBy, starterId, "leaving does not transfer stop authority");
+  assert.deepEqual(
+    session.participants.map(({ userId }) => userId),
+    [remainingId],
+  );
+  assert.equal(sessions.canCapture({ guildId, userId: remainingId }), true);
+  assert.equal(destroyCount, 0, "the bot must remain in voice for the remaining speaker");
+  assert.equal(runtime.connections.has(guildId), true);
+  assert.equal(starterCapture.stream.destroyed, true, "the leaver's capture ends immediately");
+  assert.equal(runtime.streams.has(starterCapture.segment.segmentId), false);
+  assert.equal(remainingCapture.stream.destroyed, false, "remaining capture keeps flowing");
+  assert.equal(runtime.streams.has(remainingCapture.segment.segmentId), true);
 });
 
 test("blocked pipeline health is emitted only after capture teardown", async () => {
