@@ -1002,6 +1002,31 @@ def _failure_code(base: str, detail: str) -> str:
     return base + ":" + detail if detail else base
 
 
+_SAFE_CLOSE_CODE = range(0, 10_000)
+
+
+def _failure_detail(payload: Any) -> str:
+    """The reason word plus what the adapter knew about a failed voice join.
+
+    Fifty-two joins failed in a row on 2026-09-06 and every line said
+    voice_connection_failed and nothing else, because nothing carried the
+    connection's state across. Only enum-shaped words and a Discord close
+    code pass; anything else in the payload is not a word for the log.
+    """
+    words = [_reason_word(payload)]
+    if isinstance(payload, dict):
+        state = payload.get("voiceState")
+        if isinstance(state, str) and _SAFE_REASON.fullmatch(state.lower()):
+            words.append(state.lower())
+        code = payload.get("closeCode")
+        if isinstance(code, int) and not isinstance(code, bool) and code in _SAFE_CLOSE_CODE:
+            words.append(str(code))
+        cause = payload.get("cause")
+        if isinstance(cause, str) and _SAFE_FAULT.fullmatch(cause):
+            words.append(cause)
+    return ":".join(word for word in words if word)
+
+
 def _is_expected_startup_block(envelope: AdapterEnvelope) -> bool:
     """Recognize the adapter's intentional pre-login health announcement."""
     return (
@@ -1189,7 +1214,7 @@ class VoiceCaptionCoordinator:
             )
             if envelope.event_type == "adapter.failed" or capture_blocked:
                 raise CoordinatorError(
-                    _failure_code("adapter_failed", _reason_word(envelope.payload))
+                    _failure_code("adapter_failed", _failure_detail(envelope.payload))
                 )
             return None
         except CoordinatorError:
