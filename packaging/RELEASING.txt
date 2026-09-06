@@ -38,8 +38,8 @@ Installer/README.md describes the signing checks and release artifacts.
 Every member ZIP and installer carries Source/vemals-ears-source.zip matching
 its application and native build inputs, plus runtime/Source for the bundled
 dependencies. A standalone vemals-ears-source.zip is also produced. Keep these
-embedded files when mirroring or repackaging a release; a private repository
-link does not provide source access to recipients. See docs/SOURCE.txt.
+embedded files when mirroring or repackaging a release; a repository link
+does not give recipients the matching source. See docs/SOURCE.txt.
 Installer/runtime-sources.lock.json pins upstream source archives to the
 runtime lock. Update both locks when changing dependencies. Distribution
 validation rejects missing notices, missing source or mismatched source pins.

@@ -15,7 +15,7 @@ vemals-ears-source.zip. Source access does not require a GitHub account,
 repository permission, signing certificate or payment.
 
 The development repository is https://github.com/hodgeszackery/vemals-ears.
-It may be private. It is not the source-access mechanism promised to people
+It is public, but it is not the source-access mechanism promised to people
 who receive a release. A source archive from an unrelated later commit is
 not a replacement for the matching source provided with your copy.
 

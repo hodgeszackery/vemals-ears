@@ -1970,7 +1970,7 @@ class FailureReasonTests(unittest.IsolatedAsyncioTestCase):
         reason field can carry a user id, a path, or free text."""
         for unsafe in (
             "111111111111111111-private-reason",
-            "C:/Users/Shino/secret.txt",
+            "C:/Users/example/secret.txt",
             "Discord said: no",
             "x" * 60,
             "UPPER",

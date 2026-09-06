@@ -57,7 +57,7 @@ GPL rights. You may rebuild, modify and redistribute under GPL-3.0-only. Use
 unsigned build. Do not represent an unsigned or modified build as an official
 signed release. Matching client source and instructions are included in
 `app/Source/vemals-ears-source.zip` and `app/docs/SOURCE.txt` after installation.
-Recipients do not need the private GitHub repository or publisher's signing
+Recipients do not need the GitHub repository or publisher's signing
 credentials to rebuild; see `docs/SOURCE.txt`.
 
 Inno Setup 7.1.0 and the Visual Studio x64 C++ Build Tools must be installed for
