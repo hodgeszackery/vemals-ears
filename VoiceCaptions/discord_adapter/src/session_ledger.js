@@ -17,6 +17,10 @@ export const SESSION_LEDGER_VERSION = 1;
 const ID_PATTERN = /^\d{1,20}$/;
 const MAX_PARTICIPANTS = 512;
 
+// Consent prompt nonces are randomUUID() strings. Anything else reads as
+// "no prompt remembered", which resume answers with a fresh nonce.
+const NONCE_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+
 function isId(value) {
   return typeof value === "string" && ID_PATTERN.test(value);
 }
@@ -25,7 +29,14 @@ function validEntry(value) {
   if (!value || typeof value !== "object") {
     return null;
   }
-  const { voiceChannelId, controlChannelId, startedBy, participantIds, savedAt } = value;
+  const {
+    voiceChannelId,
+    controlChannelId,
+    startedBy,
+    participantIds,
+    savedAt,
+    consentPromptNonce,
+  } = value;
   if (![voiceChannelId, controlChannelId, startedBy].every(isId)) {
     return null;
   }
@@ -45,6 +56,10 @@ function validEntry(value) {
     startedBy,
     participantIds: [...new Set(participantIds)],
     savedAt,
+    consentPromptNonce:
+      typeof consentPromptNonce === "string" && NONCE_PATTERN.test(consentPromptNonce)
+        ? consentPromptNonce
+        : null,
   };
 }
 
@@ -121,6 +136,7 @@ export class SessionLedger {
       startedBy: session.startedBy,
       participantIds: (session.participants || []).map(({ userId }) => userId),
       savedAt: this.now().toISOString(),
+      consentPromptNonce: session.consentPromptNonce ?? null,
     });
     if (!entry) {
       return false;

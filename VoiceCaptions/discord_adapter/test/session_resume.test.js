@@ -218,12 +218,17 @@ test("a restart puts the bot back where it was, with consent intact", async () =
         "Alice's remembered consent makes the resumed session active",
       );
       assert.equal(connections.length, 1, "the bot must actually rejoin voice");
-      assert.equal(sends.length, 1, "the control channel must be told what happened");
-      assert.match(sends[0].content, /restarted and rejoined/);
-      assert.match(sends[0].content, /Consent is unchanged/);
-      assert.ok(
-        Array.isArray(sends[0].components) && sends[0].components.length === 1,
-        "the notice carries a working consent prompt for anyone still pending",
+      // Shino, 2026-09-06: reconnects stay silent. The consent prompt
+      // lives on without a notice to carry it.
+      assert.equal(sends.length, 0, "a restart posts nothing");
+      const prompt = runtime2.consentPrompts.get(GUILD);
+      assert.ok(prompt?.nonce, "a consent prompt is live for anyone still pending");
+      assert.equal(prompt.voiceChannelId, VOICE);
+      const remembered = JSON.parse(readFileSync(ledgerPath, "utf8"));
+      assert.equal(
+        remembered.sessions[GUILD].consentPromptNonce,
+        prompt.nonce,
+        "the live prompt is remembered for the next restart",
       );
     } finally {
       await runtime2.shutdown("test_complete");
@@ -275,7 +280,7 @@ test("resume never carries consent: without a remembered grant the bot waits", a
         "no remembered grant means nobody is captioned until they consent again",
       );
       assert.equal(connections.length, 0, "no consent, no voice connection");
-      assert.equal(sends.length, 1, "people are still told the bot is back");
+      assert.equal(sends.length, 0, "nobody is told: reconnects stay silent");
       for (const participant of manager2.getSession(GUILD).participants) {
         assert.equal(participant.consent, "pending");
       }
@@ -283,6 +288,75 @@ test("resume never carries consent: without a remembered grant the bot waits", a
       await runtime2.shutdown("test_complete");
     }
   });
+});
+
+test("the consent prompt minted before a restart is the one live after it", async () => {
+  // A restart posts no replacement prompt, so the buttons on the original
+  // /vem start message have to keep answering. The ledger carries the
+  // nonce across; a ledger written before nonces were kept gets a fresh
+  // one (the test above), and /vem consent works either way.
+  await withLedgerDir(async (ledgerPath) => {
+    const consent = new MemoryConsent();
+    const manager1 = new SessionManager({
+      captureHealthy: true,
+      consentLedger: consent,
+      sessionLedger: new SessionLedger({ path: ledgerPath }),
+    });
+    manager1.startSession({
+      guildId: GUILD,
+      voiceChannelId: VOICE,
+      controlChannelId: CONTROL,
+      startedBy: ALICE,
+      participantIds: [ALICE, BOB],
+    });
+    const nonce = "0f9d4c1e-6b7a-4e0d-9c3b-2a1f5e8d7c6b";
+    assert.equal(manager1.rememberConsentPrompt(GUILD, nonce), true);
+    assert.equal(
+      JSON.parse(readFileSync(ledgerPath, "utf8")).sessions[GUILD].consentPromptNonce,
+      nonce,
+    );
+
+    const sends = [];
+    const manager2 = new SessionManager({
+      captureHealthy: true,
+      consentLedger: consent,
+      sessionLedger: new SessionLedger({ path: ledgerPath }),
+    });
+    const runtime2 = buildRuntime({
+      sessionManager: manager2,
+      guild: buildGuild({ memberIds: [ALICE, BOB], sends }),
+      connections: [],
+      emitter: emitterEvents().emitter,
+    });
+    await runtime2.start();
+    try {
+      assert.equal(sends.length, 0);
+      assert.equal(
+        runtime2.consentPrompts.get(GUILD)?.nonce,
+        nonce,
+        "the buttons on the original /vem start message still answer",
+      );
+      assert.equal(manager2.getSession(GUILD)?.consentPromptNonce, nonce);
+    } finally {
+      await runtime2.shutdown("test_complete");
+    }
+  });
+});
+
+test("a malformed remembered nonce reads as no prompt", () => {
+  const ledger = new SessionLedger();
+  assert.equal(
+    ledger.remember({
+      guildId: GUILD,
+      voiceChannelId: VOICE,
+      controlChannelId: CONTROL,
+      startedBy: ALICE,
+      participants: [{ userId: ALICE }],
+      consentPromptNonce: "not-a-uuid",
+    }),
+    true,
+  );
+  assert.equal(ledger.recallAll()[0].consentPromptNonce, null);
 });
 
 test("a session remembered hours ago belongs to a raid that ended", async () => {

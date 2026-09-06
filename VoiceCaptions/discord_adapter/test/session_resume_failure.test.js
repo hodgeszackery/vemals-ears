@@ -11,8 +11,10 @@
 // worker.log said voice_connection_failed and nothing else.
 //
 // These pin the three halves of the fix: a failed join forgets the
-// resumable entry, the "rejoined" notice waits for a live connection, and
-// the failure carries the connection's last state as safe words.
+// resumable entry, the failure carries the connection's last state as
+// safe words, and - since 2026-09-06, when Shino asked for no outbound
+// messages beyond the consent and association dialogues - neither a
+// failed nor a successful rejoin posts anything at all.
 
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
@@ -221,22 +223,15 @@ test("a resumed session whose join fails is forgotten and not announced as rejoi
         "a session whose join failed must not resume again",
       );
 
-      // No "rejoined" announcement, no dead consent buttons; one honest notice.
-      assert.equal(sends.length, 1);
-      assert.doesNotMatch(sends[0].content, /rejoined this voice channel/);
-      assert.match(sends[0].content, /could not rejoin/);
-      assert.match(sends[0].content, /\/vem start/);
-      assert.ok(
-        !sends[0].components || sends[0].components.length === 0,
-        "no consent prompt for a session that does not exist",
-      );
+      // Nothing is posted about it: reconnects and disconnects stay silent.
+      assert.equal(sends.length, 0);
     } finally {
       await runtime.shutdown("test_complete");
     }
   });
 });
 
-test("a join that succeeds still resumes and still announces, exactly as before", async () => {
+test("a join that succeeds still resumes, silently", async () => {
   await withLedgerDir(async (ledgerPath) => {
     const consent = new MemoryConsent();
     await rememberedSession(ledgerPath, consent);
@@ -267,9 +262,11 @@ test("a join that succeeds still resumes and still announces, exactly as before"
     await runtime.start();
     try {
       assert.equal(manager.getSession(GUILD)?.phase, "active");
-      assert.equal(sends.length, 1);
-      assert.match(sends[0].content, /restarted and rejoined/);
-      assert.equal(sends[0].components?.length, 1, "the consent prompt still ships on a real rejoin");
+      assert.equal(sends.length, 0, "no restart notice: reconnects stay silent");
+      assert.ok(
+        runtime.consentPrompts.get(GUILD)?.nonce,
+        "a consent prompt is live for anyone still pending",
+      );
       const remembered = JSON.parse(readFileSync(ledgerPath, "utf8"));
       assert.ok(remembered.sessions?.[GUILD], "a live session stays resumable");
     } finally {

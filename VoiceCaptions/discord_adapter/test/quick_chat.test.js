@@ -145,7 +145,10 @@ test("quick-chat text bounds count Unicode code points like Python", () => {
   })));
 });
 
-test("quick chat posts safely to the active control channel", async () => {
+test("typed chat is never mirrored into Discord", async () => {
+  // Shino, 2026-09-06: no outbound VE messages except the consent and
+  // association dialogues. The relay already published the line to the
+  // members; the worker only has to say it is done with it.
   const posts = [];
   const runtime = runtimeWithSession(async (payload) => posts.push(payload));
   const status = await runtime.postQuickChat({
@@ -156,18 +159,7 @@ test("quick chat posts safely to the active control channel", async () => {
   });
 
   assert.equal(status, "delivered");
-  assert.equal(posts.length, 1);
-  assert.match(posts[0].content, /Quick chat/);
-  assert.deepEqual(posts[0].allowedMentions, {
-    parse: [],
-    users: [],
-    roles: [],
-    repliedUser: false,
-  });
-  assert.equal(posts[0].nonce, REQUEST.slice(0, 25));
-  assert.equal(posts[0].enforceNonce, true);
-  assert.equal(posts[0].flags, MessageFlags.SuppressEmbeds);
-  assert.equal(posts[0].tts, false);
+  assert.equal(posts.length, 0, "the control channel must not receive the line");
 });
 
 test("runtime quick-chat bounds also count Unicode code points", async () => {
@@ -190,27 +182,7 @@ test("runtime quick-chat bounds also count Unicode code points", async () => {
     await runtime.postQuickChat({ ...command, text: emoji.repeat(321) }),
     "delivery_failed",
   );
-  assert.equal(posts.length, 1);
-});
-
-test("Discord nonce reuse only confirms the exact returned channel and content", async () => {
-  const wrongContent = runtimeWithSession(async (payload) => ({
-    channelId: CONTROL,
-    content: `${payload.content} old`,
-  }));
-  const wrongChannel = runtimeWithSession(async (payload) => ({
-    channelId: CONTROL_TWO,
-    content: payload.content,
-  }));
-  const command = {
-    requestId: REQUEST,
-    speaker: "Vemal",
-    wowClass: "paladin",
-    text: "Stack here",
-  };
-
-  assert.equal(await wrongContent.postQuickChat(command), "delivery_failed");
-  assert.equal(await wrongChannel.postQuickChat(command), "delivery_failed");
+  assert.equal(posts.length, 0);
 });
 
 test("a delivered request ID is idempotent but a changed body is rejected", async () => {
@@ -229,7 +201,7 @@ test("a delivered request ID is idempotent but a changed body is rejected", asyn
     await runtime.postQuickChat({ ...command, text: "Move right" }),
     "delivery_failed",
   );
-  assert.equal(posts.length, 1);
+  assert.equal(posts.length, 0);
 });
 
 test("a delivered request ID is not replayed into a later session", async () => {
@@ -255,10 +227,10 @@ test("a delivered request ID is not replayed into a later session", async () => 
   });
 
   assert.equal(await runtime.postQuickChat(command), "delivery_failed");
-  assert.equal(posts.length, 1);
+  assert.equal(posts.length, 0);
 });
 
-test("no session and Discord failure are truthful and retryable", async () => {
+test("no session is truthful, and Discord is never asked either way", async () => {
   const absent = runtimeWithSession(async () => {}, { start: false });
   assert.equal(
     await absent.postQuickChat({
@@ -271,11 +243,9 @@ test("no session and Discord failure are truthful and retryable", async () => {
   );
 
   let attempts = 0;
-  const retry = runtimeWithSession(async () => {
+  const runtime = runtimeWithSession(async () => {
     attempts += 1;
-    if (attempts === 1) {
-      throw new Error("temporary Discord failure");
-    }
+    throw new Error("Discord must not be reached for typed chat");
   });
   const command = {
     requestId: REQUEST,
@@ -283,9 +253,9 @@ test("no session and Discord failure are truthful and retryable", async () => {
     wowClass: "paladin",
     text: "Hello",
   };
-  assert.equal(await retry.postQuickChat(command), "delivery_failed");
-  assert.equal(await retry.postQuickChat(command), "delivered");
-  assert.equal(attempts, 2);
+  assert.equal(await runtime.postQuickChat(command), "delivered");
+  assert.equal(await runtime.postQuickChat(command), "delivered");
+  assert.equal(attempts, 0);
 });
 
 test("a bound command cannot cross a stopped session generation", async () => {
@@ -435,10 +405,10 @@ test("queued quick chat stays bound across stop and start", async () => {
   releaseFirst();
   await queue.whenIdle();
 
-  assert.equal(oldPosts.length, 1);
-  assert.equal(newPosts.length, 0);
+  assert.equal(oldPosts.length, 0, "nothing is posted to the old channel");
+  assert.equal(newPosts.length, 0, "and nothing leaks into the new one");
   assert.deepEqual(results, [
-    { requestId: REQUEST, status: "no_active_session" },
+    { requestId: REQUEST, status: "delivered" },
     { requestId: REQUEST_TWO, status: "no_active_session" },
   ]);
 });

@@ -156,6 +156,9 @@ export class SessionManager {
       stoppedBy: null,
       phase: SessionPhase.AWAITING_CONSENT,
       pauseReason: "consent_required",
+      // The live consent prompt's nonce, remembered so its buttons keep
+      // working after a restart that posts no replacement.
+      consentPromptNonce: null,
       participants: new Map(initialParticipants),
       // Explicit answers for this caption session. This is intentionally
       // separate from the durable ledger: an unremembered answer survives a
@@ -329,6 +332,21 @@ export class SessionManager {
    * maxAgeMs of now. Anything older is forgotten on the spot - a restart
    * takes seconds, and a session hours old belongs to a raid that ended.
    */
+  /**
+   * Remember which consent prompt is live so its buttons survive a restart.
+   * Shino, 2026-09-06: a restart posts nothing, so the original prompt has
+   * to keep working instead of a fresh notice replacing it.
+   */
+  rememberConsentPrompt(guildId, nonce) {
+    const session = this.sessions.get(guildId);
+    if (!session || session.phase === SessionPhase.STOPPED) {
+      return false;
+    }
+    session.consentPromptNonce = typeof nonce === "string" && nonce ? nonce : null;
+    this.sessionLedger?.remember(this.#snapshot(session));
+    return true;
+  }
+
   resumableSessions({ maxAgeMs }) {
     if (!this.sessionLedger) {
       return [];
@@ -557,6 +575,7 @@ export class SessionManager {
       stoppedBy: session.stoppedBy,
       phase: session.phase,
       pauseReason: session.pauseReason,
+      consentPromptNonce: session.consentPromptNonce ?? null,
       participants: Object.freeze(
         [...session.participants.entries()].map(([userId, participant]) =>
           Object.freeze({

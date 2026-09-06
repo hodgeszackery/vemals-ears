@@ -242,11 +242,13 @@ export class CaptionCommandController {
       guildId: input.guildId,
       requestedBy: input.userId,
     });
+    // Shino, 2026-09-06: the channel is not told. Only the person who
+    // stopped it gets the acknowledgement Discord requires for a command.
     return {
       action: "session.stopped",
-      ephemeral: false,
+      ephemeral: true,
       session,
-      content: `${mentionUser(input.userId)} stopped Vemal's Ears. No more audio will be captured.`,
+      content: "Vemal's Ears stopped. No more audio will be captured.",
     };
   }
 

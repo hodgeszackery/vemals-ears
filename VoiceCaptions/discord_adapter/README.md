@@ -55,7 +55,8 @@ and send messages in the text channel where `/vem start` was used.
 - `/vem consent` opts the caller in and remembers the answer. `/vem decline`
   opts only the caller out and remembers that answer. These commands remain the
   direct alternatives to the modal.
-- `/vem stop` stops capture for everyone; any participant may use it.
+- `/vem stop` stops capture for everyone; any participant may use it. The
+  acknowledgement is private to whoever ran it; the channel is not told.
 - `Choose your class` and `/vem map` open the same character modal. It assigns
   a WoW character, class, role, and optional realm, remembered until the player
   selects `Clear my saved mapping` or runs `/vem unmap`.
@@ -64,27 +65,41 @@ and send messages in the text channel where `/vem start` was used.
   character mapping, so they are asked again next session.
 - `/vem status` reports consent and capture state.
 
+## What the bot posts
+
+Shino, 2026-09-06: no outbound Vemal's Ears message reaches Discord except
+the consent and association dialogues. Concretely, the only things the bot
+ever posts are:
+
+- the public `/vem start` prompt with its consent and class buttons, and
+  the public notice when someone's consent changes - the channel must
+  always be able to see who is being captioned;
+- the private replies Discord requires for a command or button: consent
+  confirmations, the character-mapping panel and modal, pairing links
+  from `/vem setup` and `/vem invite`, `/vem status` on request, the
+  private `/vem stop` acknowledgement, and error messages.
+
+Nothing is posted when people join or leave the voice channel, when
+capture pauses or resumes, when the bot restarts and rejoins, when a
+rejoin fails, or when a member types a quick-chat line. A restart keeps
+the original `/vem start` buttons working (their nonce is remembered in
+the session ledger) instead of posting a fresh prompt.
+
 ## Quick chat boundary
 
 The paired member companion can submit a deliberate typed line to the guild
-relay. The relay supplies the display name previously saved by that
-authenticated device and an optional operator-managed WoW class, then sends
-the command over the worker's private authenticated connection. The adapter
-cannot accept a client identity directly and posts only to the current Vemal's
-Ears session's control channel. It never uses Discord TTS or voice
-transmission. Mentions are disabled and link embeds are suppressed.
+relay. The relay publishes it to the members immediately, then sends the
+command over the worker's private authenticated connection so the worker
+can say it is done with it. The adapter does not mirror the line into
+Discord: it validates the bounded command, keeps the request bound to the
+session that accepted it, and reports `delivered` - the shared protocol's
+only "finished, do not retry" status - without sending a message. No
+Discord TTS, no voice transmission, no text message.
 
-Discord stores the resulting text message under that channel's ordinary
-retention rules. The request ID is retained in a bounded in-memory dedupe map
-after successful delivery and is also sent as an enforced Discord nonce, so a
-lost acknowledgement or worker restart cannot post it twice during Discord's
-dedupe window.
 Accepted lines use a bounded eight-item serial queue, expire after seven
-seconds if they have not started, and stay bound to the exact raid session and
-control channel that accepted them. A stopped session cannot leak a queued
-line into the next raid.
-No typed body is written to the consent or character-mapping ledgers or placed
-in a diagnostic event.
+seconds if they have not started, and stay bound to the exact raid session
+that accepted them. No typed body is written to the consent or
+character-mapping ledgers or placed in a diagnostic event.
 
 ## Audio boundary
 

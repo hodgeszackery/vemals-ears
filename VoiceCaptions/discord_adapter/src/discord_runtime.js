@@ -778,44 +778,15 @@ export class DiscordAdapterRuntime {
   }
 
   async #postQuickChat(command) {
-    const { guildId, sessionBinding } = command;
-    if (!this.sessions.matchesSessionBinding(guildId, sessionBinding)) {
-      return "no_active_session";
-    }
-    const guild = this.client.guilds.cache.get(guildId);
-    const channel = guild?.channels?.cache?.get(sessionBinding.controlChannelId);
-    if (!channel?.isTextBased?.() || typeof channel.send !== "function") {
-      return "delivery_failed";
-    }
-    const escape = (value) => value.replace(/([\\`*_{}\[\]()<>#+\-.!|])/g, "\\$1");
-    const content =
-      `**Quick chat - ${escape(command.speaker)}:** ` + escape(command.text);
-    try {
-      const message = await channel.send({
-        content,
-        // Discord enforces this nonce across worker reconnects and process
-        // restarts for its dedupe window. The in-memory map is the fast path;
-        // this is the final guard if the post succeeds as the control socket
-        // drops before its delivery result reaches the relay.
-        nonce: command.requestId.slice(0, 25),
-        enforceNonce: true,
-        allowedMentions: SILENT_MENTIONS,
-        flags: MessageFlags.SuppressEmbeds,
-        tts: false,
-      });
-      if (
-        message?.channelId !== sessionBinding.controlChannelId ||
-        message?.content !== content
-      ) {
-        return "delivery_failed";
-      }
-      if (!this.sessions.matchesSessionBinding(guildId, sessionBinding)) {
-        return "no_active_session";
-      }
-      return "delivered";
-    } catch {
-      return "delivery_failed";
-    }
+    // Shino, 2026-09-06: no outbound VE messages to Discord except the
+    // consent and association dialogues, so a typed line is NOT mirrored
+    // into the control channel. Members already have it: the relay
+    // published the caption before asking for this copy. "delivered" is
+    // the shared protocol's only "done, do not retry" answer - it has no
+    // "suppressed" status, and adding one means a relay deploy - so it is
+    // what the worker reports for a line it has finished with.
+    void command;
+    return "delivered";
   }
 
   #pruneQuickChatDeliveries() {
@@ -1224,6 +1195,7 @@ export class DiscordAdapterRuntime {
           voiceChannelId: result.session.voiceChannelId,
         };
         this.consentPrompts.set(input.guildId, prompt);
+        this.sessions.rememberConsentPrompt?.(input.guildId, prompt.nonce);
         components = [consentActionRow(prompt.nonce)];
       } else if (result.action === "session.stopped") {
         this.consentPrompts.delete(input.guildId);
@@ -1375,7 +1347,7 @@ export class DiscordAdapterRuntime {
     ) {
       throw new CommandInputError(
         "stale_consent_button",
-        "This consent prompt is no longer active. Use the latest Vemal's Ears message.",
+        "This consent prompt is no longer active. Run `/vem consent` instead.",
       );
     }
   }
@@ -1408,7 +1380,6 @@ export class DiscordAdapterRuntime {
     ) {
       return;
     }
-    const previousPhase = session.phase;
     const previousParticipants = new Set(session.participants.map(({ userId }) => userId));
     // discord.js patches guild.voiceStates and GuildMembers before emitting
     // VoiceStateUpdate. BaseGuildVoiceChannel.members is therefore the
@@ -1446,49 +1417,10 @@ export class DiscordAdapterRuntime {
       });
     }
 
-    // #syncGuild can fail closed and pause the session, so the notices below
-    // describe the phase as it stands now rather than the pre-sync snapshot.
-    const phase = this.sessions.getSession(guildId)?.phase ?? updated.phase;
-    const joined = updated.participants
-      .map(({ userId }) => userId)
-      .filter((userId) => !previousParticipants.has(userId));
-    if (joined.length > 0) {
-      const mentions = joined.map((userId) => `<@${userId}>`).join(", ");
-      // A joiner whose consent is already on record leaves the session ACTIVE,
-      // so the notice has to follow the resulting phase. Announcing a pause
-      // that did not happen tells the channel capture is off while it is on,
-      // which is the one thing these notices exist to get right.
-      //
-      // This branch is newly reachable HERE: this is the first commit to hand
-      // the session manager a real consent ledger, so a remembered grant now
-      // seeds a joiner as GRANTED and leaves capture running. Before it, every
-      // joiner was PENDING and the pause the old text announced was true.
-      // Joining pauses nobody under per-speaker capture. The notice says
-      // exactly what is true for the joiner: captured because their
-      // consent is on record, or not captured until they give it.
-      const joinedGranted = updated.participants
-        .filter((participant) => joined.includes(participant.userId))
-        .every((participant) => participant.consent === "granted");
-      let content;
-      if (phase !== SessionPhase.ACTIVE) {
-        content =
-          `${mentions} joined. Nobody in this session has consented yet, ` +
-          "so audio capture is OFF.";
-      } else if (joinedGranted) {
-        content = `${mentions} joined with consent already on record and are now captioned.`;
-      } else {
-        content =
-          `${mentions} joined and are not being captioned. ` +
-          "Captions continue for those who consented.";
-      }
-      await this.#sendControlNotice(newState.guild, updated.controlChannelId, content);
-    } else if (previousPhase !== SessionPhase.ACTIVE && phase === SessionPhase.ACTIVE) {
-      await this.#sendControlNotice(
-        newState.guild,
-        updated.controlChannelId,
-        "Vemal's Ears resumed - captioning those who consented.",
-      );
-    }
+    // Shino, 2026-09-06: no outbound VE messages to Discord except the
+    // consent and association dialogues. Joins, departures, pauses and
+    // resumes change capture state silently; the /vem start prompt and
+    // /vem status carry the consent picture for anyone who asks.
   }
 
   async #resumeSessions() {
@@ -1542,42 +1474,36 @@ export class DiscordAdapterRuntime {
         this.sessions.forgetResumable?.(entry.guildId);
         continue;
       }
+      // No restart notice (Shino, 2026-09-06: reconnects stay silent). The
+      // consent buttons on the original /vem start message keep working
+      // instead: the ledger remembered their nonce, so the prompt survives
+      // the process that minted it. A ledger written before nonces were
+      // remembered gets a fresh one, and /vem consent always works. This
+      // sits before the join for two reasons: a session still waiting for
+      // consent never joins voice, and consent is exactly what it needs;
+      // and a join that fails forgets the ledger entry, which the
+      // remembered nonce must not quietly resurrect.
+      const prompt = {
+        nonce: entry.consentPromptNonce || randomUUID(),
+        voiceChannelId: entry.voiceChannelId,
+      };
+      this.consentPrompts.set(entry.guildId, prompt);
+      this.sessions.rememberConsentPrompt?.(entry.guildId, prompt.nonce);
       // The same event a /vem start emits, flagged, so the Python side
       // needs no new vocabulary (an unknown event type is fatal there).
       this.#emitAudienceSnapshot(session);
       this.#emit("session.started", { guildId: entry.guildId, session, resumed: true });
       await this.#syncGuild(entry.guildId);
-      // "Rejoined" is only true once the voice connection is Ready. This
-      // notice used to go out regardless, so a join that failed still
-      // announced a session that never existed in voice - and did so on
-      // every restart. The failed join has already forgotten the entry,
-      // so this message is posted once, not fifty-two times.
+      // "Rejoined" is only true once the voice connection is Ready. A
+      // failed join has already forgotten the entry, so the next
+      // /vem start begins clean. Nothing is posted about it: a failed
+      // rejoin is a disconnect, and those stay silent (Shino, 2026-09-06).
       const live =
         this.connections.get(entry.guildId)?.connection?.state?.status ===
         VoiceConnectionStatus.Ready;
       if (!live) {
-        await this.#sendControlNotice(
-          guild,
-          entry.controlChannelId,
-          "Vemal's Ears restarted but could not rejoin this voice channel, " +
-            "so the session was not resumed. Run `/vem start` when you want " +
-            "captions again.",
-        );
         continue;
       }
-      // A fresh consent prompt, so the buttons on this notice work for
-      // anyone who has not consented yet - the old prompt died with the
-      // old process.
-      const prompt = { nonce: randomUUID(), voiceChannelId: entry.voiceChannelId };
-      this.consentPrompts.set(entry.guildId, prompt);
-      await this.#sendControlNotice(
-        guild,
-        entry.controlChannelId,
-        "Vemal's Ears restarted and rejoined this voice channel. Consent is " +
-          "unchanged: anyone who had not consented is still not captioned, " +
-          "and anyone in the session can run `/vem stop`.",
-        [consentActionRow(prompt.nonce)],
-      );
     }
   }
 
