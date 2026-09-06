@@ -1174,15 +1174,37 @@ class CaptionOverlay:
         return changed
 
     def tick(self) -> None:
-        now = time.monotonic()
-        # Read display and target changes before ingesting the next caption, so
-        # a newly muted speaker cannot flash for one frame before the local
-        # preference takes effect.
-        self.refresh_settings()
-        self.drain_events(now)
-        self.refresh_target(now)
-        self.render(now)
-        self.root.after(TICK_MS, self.tick)
+        # One frame. Whatever happens inside it, the next frame is armed:
+        # an exception here used to end the after() chain, and the
+        # overlay sat on its last frame with nothing in the log to say
+        # so. Shino, 2026-09-06: "sometimes it freezes".
+        stage = "start"
+        started = time.monotonic()
+        try:
+            now = started
+            # Read display and target changes before ingesting the next
+            # caption, so a newly muted speaker cannot flash for one frame
+            # before the local preference takes effect.
+            stage = "settings"
+            self.refresh_settings()
+            stage = "events"
+            self.drain_events(now)
+            stage = "target"
+            self.refresh_target(now)
+            stage = "render"
+            self.render(now)
+        except tk.TclError as error:
+            if not _still_running(self.root):
+                return
+            _note_frame_fault(stage, error)
+        except Exception as error:  # noqa: BLE001 - the loop must survive
+            _note_frame_fault(stage, error)
+        finally:
+            elapsed = time.monotonic() - started
+            if elapsed >= SLOW_TICK_SECONDS:
+                _note_slow_frame(stage, elapsed)
+        if _still_running(self.root):
+            self.root.after(TICK_MS, self.tick)
 
     def render(self, now: float) -> None:
         # Muted: hide caption text, but keep draining and ageing the board
@@ -1645,6 +1667,55 @@ class CaptionOverlay:
         if recording:
             self.draw_recording_tally(right=x2 - 6, center_y=text_y)
         del live
+
+
+# A frame this slow is worth a line in the child log: it is the shape an
+# overlay "freeze" has from the member's side, and the stage name says
+# where the time went.
+SLOW_TICK_SECONDS = 0.5
+
+_CHILD_LOG_LIMIT = 200
+_child_log_count = 0
+
+
+def _still_running(root) -> bool:
+    """False once Tk has torn the window down; a stand-in root counts as running."""
+    try:
+        return bool(root.winfo_exists())
+    except tk.TclError:
+        return False
+    except AttributeError:
+        return True
+
+
+def _note_frame_fault(stage: str, error: BaseException) -> None:
+    """Say which stage failed and what class of error, never the text.
+
+    The error text could carry a caption line; the class name and the
+    stage are what a reader of the child log needs.
+    """
+    _child_log("frame fault in %s: %s" % (stage, type(error).__name__))
+
+
+def _note_slow_frame(stage: str, elapsed: float) -> None:
+    _child_log("slow frame: %.2fs, last stage %s" % (elapsed, stage))
+
+
+def _child_log(message: str) -> None:
+    """One timestamped line on stderr, which the parent keeps as the child log.
+
+    Bounded: a fault that repeats every frame must not turn the log into
+    the disk. After the limit the overlay stays quiet and keeps running.
+    """
+    global _child_log_count
+    if _child_log_count >= _CHILD_LOG_LIMIT:
+        return
+    _child_log_count += 1
+    try:
+        sys.stderr.write(time.strftime("%H:%M:%S") + "  overlay " + message + "\n")
+        sys.stderr.flush()
+    except (OSError, ValueError):
+        pass
 
 
 def read_json_lines(target: queue.Queue, exit_on_eof: bool) -> None:
