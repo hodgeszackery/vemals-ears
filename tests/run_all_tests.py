@@ -36,8 +36,10 @@ from ci.test_inventory import PYTHON_TEST_ROOTS  # noqa: E402
 # Each owned root remains mandatory; the Node suite is a separate CI step.
 # GPL readiness adds three source/notice modules and exercises archived
 # modified builds, legal UI, and retained-runtime refresh contracts.
-EXPECTED_UNITS = 63
-EXPECTED_TESTS = 1277
+# Measured 2026-09-06: 64 units, 1282 cases, after the failed-join detail
+# module joined the suite (the ghost capture session fix).
+EXPECTED_UNITS = 64
+EXPECTED_TESTS = 1282
 
 
 def discover_modules(relative: str, prefix: str) -> list[tuple[str, list[str]]]:

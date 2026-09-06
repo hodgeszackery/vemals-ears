@@ -406,6 +406,30 @@ function defaultClient() {
   });
 }
 
+// What a failed voice join looked like, as words the Python side can print.
+// Only enum-shaped values cross: the connection's last status, its close
+// code when Discord closed the socket, and the error's class name. No
+// message text - an error message could carry an endpoint or a token.
+const SAFE_WORD = /^[A-Za-z][A-Za-z0-9_]{0,48}$/;
+
+export function joinFailureDetail(connection, error) {
+  const detail = {};
+  const state = connection?.state;
+  const status = typeof state?.status === "string" ? state.status : "";
+  if (SAFE_WORD.test(status)) {
+    detail.voiceState = status;
+  }
+  const closeCode = state?.closeCode ?? state?.reason?.closeCode;
+  if (Number.isInteger(closeCode) && closeCode >= 0 && closeCode <= 9999) {
+    detail.closeCode = closeCode;
+  }
+  const cause = error && typeof error.name === "string" ? error.name : "";
+  if (SAFE_WORD.test(cause)) {
+    detail.cause = cause;
+  }
+  return detail;
+}
+
 export class DiscordAdapterRuntime {
   constructor({
     config,
@@ -1523,6 +1547,24 @@ export class DiscordAdapterRuntime {
       this.#emitAudienceSnapshot(session);
       this.#emit("session.started", { guildId: entry.guildId, session, resumed: true });
       await this.#syncGuild(entry.guildId);
+      // "Rejoined" is only true once the voice connection is Ready. This
+      // notice used to go out regardless, so a join that failed still
+      // announced a session that never existed in voice - and did so on
+      // every restart. The failed join has already forgotten the entry,
+      // so this message is posted once, not fifty-two times.
+      const live =
+        this.connections.get(entry.guildId)?.connection?.state?.status ===
+        VoiceConnectionStatus.Ready;
+      if (!live) {
+        await this.#sendControlNotice(
+          guild,
+          entry.controlChannelId,
+          "Vemal's Ears restarted but could not rejoin this voice channel, " +
+            "so the session was not resumed. Run `/vem start` when you want " +
+            "captions again.",
+        );
+        continue;
+      }
       // A fresh consent prompt, so the buttons on this notice work for
       // anyone who has not consented yet - the old prompt died with the
       // old process.
@@ -1748,7 +1790,11 @@ export class DiscordAdapterRuntime {
         voiceChannelId: session.voiceChannelId,
         daveEncryption: true,
       });
-    } catch {
+    } catch (error) {
+      // What the join looked like when it gave up. Both catches on this
+      // path used to be bare, so 52 consecutive failures on 2026-09-06
+      // reached the operator as the same three words and nothing else.
+      const detail = joinFailureDetail(connection, error);
       // Any teardown while entersState is pending - the fail-closed path fired
       // by the stateChange listener above, most often - has already destroyed
       // this connection, and destroying it a second time throws.
@@ -1764,7 +1810,16 @@ export class DiscordAdapterRuntime {
       if (this.connections.get(guildId)?.connection === connection) {
         this.connections.delete(guildId);
       }
-      await this.#failClosed("voice_connection_failed");
+      // A session whose join failed must not come back on the next start.
+      // The supervisor restarts this process after a fail-closed, the
+      // restart resumed the same session, the same join failed again:
+      // one member's /vem start in a channel the bot could not join
+      // became 52 "restarted and rejoined" notices in seventy minutes,
+      // with consent buttons on every one, and no process alive long
+      // enough for /vem stop to reach. The next /vem start is a fresh
+      // decision by a person, which is what a failed join deserves.
+      this.sessions.forgetResumable?.(guildId);
+      await this.#failClosed("voice_connection_failed", detail);
     }
   }
 
@@ -1965,7 +2020,7 @@ export class DiscordAdapterRuntime {
     }
   }
 
-  async #failClosed(reason) {
+  async #failClosed(reason, detail = null) {
     this.discordHealthy = false;
     this.#stopAudienceHeartbeat();
     this.sessions.setCaptureHealth(false, reason);
@@ -1976,6 +2031,7 @@ export class DiscordAdapterRuntime {
       component: "capture_pipeline",
       status: "blocked",
       reason,
+      ...(detail || {}),
     });
   }
 
