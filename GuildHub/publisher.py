@@ -9,7 +9,6 @@ logged or written to disk.
 from __future__ import annotations
 
 import ipaddress
-import json
 import queue
 import threading
 import time
@@ -17,16 +16,17 @@ from dataclasses import dataclass
 from typing import Any, Callable, Protocol
 from urllib.parse import urlsplit, urlunsplit
 
-from VoiceCaptions.events import ProtocolEvent, event_to_json
+from VoiceCaptions.events import ProtocolEvent
 
 from .protocol import (
+    CAPTION_SUBPROTOCOLS,
     MAX_CURSOR,
     MAX_WIRE_BYTES,
     PUBLISH_PATH,
-    SUBPROTOCOL,
     GuildHubProtocolError,
     decode_message,
     encode_message,
+    event_payload_for_subprotocol,
     parse_audience_update,
     parse_publish_request,
     parse_viewer_enrollment,
@@ -60,6 +60,8 @@ class _FlushBarrier:
 
 
 class PublisherConnection(Protocol):
+    subprotocol: str | None
+
     def send(self, message: str) -> None: ...
 
     def recv(self, timeout: float | None = None) -> str | bytes: ...
@@ -188,6 +190,7 @@ class RemoteCaptionSink:
         self._failed = threading.Event()
         self._closing = threading.Event()
         self._connection: PublisherConnection | None = None
+        self._subprotocol: str | None = None
         self._last_cursor = 0
         self.refused_invitations = 0
         self._writer = threading.Thread(
@@ -230,16 +233,19 @@ class RemoteCaptionSink:
         if not self.alive():
             return False
         try:
+            subprotocol = self._subprotocol
+            if subprotocol not in CAPTION_SUBPROTOCOLS:
+                raise GuildHubProtocolError("caption subprotocol was not negotiated")
             # Round-trip through the trusted local event encoder now, before
             # the writer thread owns the only remaining reference.
             message: dict[str, Any] = {
                 "type": "publish",
-                "event": json.loads(event_to_json(event)),
+                "event": event_payload_for_subprotocol(event, subprotocol),
             }
             if audience_generation is not None or audience_revision is not None:
                 message["audience_generation"] = audience_generation
                 message["audience_revision"] = audience_revision
-            parse_publish_request(message)
+            parse_publish_request(message, subprotocol=subprotocol)
             self._pending.put_nowait(
                 _PendingFrame(encode_message(message), "publish")
             )
@@ -351,13 +357,18 @@ class RemoteCaptionSink:
         try:
             connection = self._connector(
                 self.url,
-                subprotocols=[SUBPROTOCOL],
+                subprotocols=list(CAPTION_SUBPROTOCOLS),
                 compression=None,
                 max_size=MAX_WIRE_BYTES,
                 open_timeout=AUTH_TIMEOUT_SECONDS,
                 close_timeout=2,
             )
             self._connection = connection
+            if connection.subprotocol not in CAPTION_SUBPROTOCOLS:
+                raise PublisherError(
+                    "The Vemal's Ears server did not negotiate a caption protocol."
+                )
+            self._subprotocol = connection.subprotocol
             connection.send(
                 encode_message(
                     {"type": "authenticate", "publisher_token": self._token}
@@ -420,6 +431,7 @@ class RemoteCaptionSink:
             self._ready.set()
             self._token = ""
             self._connection = None
+            self._subprotocol = None
             if connection is not None:
                 try:
                     connection.close()

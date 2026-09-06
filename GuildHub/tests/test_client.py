@@ -2,6 +2,7 @@ import asyncio
 import json
 import types
 import unittest
+from dataclasses import replace
 from unittest import mock
 from urllib.parse import urlencode
 
@@ -23,7 +24,9 @@ from GuildHub.client import (
 )
 from GuildHub.credentials import DeviceCredentials
 from GuildHub.protocol import (
+    CAPTION_SUBPROTOCOLS,
     SUBPROTOCOL,
+    SUBPROTOCOL_V2,
     caption_envelope,
     cursor_advance,
     decode_message,
@@ -764,6 +767,76 @@ class AuthenticationResponseTests(unittest.TestCase):
 
 
 class CaptionClientTests(unittest.IsolatedAsyncioTestCase):
+    async def test_caption_stream_offers_v2_then_v1_and_keeps_v2_style(self):
+        styled = replace(CAPTION, speech_style="shout")
+        socket = FakeSocket(
+            [
+                encode_message(authenticated_payload(cursor=0)),
+                encode_message(
+                    caption_envelope(
+                        STREAM_ONE,
+                        1,
+                        styled,
+                        subprotocol=SUBPROTOCOL_V2,
+                    )
+                ),
+            ],
+            subprotocol=SUBPROTOCOL_V2,
+        )
+        connector = FakeConnector(socket)
+        sink = RecordingSink()
+        client = GuildCaptionClient(
+            MemoryStore(device_credentials()),
+            sink,
+            connector=connector,
+        )
+
+        self.assertEqual(1, await client._consume_once(device_credentials()))
+
+        self.assertEqual(
+            list(CAPTION_SUBPROTOCOLS),
+            connector.calls[0][1]["subprotocols"],
+        )
+        self.assertEqual("shout", sink.events[-1].speech_style)
+
+    async def test_caption_stream_accepts_v1_fallback(self):
+        socket = FakeSocket(
+            [
+                encode_message(authenticated_payload(cursor=0)),
+                encode_message(caption_envelope(STREAM_ONE, 1, CAPTION)),
+            ],
+            subprotocol=SUBPROTOCOL,
+        )
+        connector = FakeConnector(socket)
+        sink = RecordingSink()
+        client = GuildCaptionClient(
+            MemoryStore(device_credentials()),
+            sink,
+            connector=connector,
+        )
+
+        self.assertEqual(1, await client._consume_once(device_credentials()))
+        self.assertEqual(
+            list(CAPTION_SUBPROTOCOLS),
+            connector.calls[0][1]["subprotocols"],
+        )
+        self.assertEqual(CAPTION, sink.events[-1])
+
+    async def test_caption_stream_requires_a_negotiated_version(self):
+        socket = FakeSocket(
+            [encode_message(authenticated_payload(cursor=0))],
+            subprotocol=None,
+        )
+        client = GuildCaptionClient(
+            MemoryStore(device_credentials()),
+            RecordingSink(),
+            connector=FakeConnector(socket),
+        )
+
+        with self.assertRaises(GuildHubClientError):
+            await client._consume_once(device_credentials())
+        self.assertEqual([], socket.sent)
+
     async def test_leaving_voice_midstream_clears_text_and_keeps_access_error(self):
         socket = FakeSocket(
             [

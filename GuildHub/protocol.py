@@ -25,7 +25,13 @@ from VoiceCaptions.events import (
     parse_event,
 )
 
-SUBPROTOCOL = "guild-hub.v1"
+SUBPROTOCOL_V1 = "guild-hub.v1"
+SUBPROTOCOL_V2 = "guild-hub.v2"
+# Keep the original name as the v1 alias for pairing, typed chat, and older
+# callers. Wire helpers default to it; caption publishers and viewers pass
+# their negotiated value explicitly.
+SUBPROTOCOL = SUBPROTOCOL_V1
+CAPTION_SUBPROTOCOLS = (SUBPROTOCOL_V2, SUBPROTOCOL_V1)
 PAIR_PATH = "/v1/pair"
 CAPTION_PATH = "/v1/captions"
 PUBLISH_PATH = "/v1/publish"
@@ -154,6 +160,30 @@ def encode_message(payload: dict[str, Any]) -> str:
     if len(encoded.encode("utf-8")) > MAX_WIRE_BYTES:
         raise GuildHubProtocolError("message is too large")
     return encoded
+
+
+def _caption_subprotocol(value: str) -> str:
+    if value not in CAPTION_SUBPROTOCOLS:
+        raise GuildHubProtocolError("unsupported caption subprotocol")
+    return value
+
+
+def event_payload_for_subprotocol(
+    event: ProtocolEvent,
+    subprotocol: str,
+) -> dict[str, Any]:
+    """Encode one event for the negotiated caption protocol.
+
+    v1 predates speech emphasis and remains strict, so a v1 peer receives the
+    established caption shape. v2 carries the optional speech_style field.
+    """
+    version = _caption_subprotocol(subprotocol)
+    if not isinstance(event, (CaptionEvent, SessionEvent, ClearEvent)):
+        raise GuildHubProtocolError("unsupported caption event")
+    payload = json.loads(event_to_json(event))
+    if version == SUBPROTOCOL_V1 and isinstance(event, CaptionEvent):
+        payload.pop("speech_style", None)
+    return payload
 
 
 @dataclass(frozen=True)
@@ -573,7 +603,11 @@ def _audience_generation(value: Any) -> int:
     return generation
 
 
-def parse_publish_request(payload: Any) -> PublishRequest:
+def parse_publish_request(
+    payload: Any,
+    *,
+    subprotocol: str = SUBPROTOCOL,
+) -> PublishRequest:
     message = _object(payload)
     keys = set(message)
     base = {"type", "event"}
@@ -583,7 +617,7 @@ def parse_publish_request(payload: Any) -> PublishRequest:
     if message.get("type") != "publish":
         raise GuildHubProtocolError("expected publish message")
     try:
-        event = _parse_exact_event(message.get("event"))
+        event = _parse_exact_event(message.get("event"), subprotocol)
     except CaptionProtocolError as error:
         raise GuildHubProtocolError("invalid caption event: " + str(error)) from error
     if keys == routed:
@@ -603,9 +637,13 @@ def parse_publish_request(payload: Any) -> PublishRequest:
     return PublishRequest(event=event)
 
 
-def parse_publish(payload: Any) -> ProtocolEvent:
+def parse_publish(
+    payload: Any,
+    *,
+    subprotocol: str = SUBPROTOCOL,
+) -> ProtocolEvent:
     """Compatibility parser for callers that only need the public event."""
-    return parse_publish_request(payload).event
+    return parse_publish_request(payload, subprotocol=subprotocol).event
 
 
 def parse_audience_update(payload: Any) -> AudienceUpdate:
@@ -663,11 +701,15 @@ def parse_viewer_enrollment(payload: Any) -> ViewerEnrollment:
     )
 
 
-def parse_publisher_command(payload: Any) -> PublisherCommand:
+def parse_publisher_command(
+    payload: Any,
+    *,
+    subprotocol: str = SUBPROTOCOL,
+) -> PublisherCommand:
     message = _object(payload)
     command_type = message.get("type")
     if command_type == "publish":
-        return parse_publish_request(message)
+        return parse_publish_request(message, subprotocol=subprotocol)
     if command_type == "audience_update":
         return parse_audience_update(message)
     if command_type == "viewer_link":
@@ -681,6 +723,8 @@ def caption_envelope(
     stream_id: str,
     cursor: int,
     event: ProtocolEvent,
+    *,
+    subprotocol: str = SUBPROTOCOL,
 ) -> dict[str, Any]:
     if not isinstance(event, (CaptionEvent, SessionEvent, ClearEvent)):
         raise GuildHubProtocolError("unsupported caption event")
@@ -690,7 +734,7 @@ def caption_envelope(
             stream_id, "stream_id", MAX_STREAM_ID, safe_id=True
         ),
         "cursor": _cursor(cursor),
-        "event": json.loads(event_to_json(event)),
+        "event": event_payload_for_subprotocol(event, subprotocol),
     }
 
 
@@ -731,13 +775,17 @@ class CaptionEnvelope:
     event: ProtocolEvent
 
 
-def parse_caption_envelope(payload: Any) -> CaptionEnvelope:
+def parse_caption_envelope(
+    payload: Any,
+    *,
+    subprotocol: str = SUBPROTOCOL,
+) -> CaptionEnvelope:
     message = _object(payload)
     _exact_keys(message, {"type", "stream_id", "cursor", "event"})
     if message.get("type") != "caption_event":
         raise GuildHubProtocolError("expected caption event")
     try:
-        event = _parse_exact_event(message.get("event"))
+        event = _parse_exact_event(message.get("event"), subprotocol)
     except CaptionProtocolError as error:
         raise GuildHubProtocolError("invalid caption event: " + str(error)) from error
     return CaptionEnvelope(
@@ -749,7 +797,8 @@ def parse_caption_envelope(payload: Any) -> CaptionEnvelope:
     )
 
 
-def _parse_exact_event(payload: Any) -> ProtocolEvent:
+def _parse_exact_event(payload: Any, subprotocol: str) -> ProtocolEvent:
+    version = _caption_subprotocol(subprotocol)
     event = _object(payload)
     event_type = event.get("type")
     if event_type == "caption":
@@ -777,7 +826,9 @@ def _parse_exact_event(payload: Any) -> ProtocolEvent:
         # publisher failed and the whole pipeline came down. There is a
         # test below that pins the two halves together; keep it passing
         # rather than editing this set by hand.
-        optional = {"wow_class", "speech_style"}
+        optional = {"wow_class"}
+        if version == SUBPROTOCOL_V2:
+            optional.add("speech_style")
         fields = set(event)
         if not required.issubset(fields) or not fields.issubset(required | optional):
             raise GuildHubProtocolError(
