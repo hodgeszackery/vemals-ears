@@ -44,8 +44,14 @@ class OverlayMetrics:
     minimum_bottom_safe: int = 112
 
     def row_height(self, line: DisplayLine, text_lines: int = 1) -> int:
-        base = self.live_height if line.live else self.final_height
-        return base + max(0, text_lines - 1) * self.text_line_height
+        # One card style. A live line used to stand taller than a settled
+        # one, so two speakers on screen were two different shapes - Shino,
+        # 2026-09-06: "two different style text boxes are showing at the
+        # same time", and "the UI is better on the non spliced text". The
+        # settled shape is now the only shape. live_height still sizes the
+        # canvas for its worst case, so nothing moves on screen.
+        del line
+        return self.final_height + max(0, text_lines - 1) * self.text_line_height
 
     def stack_height(self, lines: Iterable[DisplayLine]) -> int:
         values = list(lines)
@@ -227,8 +233,13 @@ def caption_font_specs(size: int, family: str) -> dict[str, dict[str, object]]:
 
 
 def caption_font_key(live: bool, speech_style: str) -> str:
-    """Return the font face for one caption without changing its text."""
-    base = "caption" if live else "previous"
+    """Return the font face for one caption without changing its text.
+
+    The same face whether the line is live or settled: the larger live
+    face was the other half of the two-shapes problem row_height names.
+    """
+    del live
+    base = "previous"
     if speech_style in {"whisper", "shout"}:
         return base + "_" + speech_style
     return base
