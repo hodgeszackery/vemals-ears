@@ -35,7 +35,6 @@ def main(argv: list[str] | None = None) -> int:
             root,
             queue.Queue(),
             desktop_fallback=True,
-            preview=True,
         )
         view.target_rect = (0, 0, root.winfo_screenwidth(), root.winfo_screenheight())
         now = time.monotonic()
