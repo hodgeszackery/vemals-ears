@@ -193,6 +193,46 @@ def control_panel_position(
     return int(x), int(y)
 
 
+def caption_font_choices(
+    families, current: str
+) -> tuple[str, ...]:
+    """The families worth offering for a caption, sorted and de-duplicated.
+
+    Windows reports a second, "@"-prefixed copy of every CJK face - the
+    same font rotated for vertical writing. They are never what somebody
+    picking a caption font wants, and on this machine they were a
+    seventh of the list. The member's current family is always kept,
+    even if it is one of those or is no longer installed, so opening
+    Move can never silently change their font.
+    """
+    keep = {
+        name
+        for name in families
+        if isinstance(name, str) and name and not name.startswith("@")
+    }
+    if isinstance(current, str) and current:
+        keep.add(current)
+    return tuple(sorted(keep, key=str.casefold))
+
+
+def menu_column_size(
+    entries: int, row_height: int, available_height: int
+) -> int:
+    """How many entries fit in one column before it must break.
+
+    A Tk menu does not scroll. With every family in one column the list
+    asked for 4619 pixels on a 1392 pixel work area, so most of it could
+    not be reached at all. Breaking into columns keeps every entry on
+    screen, which is also how Windows itself shows a long menu.
+    """
+    if entries <= 0:
+        return 1
+    usable = max(int(available_height), 1)
+    height = max(int(row_height), 1)
+    per_column = max(1, usable // height)
+    return min(per_column, entries)
+
+
 def panel_drag_surface(widget_class: str) -> bool:
     """Whether a press on this widget class should move the captions."""
     return widget_class in DRAG_SURFACE_CLASSES
@@ -671,18 +711,20 @@ class PlacementWindow:
             font=self.fonts["control"],
         )
         self.font_label.pack(side="left", padx=(0, 5))
-        families = set(tkfont.families(self.root))
-        families.add(self.settings.caption_font_family)
+        self.font_families = caption_font_choices(
+            tkfont.families(self.root), self.settings.caption_font_family
+        )
         self.font_family_var = tk.StringVar(
             value=self.settings.caption_font_family
         )
         self.font_family_menu = tk.OptionMenu(
             appearance,
             self.font_family_var,
-            *sorted(families, key=str.casefold),
+            *self.font_families,
             command=self.set_font_family,
         )
         self.style_option_menu(self.font_family_menu, width=19)
+        self.break_font_menu_into_columns()
         self.font_family_menu.pack(side="left")
 
         tk.Label(
@@ -924,6 +966,37 @@ class PlacementWindow:
             activeforeground=TEXT,
             font=self.fonts["control"],
         )
+
+    def break_font_menu_into_columns(self) -> None:
+        """Wrap the family list so the whole of it is reachable.
+
+        The row height is measured from the control font rather than
+        assumed, and the space available is the height of the display
+        the panel is on - not the primary, and not the full monitor,
+        so the list never runs under the taskbar either.
+        """
+        menu = getattr(self, "font_family_menu", None)
+        if menu is None:
+            return
+        try:
+            entries = len(self.font_families)
+            row_height = self.fonts["control"].metrics("linespace") + 6
+            bounds = work_area_for_rect(
+                getattr(self, "work_areas", ()) or monitor_work_areas(),
+                (
+                    int(self.target_rect[0]),
+                    int(self.target_rect[1]),
+                    int(self.target_rect[2]),
+                    int(self.target_rect[3]),
+                ),
+                self.target_rect,
+            )
+            per_column = menu_column_size(entries, row_height, bounds[3])
+            inner = menu["menu"]
+            for index in range(per_column, entries, per_column):
+                inner.entryconfigure(index, columnbreak=1)
+        except (tk.TclError, KeyError, AttributeError, IndexError):
+            return
 
     @staticmethod
     def contrasting_text(colour: str) -> str:

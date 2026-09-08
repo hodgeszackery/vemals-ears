@@ -1726,6 +1726,33 @@ class PlacementControlWindowTests(unittest.TestCase):
         view.controls.update_idletasks()
         return root, view
 
+    def test_the_built_font_menu_fits_on_the_display(self):
+        """Real Tk: the menu Move actually builds, against a real list."""
+        root, view = self.make_hidden_window()
+        try:
+            inner = view.font_family_menu["menu"]
+            inner.update_idletasks()
+            entries = inner.index("end")
+            self.assertIsNotNone(entries)
+            self.assertEqual(len(view.font_families), entries + 1)
+            for family in view.font_families:
+                self.assertFalse(family.startswith("@") and family != view.settings.caption_font_family)
+            # Column breaks are set, and the first entry never carries
+            # one (that would open the menu with an empty column).
+            breaks = [
+                index
+                for index in range(entries + 1)
+                if str(inner.entrycget(index, "columnbreak")) not in ("0", "")
+            ]
+            self.assertNotIn(0, breaks)
+            if len(view.font_families) > 60:
+                self.assertTrue(breaks, "a long list must break into columns")
+            self.assertLessEqual(
+                inner.winfo_reqheight(), self.TARGET[3]
+            )
+        finally:
+            root.destroy()
+
     def test_only_inert_panel_chrome_carries_the_drag_binding(self):
         root, view = self.make_hidden_window()
         try:
@@ -2217,6 +2244,77 @@ class ControlPanelGeometryTests(unittest.TestCase):
         )
         self.assertEqual((100, 100), (x, y))
         self.assertTrue(clamped)
+
+    def test_the_font_list_drops_the_vertical_writing_duplicates(self):
+        """Shino, 2026-09-08: "the font box stretches extremely high".
+
+        Windows reports an "@"-prefixed copy of every CJK face - the
+        same font rotated for vertical writing. On his machine that was
+        28 of 243 entries, and none of them is what somebody picking a
+        caption font wants.
+        """
+        raw = ("Segoe UI", "@MS Gothic", "MS Gothic", "Arial", "@Malgun Gothic")
+        self.assertEqual(
+            ("Arial", "MS Gothic", "Segoe UI"),
+            placement.caption_font_choices(raw, "Segoe UI"),
+        )
+        # Sorted without case deciding it, and de-duplicated.
+        self.assertEqual(
+            ("arial", "Arial B", "Zapf"),
+            placement.caption_font_choices(
+                ("Zapf", "arial", "Arial B", "Zapf"), "Zapf"
+            ),
+        )
+        # The member's own family survives even when it is a vertical
+        # copy or is no longer installed, so opening Move can never
+        # silently change the font they chose.
+        self.assertIn(
+            "@MS Gothic",
+            placement.caption_font_choices(raw, "@MS Gothic"),
+        )
+        self.assertIn(
+            "A Font They Uninstalled",
+            placement.caption_font_choices(raw, "A Font They Uninstalled"),
+        )
+        # Junk in the list from Tk does not become an entry.
+        self.assertEqual(
+            ("Arial",),
+            placement.caption_font_choices(("Arial", "", None, 7), "Arial"),
+        )
+
+    def test_the_font_menu_never_asks_to_be_taller_than_the_screen(self):
+        """A Tk menu is one column and does not scroll.
+
+        Measured before this change on a 1392 px work area: 243
+        families in a single column asked for 4619 px, so most of the
+        list could not be reached at all.
+        """
+        # 215 real families at 21 px, on the work area of his primary.
+        per_column = placement.menu_column_size(215, 21, 1392)
+        self.assertEqual(66, per_column)
+        columns = -(-215 // per_column)
+        self.assertEqual(4, columns)
+        self.assertLessEqual(per_column * 21, 1392)
+
+        # A 1080p work area breaks sooner, and still fits.
+        per_column = placement.menu_column_size(215, 21, 1040)
+        self.assertLessEqual(per_column * 21, 1040)
+        self.assertGreater(per_column, 1)
+
+        # Degenerate inputs cannot produce a zero or negative column,
+        # which would make range(start, stop, step) raise.
+        for entries, row, height in (
+            (0, 21, 1392),
+            (10, 0, 1392),
+            (10, 21, 0),
+            (10, 21, -5),
+            (10, 5000, 1392),
+        ):
+            self.assertGreaterEqual(
+                placement.menu_column_size(entries, row, height), 1
+            )
+        # Never more entries per column than there are entries.
+        self.assertEqual(3, placement.menu_column_size(3, 21, 99999))
 
     def test_panel_drag_surface_accepts_only_inert_chrome(self):
         self.assertEqual(("Frame", "Label"), placement.DRAG_SURFACE_CLASSES)
