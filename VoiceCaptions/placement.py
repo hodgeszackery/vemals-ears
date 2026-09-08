@@ -33,6 +33,7 @@ if __package__ in {None, ""}:
         TEXT,
         VOID,
         canvas_height_for_rows,
+        enumerate_caption_monitors,
         resolve_anchor_rect,
         rounded_rectangle,
         top_level_handle,
@@ -69,6 +70,7 @@ else:
         TEXT,
         VOID,
         canvas_height_for_rows,
+        enumerate_caption_monitors,
         resolve_anchor_rect,
         rounded_rectangle,
         top_level_handle,
@@ -90,6 +92,27 @@ FOOTER_GAP = 6
 BOTTOM_REFERENCE_HEIGHT = canvas_height_for_rows(
     DEFAULT_SETTINGS.max_visible_speakers
 )
+
+# Only inert chrome drags the captions. A binding on the panel TOPLEVEL
+# would fire for a press on every descendant - Button, Menubutton and
+# Spinbox class scripts do not return break - so Save, Done, the colour
+# swatches and the size spinner would each start a drag. Binding the
+# inert widgets instead means a control press has no delivery path to a
+# drag handler at all, rather than one that is filtered afterwards.
+DRAG_SURFACE_CLASSES = ("Frame", "Label")
+
+# A press that never travels this far is a click, not a drag. Without it
+# a shaky click on the "Move captions" heading shoves the overlay a
+# couple of pixels and the member has to put it back.
+DRAG_THRESHOLD = 3
+
+# The grab layer is transparent by ALPHA, never by colour key. A layered
+# window at 1/255 is still hit-tested across its whole area; one at 0 is
+# not. Colour-key transparency is the defect being fixed - it makes
+# "invisible" and "click-through" the same pixel property.
+SHIELD_ALPHA = 1 / 255
+
+DEFAULT_STATUS_TEXT = "Drag the captions or this panel"
 
 
 def target_rect_for_settings(
@@ -170,6 +193,132 @@ def control_panel_position(
     return int(x), int(y)
 
 
+def panel_drag_surface(widget_class: str) -> bool:
+    """Whether a press on this widget class should move the captions."""
+    return widget_class in DRAG_SURFACE_CLASSES
+
+
+def monitor_work_areas() -> tuple[tuple[int, int, int, int], ...]:
+    """Every selectable monitor's WORK area, in the coordinates Tk uses.
+
+    Work area, not full bounds: the panel must not settle behind the
+    taskbar. These processes are DPI-unaware, and enumerate_caption_monitors
+    already reports the same virtualised space winfo_x/winfo_y do, so no
+    scaling is applied to either side of a comparison.
+    """
+    try:
+        return tuple(
+            (int(monitor.left), int(monitor.top), int(monitor.width), int(monitor.height))
+            for monitor in enumerate_caption_monitors()
+        )
+    except Exception:  # noqa: BLE001 - a lost monitor list must not lose the panel
+        return ()
+
+
+def work_area_for_rect(
+    work_areas: tuple[tuple[int, int, int, int], ...],
+    preview_rect: tuple[int, int, int, int],
+    fallback: tuple[int, int, int, int],
+) -> tuple[int, int, int, int]:
+    """The display the captions are actually on, not the one Move opened on.
+
+    Shino, 2026-09-07: "moving text desyncs the text from the box on
+    1080p monitors". Half of that is the panel being clamped into a
+    rectangle resolved ONCE when the window opened, while the captions
+    move freely - so dragging them to a second monitor stranded the panel
+    on the first. Largest overlap wins; a caption straddling two
+    displays keeps its panel on the one showing more of it.
+    """
+    if not work_areas:
+        return fallback
+    left, top, width, height = preview_rect
+    right, bottom = left + width, top + height
+    best = None
+    best_area = 0
+    for area in work_areas:
+        area_left, area_top, area_width, area_height = area
+        overlap_width = min(right, area_left + area_width) - max(left, area_left)
+        overlap_height = min(bottom, area_top + area_height) - max(top, area_top)
+        if overlap_width <= 0 or overlap_height <= 0:
+            continue
+        covered = overlap_width * overlap_height
+        if covered > best_area:
+            best, best_area = area, covered
+    if best is not None:
+        return best
+    centre_x, centre_y = left + width // 2, top + height // 2
+    for area in work_areas:
+        area_left, area_top, area_width, area_height = area
+        if (
+            area_left <= centre_x < area_left + area_width
+            and area_top <= centre_y < area_top + area_height
+        ):
+            return area
+    return fallback
+
+
+def panel_rigid_position(
+    bounds: tuple[int, int, int, int],
+    preview_position: tuple[int, int],
+    panel_size: tuple[int, int],
+    offset: tuple[int, int],
+) -> tuple[int, int, bool]:
+    """Translate the panel with the captions, by the offset it settled at.
+
+    The other half of the desync. The shipped rule re-derives the panel's
+    place from the preview's on every motion frame, and that rule has
+    discontinuities: on a 1080p screen the panel flips from below the
+    captions to above them the instant they cross one line, jumping 354
+    pixels for a one-pixel move, and with a tall caption stack it sits
+    frozen for a 264-pixel band and then leaps most of the screen. Held
+    rigid, the panel moves exactly as far as the captions did.
+
+    Clamped per axis so the panel cannot be dragged off the display. A
+    panel LARGER than the work area pins to the near edge rather than
+    inverting.
+    """
+    left, top, width, height = bounds
+    panel_width, panel_height = panel_size
+    offset_x, offset_y = offset
+    wanted_x = preview_position[0] + offset_x
+    wanted_y = preview_position[1] + offset_y
+    x = min(max(wanted_x, left), max(left, left + width - panel_width))
+    y = min(max(wanted_y, top), max(top, top + height - panel_height))
+    return int(x), int(y), (x, y) != (wanted_x, wanted_y)
+
+
+def make_non_activating(window: tk.Misc) -> bool:
+    """Keep the grab layer from ever taking focus.
+
+    It sits over the captions to catch presses, so if it activated, the
+    preview root would stop being the active window and the arrow-key
+    nudges bound there would go dead after the first drag. Deliberately
+    NOT applied to the controls panel: own_control_panel exists to keep
+    that panel's buttons activatable.
+    """
+    if sys.platform != "win32":
+        return False
+    try:
+        window.update_idletasks()
+        handle = top_level_handle(window)
+        if not handle:
+            return False
+        user32 = ctypes.windll.user32
+        get_style = user32.GetWindowLongPtrW
+        get_style.argtypes = [wintypes.HWND, ctypes.c_int]
+        get_style.restype = ctypes.c_ssize_t
+        set_style = user32.SetWindowLongPtrW
+        set_style.argtypes = [wintypes.HWND, ctypes.c_int, ctypes.c_ssize_t]
+        set_style.restype = ctypes.c_ssize_t
+        gwl_exstyle = -20
+        ws_ex_noactivate = 0x08000000
+        current = get_style(handle, gwl_exstyle)
+        set_style(handle, gwl_exstyle, current | ws_ex_noactivate)
+        return True
+    except Exception:  # noqa: BLE001 - a focus nicety must never stop Move opening
+        return False
+
+
 def own_control_panel(panel: tk.Misc, owner: tk.Misc) -> bool:
     """Make a borderless sidecar follow its owner without losing focus.
 
@@ -234,7 +383,22 @@ class PlacementWindow:
         self.root = root
         self.preview = bool(preview)
         self.drag_origin: tuple[int, int, int, int] | None = None
-        self.saved_label = "Drag the preview or use arrow keys"
+        # A press is a click until it travels DRAG_THRESHOLD.
+        self.drag_moved = False
+        # The work area resolved once per press, so a full monitor
+        # enumeration never runs inside a motion handler.
+        self.drag_bounds: tuple[int, int, int, int] | None = None
+        # The panel's place relative to the captions, latched when it
+        # settles and translated rigidly while they move.
+        self.panel_offset: tuple[int, int] | None = None
+        self.panel_size: tuple[int, int] | None = None
+        self.shield = None
+        self.shield_ready = False
+        self.shield_owned = False
+        self.shield_non_activating = False
+        self.chroma_transparent = False
+        self.work_areas = monitor_work_areas()
+        self.saved_label = DEFAULT_STATUS_TEXT
         self.settings_path = None if self.preview else default_settings_path()
         self.settings_mtime_ns = -1
         self.settings = (
@@ -259,8 +423,11 @@ class PlacementWindow:
         root.attributes("-topmost", True)
         try:
             root.wm_attributes("-transparentcolor", CHROMA_KEY)
+            # Recorded because the grab layer is only needed - and only
+            # correct - where colour-key transparency actually applied.
+            self.chroma_transparent = True
         except tk.TclError:
-            pass
+            self.chroma_transparent = False
 
         self.canvas = tk.Canvas(
             root,
@@ -278,6 +445,8 @@ class PlacementWindow:
             self.settings.caption_font_family,
         )
         self.build_footer()
+        # After the footer, so the panel starts above the grab layer.
+        self.build_shield()
 
         overlay_x, y = position_from_settings(
             self.target_rect,
@@ -286,8 +455,7 @@ class PlacementWindow:
             bottom_reference_height=BOTTOM_REFERENCE_HEIGHT,
         )
         x = overlay_x
-        root.geometry(f"{self.window_width}x{self.window_height}+{x}+{y}")
-        self.position_controls((x, y))
+        self.place_preview(x, y, resize=True, settle=True)
         self.draw()
 
         self.canvas.bind("<ButtonPress-1>", self.press)
@@ -340,35 +508,80 @@ class PlacementWindow:
     def position_controls(
         self,
         preview_position: tuple[int, int] | None = None,
+        *,
+        settle: bool = False,
     ) -> None:
+        """The only writer of the panel's geometry.
+
+        Two modes. SETTLING re-measures the panel, solves its place from
+        scratch and latches the offset; that happens when Move opens, when
+        the preview is resized, when it is re-shown, and once at the end
+        of a drag. TRACKING translates by the latched offset and touches
+        nothing else - the panel keeps its place relative to the captions
+        instead of being re-derived across a rule with cliffs in it.
+
+        A settle is downgraded to a track whenever a drag is live, so no
+        caller can re-solve under the pointer: not the 250 ms settings
+        poll, not a live appearance change, not a resize.
+        """
         controls = getattr(self, "controls", None)
         if controls is None:
             return
+        settling = settle and getattr(self, "drag_origin", None) is None
         try:
-            controls.update_idletasks()
-            panel_size = (
-                max(1, int(controls.winfo_reqwidth())),
-                max(1, int(controls.winfo_reqheight())),
-            )
             if preview_position is None:
                 preview_position = (
                     int(self.root.winfo_x()),
                     int(self.root.winfo_y()),
                 )
-            panel_x, panel_y = control_panel_position(
-                self.target_rect,
-                (
-                    int(preview_position[0]),
-                    int(preview_position[1]),
-                    int(self.overlay_width),
-                    int(self.canvas_height),
-                ),
-                panel_size,
+            preview = (
+                int(preview_position[0]),
+                int(preview_position[1]),
+                int(self.overlay_width),
+                int(self.canvas_height),
             )
+            if (
+                settling
+                or self.panel_offset is None
+                or self.panel_size is None
+            ):
+                controls.update_idletasks()
+                self.panel_size = (
+                    max(1, int(controls.winfo_reqwidth())),
+                    max(1, int(controls.winfo_reqheight())),
+                )
+                bounds = work_area_for_rect(
+                    self.work_areas, preview, self.target_rect
+                )
+                panel_x, panel_y = control_panel_position(
+                    bounds, preview, self.panel_size
+                )
+                self.panel_offset = (
+                    panel_x - preview[0],
+                    panel_y - preview[1],
+                )
+                controls.geometry(
+                    "%dx%d+%d+%d"
+                    % (self.panel_size[0], self.panel_size[1], panel_x, panel_y)
+                )
+                controls.lift()
+                return
+            bounds = self.drag_bounds or work_area_for_rect(
+                self.work_areas, preview, self.target_rect
+            )
+            # The offset is NOT refreshed from a clamped result: if it
+            # were, repeated bumps against a screen edge would drift it
+            # and the panel would never come back to its true place.
+            panel_x, panel_y, _clamped = panel_rigid_position(
+                bounds, (preview[0], preview[1]), self.panel_size,
+                self.panel_offset,
+            )
+            # No update_idletasks and no lift here on purpose: this runs
+            # inside a motion handler, and both pump the event loop.
             controls.geometry(
-                f"{panel_size[0]}x{panel_size[1]}+{panel_x}+{panel_y}"
+                "%dx%d+%d+%d"
+                % (self.panel_size[0], self.panel_size[1], panel_x, panel_y)
             )
-            controls.lift()
         except tk.TclError:
             return
 
@@ -385,10 +598,26 @@ class PlacementWindow:
                 and bool(self.root.winfo_viewable())
             )
             if visible:
-                self.position_controls()
+                shield = getattr(self, "shield", None)
+                if shield is not None:
+                    try:
+                        self.sync_shield()
+                        shield.deiconify()
+                        shield.lift()
+                    except tk.TclError:
+                        pass
+                self.position_controls(settle=True)
                 controls.deiconify()
+                # Last, so the panel is above the grab layer wherever the
+                # two overlap and Save still takes a click.
                 controls.lift()
             else:
+                shield = getattr(self, "shield", None)
+                if shield is not None:
+                    try:
+                        shield.withdraw()
+                    except tk.TclError:
+                        pass
                 controls.withdraw()
         except tk.TclError:
             return
@@ -413,14 +642,15 @@ class PlacementWindow:
         footer.pack(fill="both", expand=True, padx=1, pady=1)
         top = tk.Frame(footer, bg=SLATE)
         top.pack(fill="x", padx=12, pady=(8, 5))
-        tk.Label(
+        self.heading_label = tk.Label(
             top,
             text="Move captions",
             bg=SLATE,
             fg=TEXT,
             font=self.fonts["control"],
             anchor="w",
-        ).pack(side="left")
+        )
+        self.heading_label.pack(side="left")
         self.footer_status = tk.Label(
             top,
             text=self.saved_label,
@@ -433,13 +663,14 @@ class PlacementWindow:
 
         appearance = tk.Frame(footer, bg=SLATE)
         appearance.pack(fill="x", padx=12, pady=(0, 5))
-        tk.Label(
+        self.font_label = tk.Label(
             appearance,
             text="Font",
             bg=SLATE,
             fg=MUTED,
             font=self.fonts["control"],
-        ).pack(side="left", padx=(0, 5))
+        )
+        self.font_label.pack(side="left", padx=(0, 5))
         families = set(tkfont.families(self.root))
         families.add(self.settings.caption_font_family)
         self.font_family_var = tk.StringVar(
@@ -549,6 +780,129 @@ class PlacementWindow:
             self.root.destroy,
         )
         self.done_button.pack(side="right")
+        self.bind_panel_drag()
+
+    def bind_panel_drag(self) -> None:
+        """Give the inert chrome of the panel the drag, and nothing else.
+
+        Shino, 2026-09-07: "allow text to be moved by dragging the Font
+        box". The box he means is this one, and it had no pointer binding
+        at all. Binding the TOPLEVEL would have been one line and wrong:
+        a press on any descendant reaches it, because Button, Menubutton
+        and Spinbox class scripts do not return break, so Save, Done, the
+        colour swatches and the size spinner would each start a drag.
+        Binding the inert widgets instead means a control press never
+        reaches a drag handler in the first place.
+        """
+        controls = getattr(self, "controls", None)
+        if controls is None:
+            return
+        pending = list(controls.winfo_children())
+        while pending:
+            widget = pending.pop()
+            try:
+                pending.extend(widget.winfo_children())
+                if not panel_drag_surface(widget.winfo_class()):
+                    continue
+                widget.bind("<ButtonPress-1>", self.panel_press)
+                widget.bind("<B1-Motion>", self.panel_drag)
+                widget.bind("<ButtonRelease-1>", self.panel_release)
+                widget.configure(cursor="fleur")
+            except tk.TclError:
+                continue
+
+    def panel_press(self, event: tk.Event) -> str | None:
+        # Checked again at dispatch, so a widget bound later by someone
+        # else cannot quietly become a drag handle.
+        try:
+            widget_class = event.widget.winfo_class()
+        except (AttributeError, tk.TclError):
+            return None
+        if not panel_drag_surface(widget_class):
+            return None
+        # Deliberately no canvas.focus_set: a press on the panel must not
+        # pull focus out of a half-typed size, whose FocusOut commits it.
+        self.begin_drag(event)
+        return "break"
+
+    def panel_drag(self, event: tk.Event) -> str | None:
+        if self.drag_origin is None:
+            return None
+        self.drag(event)
+        return "break"
+
+    def panel_release(self, event: tk.Event) -> str | None:
+        if self.drag_origin is None:
+            return None
+        self.release(event)
+        return "break"
+
+    def build_shield(self) -> None:
+        """A hit area over the captions that no colour key can punch through.
+
+        The card backdrop is drawn with a stipple, and the gaps in that
+        stipple ARE the chroma key, which Windows treats as absent: at
+        the default 50 percent backdrop about half the card's pixels take
+        a press straight through to the game. No drawn item can fix that
+        without making the Backdrop control lie, so the grab surface has
+        to be a separate window that is invisible by ALPHA instead.
+
+        Only built where colour-key transparency actually applied, and if
+        anything about it fails it is destroyed rather than left over the
+        raid as a near-opaque slab.
+        """
+        self.shield = None
+        self.shield_ready = False
+        if not self.chroma_transparent:
+            return
+        shield = None
+        try:
+            shield = tk.Toplevel(self.root)
+            shield.withdraw()
+            shield.title("Move captions grab layer")
+            shield.overrideredirect(True)
+            # Never CHROMA_KEY, and never -transparentcolor: either one
+            # silently restores the whole defect this exists to fix.
+            shield.configure(bg=VOID, cursor="fleur")
+            shield.attributes("-alpha", SHIELD_ALPHA)
+        except tk.TclError:
+            if shield is not None:
+                try:
+                    shield.destroy()
+                except tk.TclError:
+                    pass
+            self.shield = None
+            self.shield_ready = False
+            return
+        self.shield = shield
+        self.shield_owned = own_control_panel(shield, self.root)
+        # After own_control_panel, which recreates the wrapper window and
+        # would discard an ex-style set before it.
+        self.shield_non_activating = make_non_activating(shield)
+        shield.bind("<ButtonPress-1>", self.press)
+        shield.bind("<B1-Motion>", self.drag)
+        shield.bind("<ButtonRelease-1>", self.release)
+        shield.bind("<Escape>", lambda _event: self.root.destroy())
+        shield.protocol("WM_DELETE_WINDOW", self.root.destroy)
+        self.shield_ready = True
+
+    def sync_shield(self, x: int | None = None, y: int | None = None) -> None:
+        shield = getattr(self, "shield", None)
+        if shield is None:
+            return
+        try:
+            if x is None or y is None:
+                x, y = int(self.root.winfo_x()), int(self.root.winfo_y())
+            shield.geometry(
+                "%dx%d+%d+%d"
+                % (self.window_width, self.window_height, int(x), int(y))
+            )
+            # Not while a drag is live: lifting pumps the event loop from
+            # inside a motion handler.
+            if self.drag_origin is None:
+                shield.lift()
+        except tk.TclError:
+            return
 
     def style_option_menu(self, menu: tk.OptionMenu, *, width: int) -> None:
         menu.configure(
@@ -621,6 +975,17 @@ class PlacementWindow:
             self.flash("Could not save appearance")
             self.sync_appearance_controls()
             return False
+        if not self.preview:
+            # Record what we just wrote. Without this the 250 ms poll
+            # sees its own change as somebody else's and re-enters
+            # apply_settings within a quarter second of every appearance
+            # change - which, before the drag rebase, also killed a live
+            # drag. Written inline rather than through a helper: the
+            # test subject is a namespace with neither.
+            try:
+                self.settings_mtime_ns = self.settings_path.stat().st_mtime_ns
+            except OSError:
+                pass
         if target_changed:
             self.target_rect = target_rect_for_settings(self.root, updated)
         self.apply_settings(updated, reposition=target_changed)
@@ -788,7 +1153,6 @@ class PlacementWindow:
             self.window_height = self.canvas_height
             self.update_control_bounds()
             self.canvas.configure(height=self.canvas_height)
-            self.drag_origin = None
         if rewidth:
             self.canvas.configure(width=self.window_width)
         if reposition:
@@ -807,10 +1171,15 @@ class PlacementWindow:
                 # Preserve the dragged caption baseline while the stack grows.
                 y += old_height - desired_height
         if reposition or resized or rewidth or overlay_rewidth:
-            self.root.geometry(
-                f"{self.window_width}x{self.window_height}+{x}+{y}"
-            )
-        self.position_controls((x, y))
+            self.place_preview(x, y, resize=True, settle=True)
+        else:
+            self.sync_shield(x, y)
+            self.position_controls((x, y), settle=True)
+        # After the geometry write, so the pointer and the recorded
+        # origin belong to the same instant. update_control_bounds above
+        # runs before it and reads winfo_x/y one frame stale; this call
+        # corrects that inside the same function.
+        self.rebase_drag(x, y)
         if resized or rewidth or overlay_rewidth or refonted or repainted:
             self.draw()
 
@@ -1072,28 +1441,102 @@ class PlacementWindow:
             tags=("privacy-tally",),
         )
 
-    def press(self, event: tk.Event) -> None:
-        focus = getattr(self.canvas, "focus_set", None)
-        if callable(focus):
-            focus()
+    def place_preview(
+        self,
+        x: int,
+        y: int,
+        *,
+        resize: bool = False,
+        settle: bool = False,
+    ) -> None:
+        """The only writer of the preview root's geometry.
+
+        The captions, the grab layer over them and the controls panel are
+        one assembly. Moving them separately is what let them come apart,
+        so nothing moves one alone.
+        """
+        x, y = int(x), int(y)
+        if resize:
+            self.root.geometry(
+                "%dx%d+%d+%d" % (self.window_width, self.window_height, x, y)
+            )
+        else:
+            self.root.geometry("+%d+%d" % (x, y))
+        self.sync_shield(x, y)
+        self.position_controls((x, y), settle=settle)
+
+    def begin_drag(self, event: tk.Event) -> None:
+        """Start a gesture, whichever surface it was started from."""
         self.drag_origin = (
             event.x_root,
             event.y_root,
             self.root.winfo_x(),
             self.root.winfo_y(),
         )
+        self.drag_moved = False
+        # Enumerated once per press, never inside a motion handler.
+        self.work_areas = monitor_work_areas() or getattr(
+            self, "work_areas", ()
+        )
+        self.drag_bounds = work_area_for_rect(
+            self.work_areas,
+            (
+                int(self.root.winfo_x()),
+                int(self.root.winfo_y()),
+                int(self.overlay_width),
+                int(self.canvas_height),
+            ),
+            self.target_rect,
+        )
+
+    def press(self, event: tk.Event) -> None:
+        focus = getattr(self.canvas, "focus_set", None)
+        if callable(focus):
+            focus()
+        self.begin_drag(event)
 
     def drag(self, event: tk.Event) -> None:
         if self.drag_origin is None:
             return
         start_x, start_y, window_x, window_y = self.drag_origin
-        x = window_x + event.x_root - start_x
-        y = window_y + event.y_root - start_y
-        self.root.geometry(f"+{x}+{y}")
-        self.position_controls((x, y))
+        delta_x = event.x_root - start_x
+        delta_y = event.y_root - start_y
+        if (
+            not getattr(self, "drag_moved", False)
+            and max(abs(delta_x), abs(delta_y)) < DRAG_THRESHOLD
+        ):
+            return
+        # The FULL delta once it trips, never delta minus the threshold,
+        # or the captions trail the pointer by three pixels forever.
+        self.drag_moved = True
+        self.place_preview(window_x + delta_x, window_y + delta_y)
 
     def release(self, _event: tk.Event) -> None:
         self.drag_origin = None
+        self.drag_bounds = None
+        self.drag_moved = False
+        # The one settle point, at a moment when nothing is held.
+        self.position_controls(settle=True)
+
+    def rebase_drag(self, x: int, y: int) -> None:
+        """Keep a live drag alive across a resize instead of dropping it.
+
+        A live appearance change used to clear drag_origin, so the
+        captions silently stopped following the pointer - one of the
+        shapes a member experiences as the box coming unstuck. BOTH
+        halves are replaced: keeping the press-time pointer and moving
+        only the window origin would replay the whole accumulated delta
+        on the next motion and throw the captions across the screen.
+        """
+        if self.drag_origin is None:
+            return
+        try:
+            pointer_x, pointer_y = self.root.winfo_pointerxy()
+        except (tk.TclError, AttributeError):
+            self.drag_origin = None
+            self.drag_moved = False
+            return
+        self.drag_origin = (int(pointer_x), int(pointer_y), int(x), int(y))
 
     def press_card(self, event: tk.Event) -> str:
         """Start a drag when the pointer is directly over card text."""
@@ -1111,8 +1554,7 @@ class PlacementWindow:
     def nudge(self, dx: int, dy: int) -> str:
         x = self.root.winfo_x() + int(dx)
         y = self.root.winfo_y() + int(dy)
-        self.root.geometry(f"+{x}+{y}")
-        self.position_controls((x, y))
+        self.place_preview(x, y)
         return "break"
 
     def key_nudge(self, event: tk.Event, dx: int, dy: int) -> str | None:
@@ -1186,7 +1628,7 @@ class PlacementWindow:
         self.root.after(1300, self.restore_label)
 
     def restore_label(self) -> None:
-        self.saved_label = "Drag the preview or use arrow keys"
+        self.saved_label = DEFAULT_STATUS_TEXT
         status = getattr(self, "footer_status", None)
         if status is not None:
             status.config(text=self.saved_label, fg=FROST)
