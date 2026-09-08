@@ -130,6 +130,21 @@ class GuildHubVoiceChannelRequiredError(GuildHubClientError):
     """The linked Discord user is not in the active voice channel."""
 
 
+class GuildHubCaptionsStoppedError(GuildHubVoiceChannelRequiredError):
+    """Captions stopped because the worker did, not because of the member.
+
+    Shino, 2026-09-07. The audience roster is published BY the worker, so
+    when it stops the relay's roster goes stale and every viewer was told
+    "you left the voice channel or have not linked your Vemal's Ears
+    application" - to a member who had not moved, and who cannot hear the
+    room to know better.
+
+    A subclass because the CURE is unchanged: stay up, keep retrying, and
+    resume when captions can flow again. Every existing handler catches
+    it already; only the sentence is new.
+    """
+
+
 class CaptionSink(Protocol):
     def send(self, event: ProtocolEvent) -> bool: ...
 
@@ -809,7 +824,7 @@ class GuildCaptionClient:
         self._report_connection_status(False)
         self._announce_maintenance()
 
-    def _deny_voice_channel_access(self) -> None:
+    def _deny_voice_channel_access(self, message: str | None = None) -> None:
         """Remove prior text before reporting the local access boundary."""
         if not self._sink.send(ClearEvent()):
             raise GuildHubClientError(
@@ -820,14 +835,26 @@ class GuildCaptionClient:
                 state="paused",
                 # Name the cause and the cure. Silence here reads as a
                 # crash to someone who cannot hear the room, and the
-                # window stays up precisely so it can say this.
-                message="Captions paused - you left the voice channel or "
+                # window stays up precisely so it can say this. Naming
+                # the WRONG cause is worse than silence: it sends a
+                # member who never moved off to fix something that is
+                # not broken.
+                message=message
+                or "Captions paused - you left the voice channel or "
                 "have not linked your Vemal's Ears application.",
             )
         ):
             raise GuildHubClientError(
                 "The Vemal's Ears caption window is unavailable."
             )
+
+    CAPTIONS_STOPPED_MESSAGE = (
+        "Captions stopped - Vemal's Ears is not running. "
+        "They come back when it starts."
+    )
+
+    def _report_captions_stopped(self) -> None:
+        self._deny_voice_channel_access(self.CAPTIONS_STOPPED_MESSAGE)
 
     async def stop(self) -> None:
         self._stop_event.set()
@@ -894,6 +921,12 @@ class GuildCaptionClient:
                         raise GuildHubMaintenanceError(
                             "The guild server is restarting."
                         )
+                    if response.get("code") == "captions_stopped":
+                        voice_access_denied = True
+                        self._report_captions_stopped()
+                        raise GuildHubCaptionsStoppedError(
+                            "Vemal's Ears is not running."
+                        )
                     if response.get("code") == "voice_channel_required":
                         voice_access_denied = True
                         self._deny_voice_channel_access()
@@ -955,6 +988,12 @@ class GuildCaptionClient:
                             if payload.get("code") == "server_maintenance":
                                 raise GuildHubMaintenanceError(
                                     "The guild server is restarting."
+                                )
+                            if payload.get("code") == "captions_stopped":
+                                voice_access_denied = True
+                                self._report_captions_stopped()
+                                raise GuildHubCaptionsStoppedError(
+                                    "Vemal's Ears is not running."
                                 )
                             if payload.get("code") == "voice_channel_required":
                                 voice_access_denied = True
@@ -1320,6 +1359,12 @@ async def watch_captions(
                 await asyncio.gather(stop_task, return_exceptions=True)
                 try:
                     await run_task
+                except GuildHubCaptionsStoppedError:
+                    # Ordered before its base class on purpose.
+                    voice_channel_waiting = True
+                    status_once(
+                        "Vemal's Ears is not running. Captions return when it starts."
+                    )
                 except GuildHubVoiceChannelRequiredError:
                     voice_channel_waiting = True
                     status_once(
