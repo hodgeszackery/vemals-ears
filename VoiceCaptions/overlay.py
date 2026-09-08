@@ -283,6 +283,31 @@ class CaptionMonitorCandidate:
     width: int
     height: int
     primary: bool = False
+    # The full monitor rectangle, beside the work area above. Appended
+    # with defaults because this record is built positionally in tests.
+    bounds_left: int = 0
+    bounds_top: int = 0
+    bounds_width: int = 0
+    bounds_height: int = 0
+
+    @property
+    def display_bounds(self) -> tuple[int, int, int, int]:
+        """The whole display, taskbar included.
+
+        The work area is right for placing a panel, which must not end
+        up behind the taskbar. It is wrong for predicting where a
+        fullscreen game will put its client rect, which is the whole
+        monitor. A record built without bounds degrades to the work
+        area rather than reporting a zero-sized rect.
+        """
+        if self.bounds_width >= 1 and self.bounds_height >= 1:
+            return (
+                self.bounds_left,
+                self.bounds_top,
+                self.bounds_width,
+                self.bounds_height,
+            )
+        return (self.left, self.top, self.width, self.height)
 
     @property
     def target(self) -> CaptionTargetChoice:
@@ -581,6 +606,18 @@ def _monitor_candidate_from_info(
     height = max(rect.bottom - rect.top, 0)
     if width < 1 or height < 1:
         return None
+    # One more read from the struct GetMonitorInfoW has already filled -
+    # no extra call, no second enumeration, no DPI query. The whole
+    # display is what a fullscreen client rect looks like.
+    bounds_left = bounds_top = bounds_width = bounds_height = 0
+    try:
+        whole = info.rcMonitor
+        bounds_left = int(whole.left)
+        bounds_top = int(whole.top)
+        bounds_width = max(int(whole.right) - bounds_left, 0)
+        bounds_height = max(int(whole.bottom) - bounds_top, 0)
+    except (AttributeError, TypeError, ValueError):
+        bounds_left = bounds_top = bounds_width = bounds_height = 0
     return CaptionMonitorCandidate(
         index=index,
         device=device,
@@ -589,6 +626,10 @@ def _monitor_candidate_from_info(
         width=width,
         height=height,
         primary=bool(int(info.dwFlags) & MONITORINFOF_PRIMARY),
+        bounds_left=bounds_left,
+        bounds_top=bounds_top,
+        bounds_width=bounds_width,
+        bounds_height=bounds_height,
     )
 
 
