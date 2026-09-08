@@ -1808,6 +1808,61 @@ class PlacementControlWindowTests(unittest.TestCase):
         view.controls.update_idletasks()
         return root, view
 
+    def test_a_rescued_preview_says_so_and_writes_nothing(self):
+        """Shino approved the wording, 2026-09-08.
+
+        The window opens somewhere other than where the saved anchor
+        asked for, so it has to say why. Nothing is written: their
+        captions have not moved.
+        """
+        try:
+            root = tk.Tk()
+        except tk.TclError as exc:
+            self.skipTest(str(exc))
+        root.withdraw()
+        try:
+            # An anchor that puts the preview far off every display.
+            stranded = OverlaySettings(anchor_x=8.0, anchor_y=8.0)
+            written = []
+            with mock.patch.object(
+                placement, "resolve_anchor_rect", return_value=self.TARGET
+            ), mock.patch.object(
+                placement, "monitor_work_areas", return_value=(self.TARGET,)
+            ), mock.patch.object(
+                placement, "monitor_display_bounds", return_value=(self.TARGET,)
+            ), mock.patch.object(
+                placement, "load_settings", return_value=stranded
+            ), mock.patch.object(
+                placement, "save_settings",
+                side_effect=lambda *a, **k: written.append(a) or True,
+            ):
+                view = placement.PlacementWindow(root, preview=False)
+                root.update_idletasks()
+                self.assertEqual(placement.RESCUED_STATUS_TEXT, view.saved_label)
+                self.assertIn("off this screen", view.saved_label)
+                # The window really is on the target now. Read the
+                # requested geometry, not winfo_x: nothing is mapped
+                # here and an unmapped window reports 0.
+                left, top, width, height = self.TARGET
+                position = view.root.geometry().split("+")
+                x, y = int(position[1]), int(position[2])
+                self.assertGreaterEqual(x, left)
+                self.assertLess(x, left + width)
+                self.assertGreaterEqual(y, top)
+                self.assertLess(y, top + height)
+                # And the rescue itself saved nothing.
+                self.assertEqual([], written)
+                self.assertFalse(view.position_dirty)
+        finally:
+            root.destroy()
+
+    def test_a_reachable_preview_keeps_the_ordinary_status(self):
+        root, view = self.make_hidden_window()
+        try:
+            self.assertEqual(placement.DEFAULT_STATUS_TEXT, view.saved_label)
+        finally:
+            root.destroy()
+
     def test_the_built_font_menu_fits_on_the_display(self):
         """Real Tk: the menu Move actually builds, against a real list."""
         root, view = self.make_hidden_window()

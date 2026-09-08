@@ -117,6 +117,10 @@ DRAG_THRESHOLD = 3
 SHIELD_ALPHA = 1 / 255
 
 DEFAULT_STATUS_TEXT = "Drag the captions or this panel"
+RESCUED_STATUS_TEXT = (
+    "Your saved spot is off this screen - moved it into view. "
+    "Save to keep it."
+)
 
 # How much of the preview must be on a display for it to count as
 # reachable. Less than this and there is nothing a member can grab.
@@ -682,13 +686,20 @@ class PlacementWindow:
             self.settings,
             bottom_reference_height=BOTTOM_REFERENCE_HEIGHT,
         )
-        x, y = rescued_position(
+        rescued = rescued_position(
             self.display_bounds,
             self.target_rect,
             (self.overlay_width, self.canvas_height),
             (overlay_x, y),
         )
+        moved_into_view = rescued != (overlay_x, y)
+        x, y = rescued
         self.place_preview(x, y, resize=True, settle=True)
+        if moved_into_view:
+            # Say it, rather than silently putting the window somewhere
+            # other than where their saved anchor asked for. Nothing has
+            # been written: their captions are still where they were.
+            self.flash(RESCUED_STATUS_TEXT)
         self.draw()
 
         self.canvas.bind("<ButtonPress-1>", self.press)
