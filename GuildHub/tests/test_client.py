@@ -13,6 +13,7 @@ from GuildHub.client import (
     GuildHubClientError,
     GuildHubPairingCancelledError,
     GuildHubPairingConfirmationError,
+    GuildHubCaptionsStoppedError,
     GuildHubVoiceChannelRequiredError,
     create_viewer_link,
     get_quick_chat_profile,
@@ -864,6 +865,76 @@ class CaptionClientTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(CAPTION, sink.events[-3])
         self.assertIsInstance(sink.events[-2], ClearEvent)
         self.assertEqual("paused", sink.events[-1].state)
+        # The member has actually left, so this sentence is true here.
+        self.assertIn("you left the voice channel", sink.events[-1].message)
+
+    async def test_a_stopped_worker_does_not_tell_the_member_they_left(self):
+        """Shino, 2026-09-07. They never moved; the worker stopped."""
+        socket = FakeSocket(
+            [
+                encode_message(authenticated_payload(cursor=0)),
+                encode_message(caption_envelope(STREAM_ONE, 1, CAPTION)),
+                encode_message(
+                    {
+                        "type": "error",
+                        "code": "captions_stopped",
+                        "message": "Vemal's Ears is not running. Captions return when it starts.",
+                    }
+                ),
+            ]
+        )
+        sink = RecordingSink()
+        client = GuildCaptionClient(
+            MemoryStore(device_credentials()),
+            sink,
+            connector=FakeConnector(socket),
+        )
+
+        with self.assertRaises(GuildHubCaptionsStoppedError):
+            await client._consume_once(device_credentials())
+
+        self.assertEqual(CAPTION, sink.events[-3])
+        self.assertIsInstance(sink.events[-2], ClearEvent)
+        self.assertEqual("paused", sink.events[-1].state)
+        self.assertIn("not running", sink.events[-1].message)
+        self.assertNotIn("you left", sink.events[-1].message)
+
+    async def test_the_stopped_error_is_handled_wherever_the_voice_one_is(self):
+        """A subclass, so every retry and wait path already covers it.
+
+        If it stopped being one, the reconnect loop would fall through to
+        the generic handler and the window would report a fault instead
+        of waiting for the worker to come back.
+        """
+        self.assertTrue(
+            issubclass(
+                GuildHubCaptionsStoppedError, GuildHubVoiceChannelRequiredError
+            )
+        )
+
+    async def test_a_stopped_worker_is_named_at_the_handshake_too(self):
+        socket = FakeSocket(
+            [
+                encode_message(
+                    {
+                        "type": "error",
+                        "code": "captions_stopped",
+                        "message": "Vemal's Ears is not running. Captions return when it starts.",
+                    }
+                ),
+            ]
+        )
+        sink = RecordingSink()
+        client = GuildCaptionClient(
+            MemoryStore(device_credentials()),
+            sink,
+            connector=FakeConnector(socket),
+        )
+
+        with self.assertRaises(GuildHubCaptionsStoppedError):
+            await client._consume_once(device_credentials())
+        self.assertEqual("paused", sink.events[-1].state)
+        self.assertIn("not running", sink.events[-1].message)
 
     async def test_private_cursor_advance_preserves_continuity_without_display(self):
         socket = FakeSocket(
