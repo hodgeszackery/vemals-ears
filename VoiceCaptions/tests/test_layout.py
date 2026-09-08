@@ -1,5 +1,6 @@
 import queue
 import re
+import sys
 import tempfile
 import tkinter as tk
 import unittest
@@ -124,8 +125,12 @@ class FakeRoot:
     def __init__(self, x: int = 100, y: int = 200) -> None:
         self.x = x
         self.y = y
+        self.pointer = (0, 0)
         self.geometries: list[str] = []
         self.scheduled: list[tuple[int, object]] = []
+
+    def winfo_pointerxy(self) -> tuple[int, int]:
+        return self.pointer
 
     def winfo_screenwidth(self) -> int:
         return self.SCREEN_WIDTH
@@ -1047,12 +1052,45 @@ class LiveDisplaySettingTests(unittest.TestCase):
             root=FakeRoot(x, y),
             draw=mock.Mock(),
             drag_origin=None,
+            drag_moved=False,
+            drag_bounds=None,
+            panel_offset=None,
+            panel_size=None,
+            work_areas=(),
+            shield=None,
             flash=lambda _value: None,
         )
         subject.update_control_bounds = lambda: (
             placement.PlacementWindow.update_control_bounds(subject)
         )
-        subject.position_controls = lambda *_args: None
+        subject.position_controls = lambda *_args, **_kwargs: None
+        subject.sync_shield = lambda *_args, **_kwargs: None
+        subject.place_preview = lambda x, y, resize=False, settle=False: (
+            placement.PlacementWindow.place_preview(
+                subject, x, y, resize=resize, settle=settle
+            )
+        )
+        subject.begin_drag = lambda event: (
+            placement.PlacementWindow.begin_drag(subject, event)
+        )
+        subject.rebase_drag = lambda x, y: (
+            placement.PlacementWindow.rebase_drag(subject, x, y)
+        )
+        subject.drag = lambda event: (
+            placement.PlacementWindow.drag(subject, event)
+        )
+        subject.release = lambda event: (
+            placement.PlacementWindow.release(subject, event)
+        )
+        subject.panel_press = lambda event: (
+            placement.PlacementWindow.panel_press(subject, event)
+        )
+        subject.panel_drag = lambda event: (
+            placement.PlacementWindow.panel_drag(subject, event)
+        )
+        subject.panel_release = lambda event: (
+            placement.PlacementWindow.panel_release(subject, event)
+        )
         subject.apply_settings = lambda updated, reposition: (
             placement.PlacementWindow.apply_settings(
                 subject, updated, reposition=reposition
@@ -1171,6 +1209,237 @@ class LiveDisplaySettingTests(unittest.TestCase):
 
         placement.PlacementWindow.nudge(subject, -20, -15)
         self.assertEqual((-280, -285), (subject.root.x, subject.root.y))
+
+    class FakePanel:
+        """Just enough of a Toplevel for position_controls to drive."""
+
+        def __init__(self, width: int = 481, height: int = 153) -> None:
+            self.width = width
+            self.height = height
+            self.geometries: list[str] = []
+            self.lifts = 0
+
+        def update_idletasks(self) -> None:
+            pass
+
+        def winfo_reqwidth(self) -> int:
+            return self.width
+
+        def winfo_reqheight(self) -> int:
+            return self.height
+
+        def geometry(self, value: str) -> None:
+            self.geometries.append(value)
+
+        def lift(self) -> None:
+            self.lifts += 1
+
+        def origin(self) -> tuple[int, int]:
+            size, position = self.geometries[-1].split("+", 1)
+            x, y = position.split("+")
+            return int(x), int(y)
+
+    def test_the_panel_translates_with_the_captions_instead_of_re_solving(self):
+        """The 1080p desync, at the level that actually decides it.
+
+        panel_rigid_position being correct is not enough: position_controls
+        has to USE it while the captions move, rather than re-deriving the
+        panel's place from a rule with a 354 pixel cliff in it.
+        """
+        subject = self.placement_subject(DEFAULT_SETTINGS, x=690, y=758)
+        panel = self.FakePanel()
+        subject.controls = panel
+        subject.target_rect = (0, 0, 1920, 1080)
+        subject.work_areas = ((0, 0, 1920, 1080),)
+        subject.overlay_width = 540
+        subject.canvas_height = 190
+        subject.position_controls = lambda *args, **kwargs: (
+            placement.PlacementWindow.position_controls(subject, *args, **kwargs)
+        )
+
+        subject.position_controls((690, 758), settle=True)
+        settled = panel.origin()
+        self.assertEqual((29, -159), subject.panel_offset)
+
+        # One pixel across the line the shipped rule flipped at.
+        subject.position_controls((690, 731))
+        before = panel.origin()
+        subject.position_controls((690, 732))
+        after = panel.origin()
+        self.assertEqual(1, after[1] - before[1])
+        self.assertEqual(settled[0], after[0])
+
+        # A hundred pixels of caption travel moves the panel a hundred.
+        subject.position_controls((790, 858))
+        self.assertEqual((settled[0] + 100, settled[1] + 100), panel.origin())
+        # And the latched offset is never rewritten by a tracked move.
+        self.assertEqual((29, -159), subject.panel_offset)
+
+    def test_a_live_drag_cannot_be_re_solved_out_from_under_the_pointer(self):
+        subject = self.placement_subject(DEFAULT_SETTINGS, x=690, y=758)
+        panel = self.FakePanel()
+        subject.controls = panel
+        subject.target_rect = (0, 0, 1920, 1080)
+        subject.work_areas = ((0, 0, 1920, 1080),)
+        subject.overlay_width = 540
+        subject.canvas_height = 190
+        subject.position_controls = lambda *args, **kwargs: (
+            placement.PlacementWindow.position_controls(subject, *args, **kwargs)
+        )
+        subject.position_controls((690, 758), settle=True)
+        lifts = panel.lifts
+
+        subject.drag_origin = (0, 0, 690, 758)
+        # Every settle caller - the poll, a live appearance change, a
+        # resize - is downgraded to a track while a drag is live.
+        subject.position_controls((690, 732), settle=True)
+        self.assertEqual(lifts, panel.lifts)
+        self.assertEqual((29, -159), subject.panel_offset)
+
+    def test_a_press_on_a_panel_control_does_not_start_a_drag(self):
+        """Save, Done, the spinner and the dropdowns are not drag handles.
+
+        A binding on the panel toplevel would have been one line and
+        would have made all of them drag, because their class scripts do
+        not return break.
+        """
+        subject = self.placement_subject(DEFAULT_SETTINGS, x=100, y=200)
+
+        def press_on(widget_class):
+            widget = SimpleNamespace(winfo_class=lambda: widget_class)
+            return subject.panel_press(
+                SimpleNamespace(x_root=250, y_root=260, widget=widget)
+            )
+
+        self.assertEqual("break", press_on("Frame"))
+        self.assertIsNotNone(subject.drag_origin)
+
+        for widget_class in ("Button", "Spinbox", "Menubutton", "Menu"):
+            subject.drag_origin = None
+            self.assertIsNone(press_on(widget_class))
+            self.assertIsNone(subject.drag_origin)
+            subject.root.geometries.clear()
+            self.assertIsNone(
+                subject.panel_drag(SimpleNamespace(x_root=350, y_root=310))
+            )
+            self.assertEqual([], subject.root.geometries)
+
+    def test_panel_drag_moves_the_preview_without_taking_focus(self):
+        subject = self.placement_subject(DEFAULT_SETTINGS, x=100, y=200)
+        widget = SimpleNamespace(winfo_class=lambda: "Frame")
+        with mock.patch.object(placement, "monitor_work_areas", return_value=()):
+            self.assertEqual(
+                "break",
+                subject.panel_press(
+                    SimpleNamespace(x_root=250, y_root=260, widget=widget)
+                ),
+            )
+            self.assertEqual(
+                "break",
+                subject.panel_drag(SimpleNamespace(x_root=350, y_root=310)),
+            )
+        self.assertEqual((200, 250), (subject.root.x, subject.root.y))
+        self.assertEqual(
+            "break", subject.panel_release(SimpleNamespace(x_root=350, y_root=310))
+        )
+        self.assertIsNone(subject.drag_origin)
+        # A panel press must not pull focus out of a half-typed size,
+        # whose FocusOut commits it.
+        subject.canvas.focus_set.assert_not_called()
+
+        # The card surface still does take focus, so arrow-key nudging
+        # keeps working after a drag on the captions themselves.
+        placement.PlacementWindow.press_card(
+            subject, SimpleNamespace(x_root=250, y_root=260)
+        )
+        subject.canvas.focus_set.assert_called()
+
+    def test_a_press_that_does_not_move_writes_no_geometry(self):
+        subject = self.placement_subject(DEFAULT_SETTINGS, x=100, y=200)
+        with mock.patch.object(placement, "monitor_work_areas", return_value=()):
+            subject.begin_drag(SimpleNamespace(x_root=250, y_root=260))
+        subject.root.geometries.clear()
+
+        subject.drag(SimpleNamespace(x_root=252, y_root=260))
+        self.assertEqual([], subject.root.geometries)
+        self.assertEqual((100, 200), (subject.root.x, subject.root.y))
+
+        # Once it trips, the FULL delta lands, not the delta minus the
+        # threshold - otherwise the captions trail the pointer forever.
+        subject.drag(SimpleNamespace(x_root=254, y_root=260))
+        self.assertEqual(1, len(subject.root.geometries))
+        self.assertEqual((104, 200), (subject.root.x, subject.root.y))
+
+        # Latched: a further single pixel now moves.
+        subject.drag(SimpleNamespace(x_root=255, y_root=260))
+        self.assertEqual((105, 200), (subject.root.x, subject.root.y))
+
+    def test_a_resize_mid_drag_rebases_the_drag_instead_of_dropping_it(self):
+        subject = self.placement_subject(DEFAULT_SETTINGS, x=100, y=200)
+        with mock.patch.object(placement, "monitor_work_areas", return_value=()):
+            subject.begin_drag(SimpleNamespace(x_root=250, y_root=260))
+        subject.drag(SimpleNamespace(x_root=300, y_root=300))
+        moved = (subject.root.x, subject.root.y)
+
+        subject.root.pointer = (400, 380)
+        subject.apply_settings(
+            OverlaySettings(max_visible_speakers=6), reposition=False
+        )
+        self.assertIsNotNone(subject.drag_origin)
+        self.assertEqual(
+            (400, 380), (subject.drag_origin[0], subject.drag_origin[1])
+        )
+        self.assertEqual(
+            (subject.root.x, subject.root.y),
+            (subject.drag_origin[2], subject.drag_origin[3]),
+        )
+
+        # Ten more pixels of pointer travel move the captions ten pixels,
+        # with none of the accumulated delta replayed.
+        before = (subject.root.x, subject.root.y)
+        subject.drag(SimpleNamespace(x_root=410, y_root=380))
+        self.assertEqual((before[0] + 10, before[1]), (subject.root.x, subject.root.y))
+
+        # A root that cannot report a pointer ends the drag cleanly
+        # rather than leaving it inconsistent.
+        with mock.patch.object(placement, "monitor_work_areas", return_value=()):
+            subject.begin_drag(SimpleNamespace(x_root=250, y_root=260))
+        subject.root.winfo_pointerxy = mock.Mock(side_effect=tk.TclError("gone"))
+        subject.rebase_drag(1, 2)
+        self.assertIsNone(subject.drag_origin)
+        self.assertEqual(moved, moved)
+
+    def test_no_pointer_gesture_writes_settings(self):
+        """A drag the member has not saved must not touch their anchor."""
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "overlay-settings.json"
+            self.assertTrue(save_settings(DEFAULT_SETTINGS, path))
+            before = path.read_bytes()
+            before_mtime = path.stat().st_mtime_ns
+
+            subject = self.placement_subject(DEFAULT_SETTINGS, x=100, y=200)
+            subject.settings_path = path
+            widget = SimpleNamespace(winfo_class=lambda: "Label")
+            with mock.patch.object(
+                placement, "monitor_work_areas", return_value=()
+            ):
+                subject.panel_press(
+                    SimpleNamespace(x_root=250, y_root=260, widget=widget)
+                )
+                subject.panel_drag(SimpleNamespace(x_root=350, y_root=310))
+                subject.panel_release(SimpleNamespace(x_root=350, y_root=310))
+                placement.PlacementWindow.press_card(
+                    subject, SimpleNamespace(x_root=250, y_root=260)
+                )
+                placement.PlacementWindow.drag_card(
+                    subject, SimpleNamespace(x_root=400, y_root=400)
+                )
+                placement.PlacementWindow.release_card(
+                    subject, SimpleNamespace(x_root=400, y_root=400)
+                )
+
+            self.assertEqual(before, path.read_bytes())
+            self.assertEqual(before_mtime, path.stat().st_mtime_ns)
 
     def test_drag_starting_on_caption_text_moves_the_preview_once(self):
         subject = self.placement_subject(DEFAULT_SETTINGS, x=100, y=200)
@@ -1447,11 +1716,180 @@ class PlacementControlWindowTests(unittest.TestCase):
             placement,
             "resolve_anchor_rect",
             return_value=self.TARGET,
+        ), mock.patch.object(
+            placement,
+            "monitor_work_areas",
+            return_value=(self.TARGET,),
         ):
             view = placement.PlacementWindow(root, preview=True)
         root.update_idletasks()
         view.controls.update_idletasks()
         return root, view
+
+    def test_only_inert_panel_chrome_carries_the_drag_binding(self):
+        root, view = self.make_hidden_window()
+        try:
+            bound = []
+            pending = list(view.controls.winfo_children())
+            while pending:
+                widget = pending.pop()
+                pending.extend(widget.winfo_children())
+                has_press = "<Button-1>" in widget.bind()
+                if widget.winfo_class() in placement.DRAG_SURFACE_CLASSES:
+                    self.assertTrue(
+                        has_press,
+                        "%s should drag" % widget.winfo_class(),
+                    )
+                    bound.append(widget)
+                else:
+                    self.assertFalse(
+                        has_press,
+                        "%s must not drag" % widget.winfo_class(),
+                    )
+            # The toplevel itself carries no pointer binding: one there
+            # fires for a press on every descendant, so Save, Done, the
+            # spinner and both dropdowns would all start a drag.
+            self.assertNotIn("<Button-1>", view.controls.bind())
+            self.assertIn(view.heading_label, bound)
+            self.assertIn(view.font_label, bound)
+            self.assertEqual("fleur", str(view.heading_label.cget("cursor")))
+            self.assertEqual("fleur", str(view.font_label.cget("cursor")))
+        finally:
+            root.destroy()
+
+    def test_the_shield_is_transparent_by_alpha_and_never_by_colour_key(self):
+        if sys.platform != "win32":
+            self.skipTest("colour-key transparency is a Windows behaviour")
+        root, view = self.make_hidden_window()
+        try:
+            self.assertIsNotNone(view.shield)
+            self.assertTrue(view.shield_ready)
+            self.assertLessEqual(
+                float(view.shield.wm_attributes("-alpha")),
+                placement.SHIELD_ALPHA + 1e-6,
+            )
+            # The single most valuable assertion here. A colour key on
+            # the grab layer would silently restore the whole defect:
+            # every keyed pixel goes click-through again and half the
+            # card stops responding at the default backdrop.
+            self.assertEqual("", str(view.shield.wm_attributes("-transparentcolor")))
+            self.assertEqual(placement.VOID, str(view.shield.cget("bg")))
+            self.assertNotEqual(placement.CHROMA_KEY, str(view.shield.cget("bg")))
+            self.assertTrue(view.shield.overrideredirect())
+        finally:
+            root.destroy()
+
+    def test_the_shield_tracks_the_preview_and_stays_under_the_panel(self):
+        root, view = self.make_hidden_window()
+        try:
+            if view.shield is None:
+                self.skipTest("no grab layer on this platform")
+
+            # Position from the requested geometry, not winfo_*:
+            # nothing here is mapped, and an unmapped window reports 0,0
+            # for its position and its default 200x200 for its size,
+            # whatever was requested. Position is what the tracking
+            # defect is about - a grab layer that drifts off the cards.
+            def origin(window):
+                window.update_idletasks()
+                return window.geometry().split("+", 1)[1]
+
+            def geometries():
+                return origin(view.shield)
+
+            def preview():
+                return origin(view.root)
+
+            self.assertEqual(preview(), geometries())
+            view.apply_settings(
+                OverlaySettings(caption_font_size=24, max_visible_speakers=8),
+                reposition=True,
+            )
+            self.assertEqual(preview(), geometries())
+            view.place_preview(
+                view.root.winfo_x() + 40, view.root.winfo_y() + 25
+            )
+            self.assertEqual(preview(), geometries())
+
+            order = [str(name) for name in root.tk.call("wm", "stackorder", ".")]
+            shield_name = str(view.shield)
+            controls_name = str(view.controls)
+            if shield_name in order and controls_name in order:
+                self.assertLess(
+                    order.index(shield_name), order.index(controls_name)
+                )
+        finally:
+            root.destroy()
+
+    def test_the_shield_is_absent_rather_than_visible_when_alpha_fails(self):
+        try:
+            root = tk.Tk()
+        except tk.TclError as exc:
+            self.skipTest(str(exc))
+        root.withdraw()
+        real_attributes = tk.Toplevel.attributes
+
+        def refuse_alpha(self, *args, **kwargs):
+            if args and args[0] == "-alpha":
+                raise tk.TclError("alpha unavailable")
+            return real_attributes(self, *args, **kwargs)
+
+        try:
+            with mock.patch.object(
+                placement, "resolve_anchor_rect", return_value=self.TARGET
+            ), mock.patch.object(
+                placement, "monitor_work_areas", return_value=(self.TARGET,)
+            ), mock.patch.object(tk.Toplevel, "attributes", refuse_alpha):
+                view = placement.PlacementWindow(root, preview=True)
+            root.update_idletasks()
+            # No grab layer at all, rather than a near-opaque slab left
+            # sitting over the raid.
+            self.assertIsNone(view.shield)
+            self.assertFalse(view.shield_ready)
+            # And the caption cards still drag, exactly as they did
+            # before this change.
+            self.assertTrue(view.canvas.find_withtag("caption-preview"))
+            moved = view.root.geometry()
+            placement.PlacementWindow.press_card(
+                view, SimpleNamespace(x_root=5, y_root=5)
+            )
+            placement.PlacementWindow.drag_card(
+                view, SimpleNamespace(x_root=45, y_root=35)
+            )
+            root.update_idletasks()
+            self.assertNotEqual(moved, view.root.geometry())
+        finally:
+            root.destroy()
+
+    def test_the_shield_changes_no_card_pixel(self):
+        root, view = self.make_hidden_window()
+        try:
+            cards = view.canvas.find_withtag("caption-preview")
+            self.assertEqual(8, len(cards))
+            self.assertEqual(3, len(view.canvas.find_withtag("privacy-tally")))
+            stipples = {
+                str(view.canvas.itemcget(item, "stipple"))
+                for item in cards
+                if str(view.canvas.itemcget(item, "stipple"))
+            }
+            self.assertIn("gray50", stipples)
+            view.set_background_opacity("25%")
+            stipples = {
+                str(view.canvas.itemcget(item, "stipple"))
+                for item in view.canvas.find_withtag("caption-preview")
+                if str(view.canvas.itemcget(item, "stipple"))
+            }
+            self.assertIn("gray25", stipples)
+            # No solid catcher was drawn over the cards: that would make
+            # the Backdrop control lie, showing a slab in Move and a
+            # see-through card in game.
+            for item in view.canvas.find_withtag("caption-preview"):
+                self.assertNotEqual(
+                    placement.CHROMA_KEY,
+                    str(view.canvas.itemcget(item, "fill")),
+                )
+        finally:
+            root.destroy()
 
     def test_hidden_move_window_previews_appearance_immediately(self):
         root, view = self.make_hidden_window()
@@ -1619,6 +2057,183 @@ class PlacementControlWindowTests(unittest.TestCase):
 
 
 class ControlPanelGeometryTests(unittest.TestCase):
+    # A 1080p work area, a default-sized preview and the panel this
+    # window really builds. There is no 1080p display on the machine
+    # this was written on, so these are the pure rules exercised with a
+    # 1080p rectangle, not an observation of one.
+    SCREEN = (0, 0, 1920, 1080)
+    PREVIEW_SIZE = (540, 190)
+    PANEL = (481, 153)
+
+    def latched(self, bounds, preview_rect, panel):
+        solved = placement.control_panel_position(bounds, preview_rect, panel)
+        return (solved[0] - preview_rect[0], solved[1] - preview_rect[1])
+
+    def test_panel_holds_its_offset_across_the_1080p_flip_band(self):
+        """Shino: "moving text desyncs the text from the box on 1080p".
+
+        The shipped rule flips the panel from below the captions to above
+        them the instant they cross one line: measured here, 927 to 573
+        for a single pixel of caption movement. Held rigid, the panel
+        moves exactly as far as the captions did.
+        """
+        width, height = self.PREVIEW_SIZE
+        start = (690, 758, width, height)
+        offset = self.latched(self.SCREEN, start, self.PANEL)
+        self.assertEqual((29, -159), offset)
+
+        previous = None
+        for preview_y in range(600, 900):
+            x, y, _clamped = placement.panel_rigid_position(
+                self.SCREEN, (690, preview_y), self.PANEL, offset
+            )
+            self.assertGreaterEqual(x, self.SCREEN[0])
+            self.assertGreaterEqual(y, self.SCREEN[1])
+            self.assertLessEqual(x + self.PANEL[0], self.SCREEN[0] + self.SCREEN[2])
+            self.assertLessEqual(y + self.PANEL[1], self.SCREEN[1] + self.SCREEN[3])
+            if previous is not None:
+                self.assertLessEqual(abs(y - previous), 1)
+            previous = y
+
+        # The rule this replaces, at the same crossing.
+        before = placement.control_panel_position(
+            self.SCREEN, (690, 731, width, height), self.PANEL
+        )
+        after = placement.control_panel_position(
+            self.SCREEN, (690, 732, width, height), self.PANEL
+        )
+        self.assertGreater(abs(after[1] - before[1]), 300)
+
+    def test_full_height_preview_never_freezes_the_panel(self):
+        """A tall caption stack used to pin the panel, then leap.
+
+        Measured with the shipped rule: panel_y stays at 0 across a
+        264 pixel band of caption movement and then jumps 927.
+        """
+        preview_size = (540, 1026)
+        offset = self.latched(
+            self.SCREEN, (690, -78) + preview_size, self.PANEL
+        )
+        seen = []
+        for preview_y in range(-40, -140, -1):
+            _x, y, _clamped = placement.panel_rigid_position(
+                self.SCREEN, (690, preview_y), self.PANEL, offset
+            )
+            seen.append(y)
+        steps = [abs(b - a) for a, b in zip(seen, seen[1:])]
+        self.assertTrue(steps)
+        self.assertLessEqual(max(steps), 1)
+        # It does hold still for part of this sweep, because the panel
+        # has reached the top of the screen and must not leave it. That
+        # is a clamp, not the old dead band: the shipped rule sat in the
+        # same place and then leapt most of the screen height.
+        self.assertTrue(any(step == 1 for step in steps))
+        shipped = [
+            placement.control_panel_position(
+                self.SCREEN, (690, preview_y) + preview_size, self.PANEL
+            )[1]
+            for preview_y in range(-40, -140, -1)
+        ]
+        shipped_steps = [abs(b - a) for a, b in zip(shipped, shipped[1:])]
+        self.assertGreater(max(shipped_steps), 300)
+
+    def test_work_area_for_rect_picks_the_display_under_the_caption(self):
+        left = (0, 0, 1920, 1080)
+        right = (1920, 0, 1920, 1080)
+        areas = (left, right)
+        width, height = self.PREVIEW_SIZE
+
+        self.assertEqual(
+            right,
+            placement.work_area_for_rect(
+                areas, (3090, 758, width, height), left
+            ),
+        )
+        # Dragged to the second monitor, the panel goes too.
+        offset = (29, -159)
+        x, _y, _clamped = placement.panel_rigid_position(
+            right, (3090, 758), self.PANEL, offset
+        )
+        self.assertEqual(3119, x)
+        # Where the shipped clamp would have left it: on the first.
+        stranded = placement.control_panel_position(
+            left, (3090, 758, width, height), self.PANEL
+        )
+        self.assertEqual(1439, stranded[0])
+
+        # Straddling: the display showing more of the captions wins.
+        self.assertEqual(
+            left,
+            placement.work_area_for_rect(
+                areas, (1800, 100, 200, 100), right
+            ),
+        )
+        self.assertEqual(
+            right,
+            placement.work_area_for_rect(
+                areas, (1880, 100, 200, 100), left
+            ),
+        )
+        # No monitor list at all - off win32, or the enumeration failed.
+        fallback = (7, 7, 70, 70)
+        self.assertIs(
+            fallback,
+            placement.work_area_for_rect((), (0, 0, 10, 10), fallback),
+        )
+
+    def test_panel_never_leaves_the_containing_work_area(self):
+        offset = (29, -159)
+        cases = (
+            (0, 0, 1920, 1080),
+            (1920, 0, 1920, 1080),
+            (-218, -1440, 2048, 1104),
+        )
+        for bounds in cases:
+            for preview_x in (-4000, bounds[0], bounds[0] + 500, 9000):
+                for preview_y in (-4000, bounds[1], bounds[1] + 500, 9000):
+                    x, y, clamped = placement.panel_rigid_position(
+                        bounds, (preview_x, preview_y), self.PANEL, offset
+                    )
+                    self.assertGreaterEqual(x, bounds[0])
+                    self.assertGreaterEqual(y, bounds[1])
+                    self.assertLessEqual(x + self.PANEL[0], bounds[0] + bounds[2])
+                    self.assertLessEqual(y + self.PANEL[1], bounds[1] + bounds[3])
+                    wanted = (preview_x + offset[0], preview_y + offset[1])
+                    self.assertEqual(clamped, (x, y) != wanted)
+
+        # A work area is shorter than its monitor. The panel must settle
+        # above the taskbar, not behind it.
+        taskbar = (0, 0, 5120, 1392)
+        _x, y, _clamped = placement.panel_rigid_position(
+            taskbar, (600, 1091), self.PANEL, offset
+        )
+        self.assertLessEqual(y + self.PANEL[1], 1392)
+
+        # A panel larger than the space pins to the near edge rather
+        # than inverting into a negative position.
+        tiny = (100, 100, 300, 200)
+        x, y, clamped = placement.panel_rigid_position(
+            tiny, (0, 0), self.PANEL, offset
+        )
+        self.assertEqual((100, 100), (x, y))
+        self.assertTrue(clamped)
+
+    def test_panel_drag_surface_accepts_only_inert_chrome(self):
+        self.assertEqual(("Frame", "Label"), placement.DRAG_SURFACE_CLASSES)
+        for widget_class in ("Frame", "Label"):
+            self.assertTrue(placement.panel_drag_surface(widget_class))
+        for widget_class in (
+            "Button",
+            "Spinbox",
+            "Menubutton",
+            "Menu",
+            "Toplevel",
+            "Entry",
+            "TCombobox",
+            "Canvas",
+        ):
+            self.assertFalse(placement.panel_drag_surface(widget_class))
+
     def test_panel_is_clamped_inside_positive_and_negative_monitor_origins(self):
         panel = (841, 239)
         for target, preview in (
