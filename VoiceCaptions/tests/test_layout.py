@@ -1065,6 +1065,10 @@ class LiveDisplaySettingTests(unittest.TestCase):
         )
         subject.position_controls = lambda *_args, **_kwargs: None
         subject.sync_shield = lambda *_args, **_kwargs: None
+        # Stubbed like the panel and the grab layer: the tracking
+        # tests below drive the real method on their own subject,
+        # so these stay independent of the machine's monitors.
+        subject.refresh_target = lambda *_args, **_kwargs: None
         subject.place_preview = lambda x, y, resize=False, settle=False: (
             placement.PlacementWindow.place_preview(
                 subject, x, y, resize=resize, settle=settle
@@ -1295,6 +1299,84 @@ class LiveDisplaySettingTests(unittest.TestCase):
         subject.position_controls((690, 732), settle=True)
         self.assertEqual(lifts, panel.lifts)
         self.assertEqual((29, -159), subject.panel_offset)
+
+    def test_releasing_a_drag_refits_the_preview_immediately(self):
+        subject = self.placement_subject(DEFAULT_SETTINGS, x=100, y=200)
+        subject.last_target_check = 999.0
+        calls = []
+        subject.refresh_target = lambda: calls.append(1)
+        placement.PlacementWindow.release(subject, SimpleNamespace())
+        self.assertEqual(-placement.TARGET_REFRESH_SECONDS, subject.last_target_check)
+        self.assertEqual(1, len(calls))
+
+        # A subject without target tracking survives release untouched -
+        # the shape several existing drag tests use.
+        bare = self.placement_subject(DEFAULT_SETTINGS, x=100, y=200)
+        del bare.refresh_target
+        placement.PlacementWindow.release(bare, SimpleNamespace())
+        self.assertIsNone(bare.drag_origin)
+
+    def test_save_without_a_drag_writes_back_the_anchor_it_loaded(self):
+        """Opening Move and pressing Save must not move anybody's captions.
+
+        Today Save re-derives anchor, anchor_y and growth from pixels
+        every time. Measured: growth "down" with anchor_y 0.10 at 20
+        rows came back as "up" with 0.918056, which moves the live
+        overlay from y=13 to y=60 on a 1080p.
+        """
+        loaded = OverlaySettings(
+            max_visible_speakers=20, growth="down", anchor_x=0.25, anchor_y=0.10
+        )
+        subject = self.placement_subject(loaded, x=100, y=200)
+        subject.preview = False
+        subject.position_dirty = False
+        saved = []
+        with mock.patch.object(placement, "load_settings", return_value=loaded), \
+                mock.patch.object(
+                    placement, "save_settings",
+                    side_effect=lambda value, *a, **k: saved.append(value) or True,
+                ):
+            placement.PlacementWindow.save(subject)
+        self.assertEqual(1, len(saved))
+        self.assertEqual("down", saved[0].growth)
+        self.assertEqual(0.10, saved[0].anchor_y)
+        self.assertEqual(0.25, saved[0].anchor_x)
+
+    def test_save_after_a_drag_measures_the_display_the_captions_are_on(self):
+        loaded = OverlaySettings()
+        subject = self.placement_subject(loaded, x=5660, y=800)
+        subject.preview = False
+        subject.position_dirty = True
+        subject.target_rect = (5120, 0, 1920, 1080)
+        saved = []
+        with mock.patch.object(placement, "load_settings", return_value=loaded), \
+                mock.patch.object(
+                    placement, "save_settings",
+                    side_effect=lambda value, *a, **k: saved.append(value) or True,
+                ):
+            placement.PlacementWindow.save(subject)
+        self.assertEqual(1, len(saved))
+        self.assertAlmostEqual(0.421875, saved[0].anchor_x, places=6)
+        # And it round-trips back to exactly where it was dropped.
+        self.assertEqual(
+            (5660, 800),
+            placement.position_from_settings(
+                (5120, 0, 1920, 1080),
+                (subject.overlay_width, subject.canvas_height),
+                saved[0],
+                bottom_reference_height=placement.BOTTOM_REFERENCE_HEIGHT,
+            ),
+        )
+        # Against the primary - the rect Move used before this change -
+        # the same drop saved 1.158203 and landed off the panel.
+        stale = placement.settings_from_position(
+            (0, 0, 5120, 1440),
+            (subject.overlay_width, subject.canvas_height),
+            (5660, 800),
+            current=loaded,
+            bottom_reference_height=placement.BOTTOM_REFERENCE_HEIGHT,
+        )
+        self.assertAlmostEqual(1.158203, stale.anchor_x, places=6)
 
     def test_a_press_on_a_panel_control_does_not_start_a_drag(self):
         """Save, Done, the spinner and the dropdowns are not drag handles.
@@ -1725,6 +1807,88 @@ class PlacementControlWindowTests(unittest.TestCase):
         root.update_idletasks()
         view.controls.update_idletasks()
         return root, view
+
+    def test_a_rescued_preview_says_so_and_writes_nothing(self):
+        """Shino approved the wording, 2026-09-08.
+
+        The window opens somewhere other than where the saved anchor
+        asked for, so it has to say why. Nothing is written: their
+        captions have not moved.
+        """
+        try:
+            root = tk.Tk()
+        except tk.TclError as exc:
+            self.skipTest(str(exc))
+        root.withdraw()
+        try:
+            # An anchor that puts the preview far off every display.
+            stranded = OverlaySettings(anchor_x=8.0, anchor_y=8.0)
+            written = []
+            with mock.patch.object(
+                placement, "resolve_anchor_rect", return_value=self.TARGET
+            ), mock.patch.object(
+                placement, "monitor_work_areas", return_value=(self.TARGET,)
+            ), mock.patch.object(
+                placement, "monitor_display_bounds", return_value=(self.TARGET,)
+            ), mock.patch.object(
+                placement, "load_settings", return_value=stranded
+            ), mock.patch.object(
+                placement, "save_settings",
+                side_effect=lambda *a, **k: written.append(a) or True,
+            ):
+                view = placement.PlacementWindow(root, preview=False)
+                root.update_idletasks()
+                self.assertEqual(placement.RESCUED_STATUS_TEXT, view.saved_label)
+                self.assertIn("off this screen", view.saved_label)
+                # The window really is on the target now. Read the
+                # requested geometry, not winfo_x: nothing is mapped
+                # here and an unmapped window reports 0.
+                left, top, width, height = self.TARGET
+                position = view.root.geometry().split("+")
+                x, y = int(position[1]), int(position[2])
+                self.assertGreaterEqual(x, left)
+                self.assertLess(x, left + width)
+                self.assertGreaterEqual(y, top)
+                self.assertLess(y, top + height)
+                # And the rescue itself saved nothing.
+                self.assertEqual([], written)
+                self.assertFalse(view.position_dirty)
+        finally:
+            root.destroy()
+
+    def test_a_reachable_preview_keeps_the_ordinary_status(self):
+        root, view = self.make_hidden_window()
+        try:
+            self.assertEqual(placement.DEFAULT_STATUS_TEXT, view.saved_label)
+        finally:
+            root.destroy()
+
+    def test_the_built_font_menu_fits_on_the_display(self):
+        """Real Tk: the menu Move actually builds, against a real list."""
+        root, view = self.make_hidden_window()
+        try:
+            inner = view.font_family_menu["menu"]
+            inner.update_idletasks()
+            entries = inner.index("end")
+            self.assertIsNotNone(entries)
+            self.assertEqual(len(view.font_families), entries + 1)
+            for family in view.font_families:
+                self.assertFalse(family.startswith("@") and family != view.settings.caption_font_family)
+            # Column breaks are set, and the first entry never carries
+            # one (that would open the menu with an empty column).
+            breaks = [
+                index
+                for index in range(entries + 1)
+                if str(inner.entrycget(index, "columnbreak")) not in ("0", "")
+            ]
+            self.assertNotIn(0, breaks)
+            if len(view.font_families) > 60:
+                self.assertTrue(breaks, "a long list must break into columns")
+            self.assertLessEqual(
+                inner.winfo_reqheight(), self.TARGET[3]
+            )
+        finally:
+            root.destroy()
 
     def test_only_inert_panel_chrome_carries_the_drag_binding(self):
         root, view = self.make_hidden_window()
@@ -2217,6 +2381,194 @@ class ControlPanelGeometryTests(unittest.TestCase):
         )
         self.assertEqual((100, 100), (x, y))
         self.assertTrue(clamped)
+
+    def tracking_subject(self, **overrides):
+        """A subject that drives the real refresh_target."""
+        subject = SimpleNamespace(
+            root=FakeRoot(5200, 100),
+            settings=DEFAULT_SETTINGS,
+            overlay_width=540,
+            canvas_height=190,
+            target_rect=(5120, 0, 1920, 1080),
+            target_resolved=False,
+            display_bounds=((0, 0, 5120, 1440), (5120, 0, 1920, 1080)),
+            drag_origin=None,
+            position_dirty=False,
+            last_target_check=0.0,
+            apply_settings=mock.Mock(),
+        )
+        for name, value in overrides.items():
+            setattr(subject, name, value)
+        subject.preview_rect = lambda: placement.PlacementWindow.preview_rect(subject)
+        subject.adopt_target = lambda target: (
+            placement.PlacementWindow.adopt_target(subject, target)
+        )
+        return subject
+
+    def refresh(self, subject, *, now):
+        with mock.patch.object(placement.time, "monotonic", return_value=now), \
+                mock.patch.object(
+                    placement, "monitor_display_bounds",
+                    return_value=subject.display_bounds,
+                ):
+            placement.PlacementWindow.refresh_target(subject)
+
+    def test_the_preview_adopts_a_game_rect_that_appears_while_move_is_open(self):
+        """Launching the game with Move open used to leave it stale."""
+        subject = self.tracking_subject()
+        with mock.patch.object(
+            placement, "resolve_anchor_rect", return_value=(5120, 0, 1920, 1080)
+        ):
+            self.refresh(subject, now=100.0)
+        self.assertEqual((5120, 0, 1920, 1080), subject.target_rect)
+        self.assertTrue(subject.target_resolved)
+        subject.apply_settings.assert_called_once()
+        self.assertTrue(subject.apply_settings.call_args.kwargs["reposition"])
+
+    def test_a_live_drag_is_never_retargeted_under_the_pointer(self):
+        subject = self.tracking_subject(drag_origin=(1, 2, 3, 4))
+        with mock.patch.object(
+            placement, "resolve_anchor_rect", return_value=(0, 0, 800, 600)
+        ):
+            self.refresh(subject, now=100.0)
+        self.assertEqual((5120, 0, 1920, 1080), subject.target_rect)
+        subject.apply_settings.assert_not_called()
+
+    def test_a_dragged_preview_keeps_its_pixel_when_the_target_changes(self):
+        for dirty, expected in ((True, False), (False, True)):
+            subject = self.tracking_subject(position_dirty=dirty)
+            with mock.patch.object(
+                placement, "resolve_anchor_rect", return_value=(0, 0, 800, 600)
+            ):
+                self.refresh(subject, now=100.0)
+            subject.apply_settings.assert_called_once()
+            self.assertEqual(
+                expected, subject.apply_settings.call_args.kwargs["reposition"]
+            )
+
+    def test_the_preview_re_resolves_on_the_overlays_own_cadence(self):
+        """One cadence, imported - never a second one declared here."""
+        subject = self.tracking_subject()
+        resolver = mock.Mock(return_value=(0, 0, 800, 600))
+        with mock.patch.object(placement, "resolve_anchor_rect", resolver):
+            self.refresh(subject, now=100.0)
+            self.refresh(
+                subject, now=100.0 + placement.TARGET_REFRESH_SECONDS / 2
+            )
+            self.assertEqual(1, resolver.call_count)
+            self.refresh(
+                subject, now=100.0 + placement.TARGET_REFRESH_SECONDS + 0.01
+            )
+            self.assertEqual(2, resolver.call_count)
+
+    def test_preview_on_a_1080p_secondary_matches_the_live_overlay(self):
+        """The WYSIWYG contract, on the display the captions land on.
+
+        None of the caps bind at default settings - font 10 with two
+        rows is 540x190 on every rect - which is exactly how this
+        shipped past a green suite. Font 48 with 20 rows binds both.
+        """
+        settings = OverlaySettings(caption_font_size=48, max_visible_speakers=20)
+        root = FakeRoot(0, 0)
+        root.pointer = (6000, 500)
+        displays = ((0, 0, 5120, 1440), (5120, 0, 1920, 1080))
+        with mock.patch.object(placement, "resolve_anchor_rect", return_value=None):
+            target = placement.preview_target(
+                root, settings, displays=displays
+            ).rect
+        self.assertEqual((5120, 0, 1920, 1080), target)
+        metrics, height = placement.preview_surface(root, settings, target)
+        # What the live overlay computes for that same client rect.
+        self.assertEqual(
+            metrics_for_target(settings.caption_font_size, target).canvas_width,
+            metrics.canvas_width,
+        )
+        self.assertEqual(
+            canvas_height_for_target(
+                settings.max_visible_speakers, settings.caption_font_size, target
+            ),
+            height,
+        )
+        self.assertEqual(1920, metrics.canvas_width)
+        self.assertEqual(1026, height)
+        # Against the primary, which is what Move used before, the box
+        # was 672 px wider than the panel it claimed to be previewing.
+        stale_metrics, stale_height = placement.preview_surface(
+            root, settings, (0, 0, 5120, 1440)
+        )
+        self.assertEqual(2592, stale_metrics.canvas_width)
+        self.assertEqual(1368, stale_height)
+
+    def test_the_font_list_drops_the_vertical_writing_duplicates(self):
+        """Shino, 2026-09-08: "the font box stretches extremely high".
+
+        Windows reports an "@"-prefixed copy of every CJK face - the
+        same font rotated for vertical writing. On his machine that was
+        28 of 243 entries, and none of them is what somebody picking a
+        caption font wants.
+        """
+        raw = ("Segoe UI", "@MS Gothic", "MS Gothic", "Arial", "@Malgun Gothic")
+        self.assertEqual(
+            ("Arial", "MS Gothic", "Segoe UI"),
+            placement.caption_font_choices(raw, "Segoe UI"),
+        )
+        # Sorted without case deciding it, and de-duplicated.
+        self.assertEqual(
+            ("arial", "Arial B", "Zapf"),
+            placement.caption_font_choices(
+                ("Zapf", "arial", "Arial B", "Zapf"), "Zapf"
+            ),
+        )
+        # The member's own family survives even when it is a vertical
+        # copy or is no longer installed, so opening Move can never
+        # silently change the font they chose.
+        self.assertIn(
+            "@MS Gothic",
+            placement.caption_font_choices(raw, "@MS Gothic"),
+        )
+        self.assertIn(
+            "A Font They Uninstalled",
+            placement.caption_font_choices(raw, "A Font They Uninstalled"),
+        )
+        # Junk in the list from Tk does not become an entry.
+        self.assertEqual(
+            ("Arial",),
+            placement.caption_font_choices(("Arial", "", None, 7), "Arial"),
+        )
+
+    def test_the_font_menu_never_asks_to_be_taller_than_the_screen(self):
+        """A Tk menu is one column and does not scroll.
+
+        Measured before this change on a 1392 px work area: 243
+        families in a single column asked for 4619 px, so most of the
+        list could not be reached at all.
+        """
+        # 215 real families at 21 px, on the work area of his primary.
+        per_column = placement.menu_column_size(215, 21, 1392)
+        self.assertEqual(66, per_column)
+        columns = -(-215 // per_column)
+        self.assertEqual(4, columns)
+        self.assertLessEqual(per_column * 21, 1392)
+
+        # A 1080p work area breaks sooner, and still fits.
+        per_column = placement.menu_column_size(215, 21, 1040)
+        self.assertLessEqual(per_column * 21, 1040)
+        self.assertGreater(per_column, 1)
+
+        # Degenerate inputs cannot produce a zero or negative column,
+        # which would make range(start, stop, step) raise.
+        for entries, row, height in (
+            (0, 21, 1392),
+            (10, 0, 1392),
+            (10, 21, 0),
+            (10, 21, -5),
+            (10, 5000, 1392),
+        ):
+            self.assertGreaterEqual(
+                placement.menu_column_size(entries, row, height), 1
+            )
+        # Never more entries per column than there are entries.
+        self.assertEqual(3, placement.menu_column_size(3, 21, 99999))
 
     def test_panel_drag_surface_accepts_only_inert_chrome(self):
         self.assertEqual(("Frame", "Label"), placement.DRAG_SURFACE_CLASSES)

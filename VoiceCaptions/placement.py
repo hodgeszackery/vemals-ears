@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import ctypes
 import sys
+import time
 import tkinter as tk
 from ctypes import wintypes
 from dataclasses import replace
+from typing import NamedTuple
 from pathlib import Path
 from tkinter import colorchooser
 from tkinter import font as tkfont
@@ -31,6 +33,7 @@ if __package__ in {None, ""}:
         SLATE,
         SLATE_LIVE,
         TEXT,
+        TARGET_REFRESH_SECONDS,
         VOID,
         canvas_height_for_rows,
         enumerate_caption_monitors,
@@ -68,6 +71,7 @@ else:
         SLATE,
         SLATE_LIVE,
         TEXT,
+        TARGET_REFRESH_SECONDS,
         VOID,
         canvas_height_for_rows,
         enumerate_caption_monitors,
@@ -113,22 +117,76 @@ DRAG_THRESHOLD = 3
 SHIELD_ALPHA = 1 / 255
 
 DEFAULT_STATUS_TEXT = "Drag the captions or this panel"
+RESCUED_STATUS_TEXT = (
+    "Your saved spot is off this screen - moved it into view. "
+    "Save to keep it."
+)
+
+# How much of the preview must be on a display for it to count as
+# reachable. Less than this and there is nothing a member can grab.
+PREVIEW_RESCUE_MARGIN = 24
 
 
-def target_rect_for_settings(
-    root: tk.Misc, settings
-) -> tuple[int, int, int, int]:
-    """Resolve the selected target for the movable preview.
+class PreviewTarget(NamedTuple):
+    """The rect the preview is measured against, and where it came from."""
 
-    The anchor resolver falls through to known games when a selected surface
-    is unavailable. The editable preview uses a local screen-sized work
-    surface only when no anchor can be resolved, so its controls remain
-    reachable without changing the overlay's saved target.
+    rect: tuple[int, int, int, int]
+    resolved: bool
+
+
+def preview_target(
+    root: tk.Misc,
+    settings,
+    *,
+    probe_rect: tuple[int, int, int, int] | None = None,
+    displays: tuple[tuple[int, int, int, int], ...] | None = None,
+) -> PreviewTarget:
+    """The rectangle the preview must mirror, and whether an anchor gave it.
+
+    A resolved anchor always wins and is returned untouched: a member
+    whose game is running already gets a preview sized to their game
+    window, and that case is pixel-exact today.
+
+    With nothing resolved - the ordinary case for somebody setting up
+    before a raid - this used to hand back the PRIMARY monitor, whatever
+    display the member was actually looking at. Shino, 2026-09-08, on a
+    1080p secondary: that rect sized the preview, positioned it, and was
+    the frame Save measured a dragged position against, so a caption
+    dropped on the 1080p was saved as a fraction of the ultrawide and
+    redrawn 1413 pixels to the right, off the panel entirely.
+
+    Full monitor BOUNDS, not the work area, for two reasons: on a
+    primary display the bounds are bit-identical to the screen rect this
+    returned before, so a single-monitor member does not move by a
+    pixel; and this is a prediction of a game client rect, which for a
+    fullscreen or borderless client is the whole monitor.
     """
     resolved = resolve_anchor_rect(settings)
     if resolved is not None:
-        return resolved
-    return 0, 0, root.winfo_screenwidth(), root.winfo_screenheight()
+        return PreviewTarget(resolved, True)
+    screen = (0, 0, root.winfo_screenwidth(), root.winfo_screenheight())
+    if probe_rect is None:
+        probe_rect = pointer_probe_rect(root)
+    if displays is None:
+        displays = monitor_display_bounds()
+    if probe_rect is None or not displays:
+        return PreviewTarget(screen, False)
+    return PreviewTarget(
+        display_bounds_for_rect(displays, probe_rect, screen), False
+    )
+
+
+def target_rect_for_settings(
+    root: tk.Misc,
+    settings,
+    *,
+    probe_rect: tuple[int, int, int, int] | None = None,
+    displays: tuple[tuple[int, int, int, int], ...] | None = None,
+) -> tuple[int, int, int, int]:
+    """The preview's target rectangle. See preview_target for the rule."""
+    return preview_target(
+        root, settings, probe_rect=probe_rect, displays=displays
+    ).rect
 
 
 def preview_surface(root: tk.Misc, settings, target_rect):
@@ -193,6 +251,46 @@ def control_panel_position(
     return int(x), int(y)
 
 
+def caption_font_choices(
+    families, current: str
+) -> tuple[str, ...]:
+    """The families worth offering for a caption, sorted and de-duplicated.
+
+    Windows reports a second, "@"-prefixed copy of every CJK face - the
+    same font rotated for vertical writing. They are never what somebody
+    picking a caption font wants, and on this machine they were a
+    seventh of the list. The member's current family is always kept,
+    even if it is one of those or is no longer installed, so opening
+    Move can never silently change their font.
+    """
+    keep = {
+        name
+        for name in families
+        if isinstance(name, str) and name and not name.startswith("@")
+    }
+    if isinstance(current, str) and current:
+        keep.add(current)
+    return tuple(sorted(keep, key=str.casefold))
+
+
+def menu_column_size(
+    entries: int, row_height: int, available_height: int
+) -> int:
+    """How many entries fit in one column before it must break.
+
+    A Tk menu does not scroll. With every family in one column the list
+    asked for 4619 pixels on a 1392 pixel work area, so most of it could
+    not be reached at all. Breaking into columns keeps every entry on
+    screen, which is also how Windows itself shows a long menu.
+    """
+    if entries <= 0:
+        return 1
+    usable = max(int(available_height), 1)
+    height = max(int(row_height), 1)
+    per_column = max(1, usable // height)
+    return min(per_column, entries)
+
+
 def panel_drag_surface(widget_class: str) -> bool:
     """Whether a press on this widget class should move the captions."""
     return widget_class in DRAG_SURFACE_CLASSES
@@ -215,6 +313,61 @@ def monitor_work_areas() -> tuple[tuple[int, int, int, int], ...]:
         return ()
 
 
+def monitor_display_bounds() -> tuple[tuple[int, int, int, int], ...]:
+    """Every selectable monitor's FULL rectangle, taskbar included.
+
+    The work area is right for placing a panel. This is right for
+    predicting where the live overlay will draw, because a fullscreen or
+    borderless game client rect is the whole monitor, not the work area.
+    Same enumeration, same DPI-unaware coordinates.
+    """
+    try:
+        return tuple(
+            (
+                int(monitor.display_bounds[0]),
+                int(monitor.display_bounds[1]),
+                int(monitor.display_bounds[2]),
+                int(monitor.display_bounds[3]),
+            )
+            for monitor in enumerate_caption_monitors()
+        )
+    except Exception:  # noqa: BLE001 - a lost monitor list must not lose the preview
+        return ()
+
+
+_NO_MATCH = object()
+
+
+def _best_containing_rect(rects, probe_rect, fallback):
+    """The rect a probe is on: largest overlap, then the one holding its centre."""
+    if not rects:
+        return fallback
+    left, top, width, height = probe_rect
+    right, bottom = left + width, top + height
+    best = None
+    best_area = 0
+    for area in rects:
+        area_left, area_top, area_width, area_height = area
+        overlap_width = min(right, area_left + area_width) - max(left, area_left)
+        overlap_height = min(bottom, area_top + area_height) - max(top, area_top)
+        if overlap_width <= 0 or overlap_height <= 0:
+            continue
+        covered = overlap_width * overlap_height
+        if covered > best_area:
+            best, best_area = area, covered
+    if best is not None:
+        return best
+    centre_x, centre_y = left + width // 2, top + height // 2
+    for area in rects:
+        area_left, area_top, area_width, area_height = area
+        if (
+            area_left <= centre_x < area_left + area_width
+            and area_top <= centre_y < area_top + area_height
+        ):
+            return area
+    return fallback
+
+
 def work_area_for_rect(
     work_areas: tuple[tuple[int, int, int, int], ...],
     preview_rect: tuple[int, int, int, int],
@@ -229,32 +382,98 @@ def work_area_for_rect(
     on the first. Largest overlap wins; a caption straddling two
     displays keeps its panel on the one showing more of it.
     """
-    if not work_areas:
+    return _best_containing_rect(work_areas, preview_rect, fallback)
+
+
+def display_bounds_for_rect(
+    bounds: tuple[tuple[int, int, int, int], ...],
+    probe_rect: tuple[int, int, int, int],
+    fallback: tuple[int, int, int, int],
+) -> tuple[int, int, int, int]:
+    """The display a probe is on, or the nearest one when it is off them all.
+
+    Monitor bounds tile the desktop and Windows keeps the cursor inside
+    their union, so a pointer probe always lands on one. A PREVIEW probe
+    need not: a member whose captions were pushed off the desktop by the
+    old bug has a preview rect that overlaps nothing. Falling back to the
+    primary there would put their window somewhere they are not looking,
+    so the nearest display wins instead.
+    """
+    if not bounds:
         return fallback
-    left, top, width, height = preview_rect
-    right, bottom = left + width, top + height
-    best = None
-    best_area = 0
-    for area in work_areas:
-        area_left, area_top, area_width, area_height = area
-        overlap_width = min(right, area_left + area_width) - max(left, area_left)
-        overlap_height = min(bottom, area_top + area_height) - max(top, area_top)
-        if overlap_width <= 0 or overlap_height <= 0:
-            continue
-        covered = overlap_width * overlap_height
-        if covered > best_area:
-            best, best_area = area, covered
-    if best is not None:
-        return best
+    found = _best_containing_rect(bounds, probe_rect, _NO_MATCH)
+    if found is not _NO_MATCH:
+        return found
+    left, top, width, height = probe_rect
     centre_x, centre_y = left + width // 2, top + height // 2
-    for area in work_areas:
+    nearest = None
+    nearest_distance = None
+    for area in bounds:
         area_left, area_top, area_width, area_height = area
-        if (
-            area_left <= centre_x < area_left + area_width
-            and area_top <= centre_y < area_top + area_height
-        ):
-            return area
-    return fallback
+        clamped_x = min(max(centre_x, area_left), area_left + area_width - 1)
+        clamped_y = min(max(centre_y, area_top), area_top + area_height - 1)
+        distance = (centre_x - clamped_x) ** 2 + (centre_y - clamped_y) ** 2
+        if nearest_distance is None or distance < nearest_distance:
+            nearest, nearest_distance = area, distance
+    return nearest if nearest is not None else fallback
+
+
+def pointer_probe_rect(root) -> tuple[int, int, int, int] | None:
+    """Where the pointer is, as a one-pixel rect, or None if unknowable."""
+    reader = getattr(root, "winfo_pointerxy", None)
+    if not callable(reader):
+        return None
+    try:
+        pointer_x, pointer_y = reader()
+        return (int(pointer_x), int(pointer_y), 1, 1)
+    except (tk.TclError, AttributeError, TypeError, ValueError):
+        return None
+
+
+def preview_is_reachable(
+    display_bounds: tuple[tuple[int, int, int, int], ...],
+    target_rect: tuple[int, int, int, int],
+    preview_rect: tuple[int, int, int, int],
+    margin: int = PREVIEW_RESCUE_MARGIN,
+) -> bool:
+    """Whether enough of the preview is on screen to be grabbed."""
+
+    def covers(area) -> bool:
+        area_left, area_top, area_width, area_height = area
+        left, top, width, height = preview_rect
+        overlap_width = min(left + width, area_left + area_width) - max(left, area_left)
+        overlap_height = min(top + height, area_top + area_height) - max(top, area_top)
+        return overlap_width >= margin and overlap_height >= margin
+
+    # The target first, so a preview sitting where its own anchor put it
+    # is reachable without ever consulting the machine's real monitors.
+    if covers(target_rect):
+        return True
+    return any(covers(area) for area in display_bounds)
+
+
+def rescued_position(
+    display_bounds: tuple[tuple[int, int, int, int], ...],
+    target_rect: tuple[int, int, int, int],
+    overlay_size: tuple[int, int],
+    position: tuple[int, int],
+) -> tuple[int, int]:
+    """Pull an unreachable preview back onto its target, and nothing else.
+
+    A member whose saved fraction was measured against the wrong display
+    can have captions parked off the desktop. Their file is not touched
+    and their live overlay does not move, but the preview has to be
+    somewhere they can grab it. Anything already reachable is returned
+    byte-identical, so hanging captions off a screen edge stays legal.
+    """
+    left, top, width, height = target_rect
+    overlay_width, overlay_height = overlay_size
+    preview_rect = (position[0], position[1], overlay_width, overlay_height)
+    if preview_is_reachable(display_bounds, target_rect, preview_rect):
+        return position
+    x = min(max(position[0], left), max(left, left + width - overlay_width))
+    y = min(max(position[1], top), max(top, top + height - overlay_height))
+    return int(x), int(y)
 
 
 def panel_rigid_position(
@@ -398,6 +617,12 @@ class PlacementWindow:
         self.shield_non_activating = False
         self.chroma_transparent = False
         self.work_areas = monitor_work_areas()
+        self.display_bounds = monitor_display_bounds()
+        # Set only by a drag or a nudge. Save re-derives the anchor only
+        # when it is True, so opening Move and pressing Save cannot move
+        # captions the member never touched.
+        self.position_dirty = False
+        self.last_target_check = 0.0
         self.saved_label = DEFAULT_STATUS_TEXT
         self.settings_path = None if self.preview else default_settings_path()
         self.settings_mtime_ns = -1
@@ -406,7 +631,14 @@ class PlacementWindow:
             if self.preview
             else load_settings(self.settings_path)
         )
-        self.target_rect = target_rect_for_settings(root, self.settings)
+        # No geometry() has been issued yet, so winfo_x/y are (0, 0) -
+        # the primary's origin by definition, and useless as a probe.
+        # The pointer is where the member is actually looking.
+        _target = preview_target(
+            root, self.settings, displays=self.display_bounds
+        )
+        self.target_rect = _target.rect
+        self.target_resolved = _target.resolved
         self.metrics, self.canvas_height = preview_surface(
             root,
             self.settings,
@@ -454,8 +686,20 @@ class PlacementWindow:
             self.settings,
             bottom_reference_height=BOTTOM_REFERENCE_HEIGHT,
         )
-        x = overlay_x
+        rescued = rescued_position(
+            self.display_bounds,
+            self.target_rect,
+            (self.overlay_width, self.canvas_height),
+            (overlay_x, y),
+        )
+        moved_into_view = rescued != (overlay_x, y)
+        x, y = rescued
         self.place_preview(x, y, resize=True, settle=True)
+        if moved_into_view:
+            # Say it, rather than silently putting the window somewhere
+            # other than where their saved anchor asked for. Nothing has
+            # been written: their captions are still where they were.
+            self.flash(RESCUED_STATUS_TEXT)
         self.draw()
 
         self.canvas.bind("<ButtonPress-1>", self.press)
@@ -500,6 +744,61 @@ class PlacementWindow:
             family="Segoe UI Variable", size=9, weight="bold"
         )
         return fonts
+
+    def preview_rect(self) -> tuple[int, int, int, int]:
+        return (
+            int(self.root.winfo_x()),
+            int(self.root.winfo_y()),
+            int(self.overlay_width),
+            int(self.canvas_height),
+        )
+
+    def adopt_target(self, target) -> None:
+        self.target_rect = target.rect
+        self.target_resolved = target.resolved
+
+    def refresh_target(self) -> None:
+        """Re-resolve the target on the cadence the live overlay uses.
+
+        The live overlay re-fits to its game window every
+        TARGET_REFRESH_SECONDS; the preview used to resolve once, when
+        Move opened, and then claim to be showing what the overlay would
+        draw. Launching the game with Move open, or dropping the preview
+        on another display, now re-fits it the same way.
+
+        Never while a pointer is held: resizing and re-placing the
+        window under the member's hand at the exact moment they are
+        putting it somewhere is worse than being briefly stale.
+        """
+        if getattr(self, "drag_origin", None) is not None:
+            return
+        now = time.monotonic()
+        if now - getattr(self, "last_target_check", 0.0) < TARGET_REFRESH_SECONDS:
+            return
+        self.last_target_check = now
+        try:
+            probe = self.preview_rect()
+        except tk.TclError:
+            return
+        self.display_bounds = monitor_display_bounds() or self.display_bounds
+        target = preview_target(
+            self.root,
+            self.settings,
+            probe_rect=probe,
+            displays=self.display_bounds,
+        )
+        if (
+            target.rect == self.target_rect
+            and target.resolved == getattr(self, "target_resolved", False)
+        ):
+            return
+        self.adopt_target(target)
+        # An untouched preview re-places to where the overlay will
+        # actually draw. One the member has dragged keeps their pixel.
+        self.apply_settings(
+            self.settings,
+            reposition=not getattr(self, "position_dirty", False),
+        )
 
     def update_control_bounds(self) -> None:
         """Re-measure and re-anchor controls after size or DPI changes."""
@@ -671,18 +970,20 @@ class PlacementWindow:
             font=self.fonts["control"],
         )
         self.font_label.pack(side="left", padx=(0, 5))
-        families = set(tkfont.families(self.root))
-        families.add(self.settings.caption_font_family)
+        self.font_families = caption_font_choices(
+            tkfont.families(self.root), self.settings.caption_font_family
+        )
         self.font_family_var = tk.StringVar(
             value=self.settings.caption_font_family
         )
         self.font_family_menu = tk.OptionMenu(
             appearance,
             self.font_family_var,
-            *sorted(families, key=str.casefold),
+            *self.font_families,
             command=self.set_font_family,
         )
         self.style_option_menu(self.font_family_menu, width=19)
+        self.break_font_menu_into_columns()
         self.font_family_menu.pack(side="left")
 
         tk.Label(
@@ -925,6 +1226,37 @@ class PlacementWindow:
             font=self.fonts["control"],
         )
 
+    def break_font_menu_into_columns(self) -> None:
+        """Wrap the family list so the whole of it is reachable.
+
+        The row height is measured from the control font rather than
+        assumed, and the space available is the height of the display
+        the panel is on - not the primary, and not the full monitor,
+        so the list never runs under the taskbar either.
+        """
+        menu = getattr(self, "font_family_menu", None)
+        if menu is None:
+            return
+        try:
+            entries = len(self.font_families)
+            row_height = self.fonts["control"].metrics("linespace") + 6
+            bounds = work_area_for_rect(
+                getattr(self, "work_areas", ()) or monitor_work_areas(),
+                (
+                    int(self.target_rect[0]),
+                    int(self.target_rect[1]),
+                    int(self.target_rect[2]),
+                    int(self.target_rect[3]),
+                ),
+                self.target_rect,
+            )
+            per_column = menu_column_size(entries, row_height, bounds[3])
+            inner = menu["menu"]
+            for index in range(per_column, entries, per_column):
+                inner.entryconfigure(index, columnbreak=1)
+        except (tk.TclError, KeyError, AttributeError, IndexError):
+            return
+
     @staticmethod
     def contrasting_text(colour: str) -> str:
         red = int(colour[1:3], 16)
@@ -1162,7 +1494,12 @@ class PlacementWindow:
                 updated,
                 bottom_reference_height=BOTTOM_REFERENCE_HEIGHT,
             )
-            x = overlay_x
+            x, y = rescued_position(
+                getattr(self, "display_bounds", ()),
+                self.target_rect,
+                (self.overlay_width, self.canvas_height),
+                (overlay_x, y),
+            )
         else:
             if rewidth or overlay_rewidth:
                 # Keep the caption surface centred on the member's drag.
@@ -1209,11 +1546,19 @@ class PlacementWindow:
                 or updated.anchor_monitor != self.settings.anchor_monitor
             )
             if target_changed:
-                self.target_rect = target_rect_for_settings(self.root, updated)
+                self.adopt_target(
+                    preview_target(
+                        self.root,
+                        updated,
+                        probe_rect=self.preview_rect(),
+                        displays=self.display_bounds,
+                    )
+                )
             self.apply_settings(updated, reposition=target_changed)
             sync_controls = getattr(self, "sync_appearance_controls", None)
             if callable(sync_controls):
                 sync_controls()
+        self.refresh_target()
         self.root.after(250, self.refresh_settings)
 
     @staticmethod
@@ -1509,6 +1854,7 @@ class PlacementWindow:
         # The FULL delta once it trips, never delta minus the threshold,
         # or the captions trail the pointer by three pixels forever.
         self.drag_moved = True
+        self.position_dirty = True
         self.place_preview(window_x + delta_x, window_y + delta_y)
 
     def release(self, _event: tk.Event) -> None:
@@ -1517,6 +1863,13 @@ class PlacementWindow:
         self.drag_moved = False
         # The one settle point, at a moment when nothing is held.
         self.position_controls(settle=True)
+        # A drop on another display re-fits now rather than up to a
+        # rate-limit later. Guarded because the test harness drives
+        # release() on a stand-in that has no target tracking.
+        refresh = getattr(self, "refresh_target", None)
+        if callable(refresh):
+            self.last_target_check = -TARGET_REFRESH_SECONDS
+            refresh()
 
     def rebase_drag(self, x: int, y: int) -> None:
         """Keep a live drag alive across a resize instead of dropping it.
@@ -1554,6 +1907,7 @@ class PlacementWindow:
     def nudge(self, dx: int, dy: int) -> str:
         x = self.root.winfo_x() + int(dx)
         y = self.root.winfo_y() + int(dy)
+        self.position_dirty = True
         self.place_preview(x, y)
         return "break"
 
@@ -1591,16 +1945,27 @@ class PlacementWindow:
             self.root.update_idletasks()
         else:
             self.settings = current
-        overlay_width = getattr(self, "overlay_width", WINDOW_WIDTH)
-        settings = settings_from_position(
-            self.target_rect,
-            (overlay_width, self.canvas_height),
-            (self.root.winfo_x(), self.root.winfo_y()),
-            current=current,
-            bottom_reference_height=BOTTOM_REFERENCE_HEIGHT,
-        )
+        if getattr(self, "position_dirty", False):
+            overlay_width = getattr(self, "overlay_width", WINDOW_WIDTH)
+            settings = settings_from_position(
+                self.target_rect,
+                (overlay_width, self.canvas_height),
+                (self.root.winfo_x(), self.root.winfo_y()),
+                current=current,
+                bottom_reference_height=BOTTOM_REFERENCE_HEIGHT,
+            )
+        else:
+            # The member did not move the captions this session, so the
+            # anchor they saved before is still what they meant. Today a
+            # Save with no drag re-derives it from pixels and flips
+            # growth - measured, growth "down" with anchor_y 0.10 came
+            # back as "up" with 0.918056, moving the live overlay 47 px
+            # on a 1080p. Opening Move must not be able to move
+            # anybody's captions.
+            settings = current
         if getattr(self, "preview", False) or save_settings(settings):
             self.settings = settings
+            self.position_dirty = False
             self.flash("Position saved")
         else:
             self.flash("Could not save")
@@ -1616,6 +1981,7 @@ class PlacementWindow:
             self.flash("Could not restore default")
             return
         self.apply_settings(reset_settings, reposition=True)
+        self.position_dirty = False
         self.flash("Safe default restored")
 
     def flash(self, text: str) -> None:
