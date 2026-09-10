@@ -65,10 +65,10 @@ class FakeVoiceConnection extends EventEmitter {
   }
 }
 
-// The consent ledger's own file semantics (private file, dirty-run marker,
-// grants discarded after an unclean exit) have their own coverage. Here it
-// is a plain shared map, so what is under test is whether RESUME leans on
-// remembered consent - and only on that.
+// The consent ledger's own file semantics (private file, run marker, grants
+// discarded after an unsynced last write) have their own coverage. Here it is
+// a plain shared map, so what is under test is whether RESUME obtains consent
+// from that separate store rather than from the session ledger.
 class MemoryConsent {
   constructor() {
     this.map = new Map();
@@ -238,9 +238,8 @@ test("a restart puts the bot back where it was, with consent intact", async () =
 
 test("resume never carries consent: without a remembered grant the bot waits", async () => {
   await withLedgerDir(async (ledgerPath) => {
-    // The session is remembered, but the consent store comes back empty -
-    // exactly what the consent ledger does after an unclean exit, when it
-    // reloads declines only. The bot may come back; capture may not.
+    // The session location is remembered, but the separate consent store is
+    // empty. The bot may rejoin; no speaker is authorized by session state.
     const remembered = new SessionLedger({ path: ledgerPath });
     const manager1 = new SessionManager({
       captureHealthy: true,

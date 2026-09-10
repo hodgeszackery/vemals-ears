@@ -127,17 +127,16 @@ class GuildHubMaintenanceError(GuildHubClientError):
 
 
 class GuildHubVoiceChannelRequiredError(GuildHubClientError):
-    """The linked Discord user is not in the active voice channel."""
+    """The paired viewer is not in the active voice channel."""
 
 
 class GuildHubCaptionsStoppedError(GuildHubVoiceChannelRequiredError):
     """Captions stopped because the worker did, not because of the member.
 
     Shino, 2026-09-07. The audience roster is published BY the worker, so
-    when it stops the relay's roster goes stale and every viewer was told
-    "you left the voice channel or have not linked your Vemal's Ears
-    application" - to a member who had not moved, and who cannot hear the
-    room to know better.
+    when it stops the relay's roster goes stale and every viewer was told to
+    join the voice channel - including a member who had not moved, and who
+    cannot hear the room to know better.
 
     A subclass because the CURE is unchanged: stay up, keep retrying, and
     resume when captions can flow again. Every existing handler catches
@@ -844,8 +843,9 @@ class GuildCaptionClient:
                 # member who never moved off to fix something that is
                 # not broken.
                 message=message
-                or "Captions paused - you left the voice channel or "
-                "have not linked your Vemal's Ears application.",
+                or "Captions paused - join the active Discord voice channel. "
+                "If this device was paired without an invitation made for your "
+                "Discord account, pair it again with one.",
             )
         ):
             raise GuildHubClientError(
@@ -1372,7 +1372,8 @@ async def watch_captions(
                 except GuildHubVoiceChannelRequiredError:
                     voice_channel_waiting = True
                     status_once(
-                        "Vemal's Ears is paused until you rejoin the Discord voice channel."
+                        "Vemal's Ears is paused until you join the active Discord voice "
+                        "channel. Re-pair first if this device has no account-bound invitation."
                     )
                 except GuildHubAuthenticationError:
                     voice_channel_waiting = False

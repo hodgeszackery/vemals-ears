@@ -1,27 +1,60 @@
 # Vemal's Ears Discord adapter
 
 This process is the Discord-side trust boundary for Vemal's Ears. It joins a
-voice channel only after every current human participant has opted in. A new
-participant immediately pauses capture until they opt in. Any participant can
-stop the session.
+voice channel when at least one current human participant has consented. It
+captures each speaker only when that speaker has consented. A new, pending, or
+declined participant remains uncaptured while consenting speakers continue.
+Any participant can stop the session.
 
-Audio, transcripts and session state stay in memory: none of them is ever
-written to disk. Two things are deliberately remembered across restarts, and
-both name real people, so they are worth stating plainly rather than burying:
+Audio and transcript text stay in memory and are never written to disk. Three
+purpose-specific local ledgers are kept beside the operator's other state:
 
-- **consent decisions** (`src/consent_ledger.js`), so the same group is not
-  asked to consent again every single evening;
-- **character mappings** (`src/mapping_ledger.js`), so `/vem map` survives
-  the bot restarting mid-raid.
+- **consent decisions** (`src/consent_ledger.js`) use a Discord guild ID and
+  user ID as the key and store `granted` or `declined`, plus the file's update
+  time. `Remember my answer` is on by default. A remembered answer has no
+  automatic expiry; it remains until that person changes it or runs `/vem
+  forget`. Turning Remember off removes any older durable answer and keeps the
+  new choice only in the live process for the current caption session.
+- **character mappings** (`src/mapping_ledger.js`) use a Discord guild ID and
+  user ID as the key and store character name, optional realm, WoW class, role,
+  and mapping time. A mapping has no automatic expiry; `/vem unmap` or `/vem
+  forget` erases it.
+- **session resume state** (`src/session_ledger.js`) stores, per Discord guild,
+  the voice-channel ID, control-channel ID, starter's user ID, current
+  participant user IDs, save time, and consent-prompt nonce. It contains no
+  consent answer, audio, or transcript. The default restart window is 30
+  minutes. `/vem stop`, expiry, an empty or missing target voice channel, or a
+  failed resume erases the entry.
 
-Both are local files written atomically, kept beside the operator's other
-state and never sent anywhere. Either can be erased by the person it
-describes, with `/vem forget` and `/vem unmap`.
+Each ledger carries a schema version and file update time. The consent ledger
+also uses a separate dirty-run marker containing only a schema version, random
+run ID, and sync status; a clean shutdown removes that marker.
+
+The ledger files themselves are not uploaded. The adapter does send the live
+fields needed by the pipeline over its local JSONL pipe. A session snapshot
+contains its generation and audience revision; guild, voice-channel,
+control-channel, starter, and stopper IDs; start and stop times; phase and pause
+reason; consent-prompt nonce; and each participant's user ID, join time, consent
+state, and mapping. Audience snapshots contain current participant Discord IDs.
+Speaker audio metadata contains the Discord user ID, safe display name, and
+mapped character name, optional realm, class, and role.
+
+Before anything goes to the relay, the coordinator replaces Discord IDs with
+stable guild-scoped opaque tokens. The relay receives session state, audience
+generation and revision, and opaque viewer tokens. Caption events contain an
+opaque speaker ID, display name, mapped character name, class, and role. Raw
+Discord IDs, session timestamps, prompt nonce, participant consent state, and
+join time are not sent to the relay. The optional realm is not sent to the
+relay; it remains in the adapter's local mapping state, private Discord mapping
+flow, and transcription pipeline.
 
 Structured status events are emitted as JSON Lines on standard output.
-Standard input accepts only bounded, relay-authorized quick-chat commands.
-Diagnostics go to standard error and must never contain credentials, audio,
-captions, or typed message bodies.
+Standard input is an inert legacy quick-chat compatibility terminal: current
+relays never send a typed body there, and accepted member Message Group lines
+have no path to it. If an older relay sends a command, the adapter validates it
+and returns a terminal status without a Discord output sink. Diagnostics go to
+standard error and must never contain credentials, audio, captions, or typed
+message bodies.
 
 ## Local setup
 
@@ -47,11 +80,11 @@ and send messages in the text channel where `/vem start` was used.
   `Manage my consent` and `Choose your class` buttons. Each button opens a
   private Discord modal for the person who selected it.
 - The consent modal changes only the caller's capture choice. `Remember my
-  answer` is off for a new user: unchecked answers last for the current caption
-  session,
-  including a brief voice disconnect. Checked answers are saved for future
-  sessions. Unchecking it also removes any older saved answer without touching
-  the caller's character mapping.
+  answer` is on for a new user. Leave it on to save the answer for future
+  sessions. Turn it off to keep the answer for this caption session only,
+  including a brief voice disconnect in the same process. A worker restart
+  cannot restore a session-only answer. Turning Remember off also removes any
+  older saved answer without touching the caller's character mapping.
 - `/vem consent` opts the caller in and remembers the answer. `/vem decline`
   opts only the caller out and remembers that answer. These commands remain the
   direct alternatives to the modal.
@@ -64,6 +97,9 @@ and send messages in the text channel where `/vem start` was used.
 - `/vem forget` erases both the caller's remembered consent answer and their
   character mapping, so they are asked again next session.
 - `/vem status` reports consent and capture state.
+- `/vem setup` creates a one-use pairing invitation bound to the caller.
+  `/vem invite` creates one bound to the selected member. The claimed device is
+  associated during pairing, so there is no separate Link Discord step.
 
 ## What the bot posts
 
@@ -104,13 +140,18 @@ stale compatibility receipts. No typed body is written to the consent or
 character-mapping ledgers or placed in a diagnostic event. No Discord TTS,
 voice transmission, or text message is produced.
 
+`/vem stop` and publisher loss clear the relay's current audience plus the
+session's caption and Message Group replay. A relay restart clears every
+session's replay. A Message Group line accepted after the audience was cleared
+is delivered to nobody and is not retained for a later publisher or audience.
+
 ## Audio boundary
 
 Discord audio receive is not a documented stable Discord API. The runtime
 therefore isolates it behind an injected audio sink and fails closed whenever
-that sink, the voice connection, or standard output is unhealthy. Each speaker
-receives an independent stream and per-speaker segment sequence; overlapping
-speakers are never merged.
+the shared sink, voice connection, or standard output is unhealthy. Each
+speaker receives an independent stream and per-speaker segment sequence;
+overlapping speakers are never merged.
 
 The locked `opusscript` 0.0.8 decoder is one of the Opus implementations
 supported by the installed Discord voice stack. Each Discord 48 kHz stereo
@@ -129,9 +170,14 @@ The transcription boundary consumes these event types:
 - `audio.segment.ended` carries the same speaker metadata plus completion
   status, chunk count, and total PCM bytes.
 
-Audio and transcripts are never written to disk or included in diagnostics.
-If the decoder, stream, or JSONL writer fails, the sink destroys every active
-speaker stream and remains blocked for the lifetime of the process.
+Audio and transcripts are never written to disk or included in diagnostics. A
+corrupt Opus packet or routine source-stream error fails and drops only that
+speaker's segment, so other consenting speakers continue. Decoder creation or
+cleanup failure, duplicate segments, stream-capacity exhaustion, PCM conversion
+failure, or JSONL output failure destroys every active speaker stream and
+leaves the sink blocked for the life of the process. Invalid segment metadata
+is rejected and makes the runtime fail closed. Voice connection failure also
+stops capture safely.
 
 Run the offline tests with `npm test`. They do not need Discord, a network
 connection, or a token.

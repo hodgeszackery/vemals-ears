@@ -57,7 +57,7 @@ function start(sessions, participants = [ALICE, BOB]) {
   });
 }
 
-test("a remembered grant spares the regular group re-consenting", () => {
+test("remembered grants restore each speaker's prior choice", () => {
   const ledger = new ConsentLedger();
   const first = manager(ledger);
   start(first);
@@ -65,7 +65,7 @@ test("a remembered grant spares the regular group re-consenting", () => {
   first.setConsent({ guildId: GUILD, userId: BOB, granted: true });
   first.stopSession({ guildId: GUILD, requestedBy: ALICE });
 
-  // A brand new run, same ledger: nobody is asked again.
+  // A brand new run, same ledger: both speakers keep their choices.
   const second = manager(ledger);
   const session = start(second);
   assert.equal(session.phase, SessionPhase.ACTIVE);
@@ -163,7 +163,7 @@ test("forget erases the record and drops a live participant to pending", () => {
   assert.equal(sessions.canCapture({ guildId: GUILD, userId: ALICE }), true);
 });
 
-test("the ledger survives a restart, and a damaged one asks everybody again", () => {
+test("the ledger survives a restart, and a damaged one drops grants", () => {
   const directory = mkdtempSync(join(tmpdir(), "consent-"));
   const path = join(directory, "consent.json");
   try {
@@ -429,7 +429,7 @@ test("a ledger whose entries are null starts empty instead of throwing", () => {
   }
 });
 
-test("an unknown user is pending, which pauses capture", () => {
+test("a session with no remembered grants waits for consent", () => {
   const ledger = new ConsentLedger();
   assert.equal(ledger.recall(GUILD, ALICE), null);
   const sessions = manager(ledger);
@@ -511,7 +511,7 @@ test("a decline that could not be saved is not called recorded", (t) => {
   const reply = controller.execute(commandInput("decline", BOB));
 
   assert.equal(reply.action, "consent.declined");
-  // The live half stays true: capture pauses now.
+  // The live half stays true: this speaker is excluded now.
   assert.notEqual(reply.session.phase, SessionPhase.ACTIVE);
   // The durable half must not be claimed.
   assert.match(reply.content, /could NOT be saved/i);
@@ -529,7 +529,8 @@ test("a decline with nothing running warns when the write fails", (t) => {
 
   assert.equal(reply.session, null);
   assert.match(reply.content, /could NOT be saved/i);
-  assert.match(reply.content, /asked/i, "must state the re-ask fallback");
+  assert.match(reply.content, /may not be remembered after a restart/i);
+  assert.doesNotMatch(reply.content, /everyone|capture remains off/i);
 });
 
 test("forget names the consent answer that could not be erased", (t) => {
@@ -567,6 +568,7 @@ test("forget names the consent answer that could not be erased", (t) => {
   assert.equal(reply.action, "consent.forgotten");
   assert.match(reply.content, /could not erase.*consent answer/i);
   assert.doesNotMatch(reply.content, /^Forgotten\./);
+  assert.doesNotMatch(reply.content, /capture remains off/i);
 });
 
 test("a healthy disk keeps every reply exactly as before", (t) => {
@@ -599,10 +601,10 @@ test("a clean restart remembers every answer", async (t) => {
 });
 
 test("a dirty restart drops grants but never erases a decline", async (t) => {
-  // The point of persistence is that the same group is not asked again
-  // every evening. A crash may re-ask for grants - one might have been
-  // withdrawn in a change that never reached the file - but a decline is
-  // the protective answer and has to survive.
+  // Remembering each speaker's choice avoids asking that person again every
+  // evening. A crash may re-ask for grants - one might have been withdrawn in
+  // a change that never reached the file - but a decline is the protective
+  // answer and has to survive.
   const folder = mkdtempSync(join(tmpdir(), "consent-dirty-"));
   t.after(() => rmSync(folder, { recursive: true, force: true }));
   const path = join(folder, "consent.json");
@@ -620,11 +622,10 @@ test("a dirty restart drops grants but never erases a decline", async (t) => {
 });
 
 test("a dirty restart does not erase the file it refused to trust", async (t) => {
-  // This is the regression that made persistence look broken. On a dirty
-  // start the ledger skipped loading entirely, and the next save wrote
-  // its near-empty map over the whole file - so every unclean stop
-  // silently deleted more answers until nothing was left. On Windows
-  // every stop was unclean, so that was every time.
+  // The old run marker could not distinguish a live process from an
+  // interrupted write. A restart skipped every entry, then the next save
+  // overwrote the file with the partial in-memory map. The synced marker now
+  // preserves a fully written file even when close() never ran.
   const folder = mkdtempSync(join(tmpdir(), "consent-erase-"));
   t.after(() => rmSync(folder, { recursive: true, force: true }));
   const path = join(folder, "consent.json");

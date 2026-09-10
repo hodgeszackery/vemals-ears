@@ -704,10 +704,11 @@ class GiveUpTests(unittest.TestCase):
 class StopSignalTests(unittest.TestCase):
     """SIGTERM must reach run_watch as a set stop event.
 
-    Without this the container's stop signal killed Python mid-flight: the
-    node adapter was never asked to stop, ConsentLedger.close() never ran,
-    and the dirty marker survived - so every `docker compose restart` threw
-    away every remembered consent choice, declines included.
+    Without this the container's stop signal killed Python mid-flight and the
+    node adapter was never asked to finish its ledger save and run-marker
+    cleanup. The ordinary stop path closes its stdin cleanly; if a forced stop
+    interrupts the last write, the surviving unsynced marker re-asks grants
+    while retaining declines.
     """
 
     def test_sigterm_sets_the_event_run_watch_receives(self):

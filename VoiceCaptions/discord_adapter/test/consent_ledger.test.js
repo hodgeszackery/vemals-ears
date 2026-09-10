@@ -6,12 +6,9 @@ import test from "node:test";
 
 import { ConsentLedger } from "../src/consent_ledger.js";
 
-// Shino, 2026-09-01: "Everyone has to reconsent when the discord bot
-// disconnects. Can we check on persistance?" The ledger used to load
-// declines only after ANY run that never called close() - and a disconnect
-// that fails closed is restarted by the worker without one. These pin the
-// new rule: what is on disk is trusted unless the marker says the last
-// write never landed.
+// The old run marker treated every process that missed close() as though its
+// last write had been interrupted. These pin the current rule: what reached
+// disk is trusted unless the marker says the last write never landed.
 
 const GUILD = "123456789012345678";
 const ALICE = "223456789012345678";

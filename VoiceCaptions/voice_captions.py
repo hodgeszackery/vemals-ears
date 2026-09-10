@@ -157,7 +157,7 @@ class CaptionRouter:
 
     PUBLIC_SESSION_STATUS = {
         "active": "Captions active",
-        "paused": "Captions paused - waiting for consent",
+        "paused": "Captions paused",
         "ready": "Vemal's Ears host ready",
         "stopped": "Captions stopped",
         "error": "Error: Vemal's Ears source is unavailable",

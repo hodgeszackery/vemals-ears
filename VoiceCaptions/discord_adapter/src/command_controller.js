@@ -118,7 +118,7 @@ export class CaptionCommandController {
       participantIds: input.participantIds,
     });
     // The reply has to follow the phase startSession actually produced.
-    // A group whose consent is all on record starts ACTIVE, and the
+    // A group with at least one remembered grant starts ACTIVE, and the
     // runtime joins and subscribes straight after this returns - so a
     // fixed "capture is OFF" would be the channel's only durable record
     // of the session, and it would be false. This reply is not
@@ -143,16 +143,13 @@ export class CaptionCommandController {
     };
   }
 
-  // The warning a withdrawal reply carries when the durable write
-  // failed. Capture is already paused in memory - that part is true -
-  // but nothing may claim the choice will be remembered. The next run
-  // starts from an empty ledger (the dirty marker sees to it) and asks
-  // everybody again, so the honest promise is exactly that.
+  // The warning a withdrawal reply carries when the durable write failed.
+  // That speaker is excluded in memory immediately, but nothing may claim
+  // the choice will be remembered after a restart.
   static UNSAVED_WITHDRAWAL =
     " Your choice could NOT be saved to disk, so it may not be" +
-    " remembered after a restart - if that happens everyone is asked" +
-    " again before any capture. Tell the operator, and re-run the" +
-    " command to retry.";
+    " remembered after a restart. Tell the operator, and re-run the command" +
+    " to retry.";
 
   #consent(input, granted) {
     const session = this.sessionManager.setConsent({
@@ -178,9 +175,7 @@ export class CaptionCommandController {
       };
     }
     // A withdrawal from somebody outside the session is recorded for next
-    // time, but announcing a pause here would be a lie: capture is unchanged
-    // for the people actually being recorded, and they would hear an
-    // all-clear that never happened.
+    // time. Capture is unchanged for the people in the current session.
     const inSession = session.participants.some(({ userId }) => userId === input.userId);
     if (!granted && !inSession) {
       const saved = this.sessionManager.consentWritePersisted;
@@ -228,7 +223,7 @@ export class CaptionCommandController {
       content: failedRecords.length > 0
         ? "Cleared for this bot session, but Vemal's Ears could not erase your " +
           `remembered ${failedRecords.join(" and ")} from disk. Run /vem forget ` +
-          "again before the bot restarts. Capture remains off unless you consent again."
+          "again before the bot restarts."
         : !forgotten.existed
           ? "Nothing to forget - Vemal's Ears holds no remembered consent answer or " +
             "character mapping for you."
@@ -403,6 +398,6 @@ export function publicCommandError(error) {
   }
   return {
     code: "command_failed",
-    message: "Vemal's Ears could not complete that command. Capture remains off.",
+    message: "Vemal's Ears could not complete that command.",
   };
 }

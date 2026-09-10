@@ -9,8 +9,8 @@ from VoiceCaptions.settings import OverlaySettings
 
 
 PAUSE_MESSAGE = (
-    "Captions paused - you left the voice channel or have not linked your "
-    "Vemal's Ears application."
+    "Captions paused - join the active Discord voice channel. If this device was "
+    "paired without an invitation made for your Discord account, pair it again with one."
 )
 
 
@@ -87,7 +87,7 @@ class StatusLayoutTests(unittest.TestCase):
             self.assertTrue(x1 <= left < right <= x2)
             self.assertTrue(y1 <= top < bottom <= y2)
 
-    def test_full_rejoin_instruction_wraps_at_default_and_large_font_sizes(self):
+    def test_voice_channel_instruction_wraps_at_default_and_large_font_sizes(self):
         for size, width in ((10, 540), (20, 900), (36, 1440), (10, 220)):
             with self.subTest(size=size, width=width):
                 subject = draw_status(size=size, width=width)
@@ -95,6 +95,13 @@ class StatusLayoutTests(unittest.TestCase):
                 self.assertEqual(PAUSE_MESSAGE, " ".join(labels))
                 self.assertGreater(len(labels), 1)
                 self.assert_content_inside(subject)
+
+    def test_paused_fallback_does_not_invent_a_reason(self):
+        subject = draw_status(message="")
+        self.assertEqual(
+            ["Captions paused"],
+            [options["text"] for _x, _y, options in self.foreground(subject)],
+        )
 
     def test_status_uses_the_selected_growth_edge(self):
         for growth in ("up", "down"):

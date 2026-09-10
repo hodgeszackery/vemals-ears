@@ -143,9 +143,9 @@ _KNOWN_TYPES = _AUDIO_TYPES | {
     "consent.declined",
     "consent.forgotten",
     "consent.panel.failed",
-    # Emitted when the adapter ledger could not close cleanly - the one
-    # diagnostic for "your grants will be discarded". Unknown here, it
-    # turned an orderly shutdown into unknown_event and a failure report.
+    # Emitted when the adapter could not finish closing consent state. Unknown
+    # here, it turned an orderly shutdown into unknown_event and a failure
+    # report.
     "consent.state.dirty",
     "mapping.changed",
     "mapping.panel.failed",
@@ -945,8 +945,8 @@ def _session_event(envelope: AdapterEnvelope) -> SessionEvent | None:
     session = envelope.payload.get("session")
     # Withdrawing or forgetting consent must not require a live session, or the
     # only moment you could take it back would be the moment it is running. With
-    # no session there is no phase to map and capture is already off, so there is
-    # no state for the overlay to change.
+    # no session there is no phase for the overlay to show, so there is no state
+    # for the overlay to change.
     if session is None and envelope.event_type in {
         "session.status",
         "consent.declined",
@@ -1775,10 +1775,8 @@ def build_node_environment(
             "DISCORD_TOKEN": checked.bot_token,
             "DISCORD_APPLICATION_ID": checked.application_id,
             "CAPTIONS_MAX_SEGMENT_MS": "30000",
-            # Without these the adapter builds memory-only ledgers and both
-            # persistence features no-op in silence: consent re-asked every
-            # session, and a restart un-mapping the roster - which, with
-            # strict focus mode, mutes the whole group.
+            # Without these the adapter builds memory-only ledgers, so consent
+            # choices and character mappings disappear on a process restart.
             CONSENT_STATE_PATH_ENV: state_path(
                 CONSENT_STATE_PATH_ENV, default_consent_state_path()
             ),
@@ -1828,10 +1826,9 @@ async def _stop_process(process: asyncio.subprocess.Process) -> None:
     if process.returncode is not None:
         return
     # Ask before compelling. terminate() on Windows is TerminateProcess,
-    # which delivers no signal, so the adapter's shutdown chain never ran
-    # and its consent ledger never got to clear the dirty marker that
-    # tells the next run its stored answers are trustworthy. Closing
-    # stdin is a shutdown request Node can observe on every platform.
+    # which delivers no signal and skips the adapter's final ledger save and
+    # synced run-marker cleanup. Closing stdin is a shutdown request Node can
+    # observe on every platform.
     if process.stdin is not None and not process.stdin.is_closing():
         try:
             process.stdin.close()

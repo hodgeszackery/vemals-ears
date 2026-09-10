@@ -6,7 +6,7 @@ import { ButtonStyle, Events, MessageFlags } from "discord.js";
 
 import { captionsCommandJson } from "../src/command_schema.js";
 import { DiscordAdapterRuntime } from "../src/discord_runtime.js";
-import { SessionManager } from "../src/session_manager.js";
+import { ConsentState, SessionManager, SessionPhase } from "../src/session_manager.js";
 
 const GUILD = "123456789012345678";
 const FOREIGN_GUILD = "223456789012345678";
@@ -309,7 +309,7 @@ async function submitConsent(client, shownModal, options = {}) {
   );
 }
 
-test("the shared consent button opens a private native modal with Remember off", async () => {
+test("the shared consent button opens a private native modal with Remember on", async () => {
   const { client } = createRuntime();
   const { response, manageId } = await startSession(client, {
     voiceMemberIds: [ALICE, BOB],
@@ -344,8 +344,7 @@ test("the shared consent button opens a private native modal with Remember off",
   assert.deepEqual(answers.options.map(({ value }) => value), ["granted", "declined"]);
   assert.equal(answers.options.some((option) => option.default === true), false);
   const remember = modalControl(shown, "remember-answer");
-  // A first answer is remembered unless the person unticks it: Shino,
-  // 2026-09-01, "Everyone has to reconsent when the discord bot disconnects."
+  // A first answer is remembered unless the person unticks it.
   assert.equal(remember.default, true);
 });
 
@@ -698,6 +697,45 @@ test("an unchecked answer applies only to Discord's authenticated clicking user"
   assert.deepEqual(state.forgets, [{ guildId: GUILD, userId: BOB }]);
   assert.equal(notices.length, 1);
   assert.match(notices[0].content, new RegExp(`<@${BOB}> consented`));
+});
+
+test("a failed consent notice reports no invented global capture state", async () => {
+  const state = memoryLedger();
+  const { client, sessions } = createRuntime({ consentLedger: state.ledger });
+  const { manageId } = await startSession(client, { voiceMemberIds: [ALICE, BOB] });
+  const shown = await openConsentModal(client, manageId, {
+    userId: BOB,
+    voiceMemberIds: [ALICE, BOB],
+  });
+
+  const failed = await submitConsent(client, shown, {
+    answer: "granted",
+    remember: false,
+    userId: BOB,
+    voiceMemberIds: [ALICE, BOB],
+    noticeSink: async () => {
+      throw new Error("private Discord failure");
+    },
+  });
+
+  assert.equal(failed.method, "reply");
+  assert.equal(failed.payload.flags, MessageFlags.Ephemeral);
+  assert.equal(failed.payload.content, "Vemal's Ears could not post the consent update.");
+  assert.doesNotMatch(failed.payload.content, /capture remains off|captions? (?:are|is) off/i);
+  assert.doesNotMatch(failed.payload.content, /private Discord failure/i);
+  const session = sessions.getSession(GUILD);
+  assert.equal(session.phase, SessionPhase.PAUSED);
+  assert.equal(session.pauseReason, "command_notice_delivery_failed");
+  assert.equal(
+    session.participants.find(({ userId }) => userId === BOB).consent,
+    ConsentState.GRANTED,
+  );
+  assert.equal(
+    session.participants.find(({ userId }) => userId === ALICE).consent,
+    ConsentState.PENDING,
+  );
+  assert.equal(sessions.canCapture({ guildId: GUILD, userId: BOB }), false);
+  assert.equal(sessions.canCapture({ guildId: GUILD, userId: ALICE }), false);
 });
 
 test("a checked answer is stored and shown as remembered next time", async () => {
