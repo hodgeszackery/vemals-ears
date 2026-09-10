@@ -14,6 +14,10 @@ The Windows installer includes these third-party components:
   incorporated-component licenses.
 - websockets 13.1, licensed under the BSD 3-Clause License.
 - Pillow 12.3.0, under MIT-CMU and the embedded libraries' own licenses.
+- AOMedia libaom 3.14.1, under its BSD 2-Clause license and Alliance for
+  Open Media Patent License 1.0.
+- libyuv commit 644251f252a84bf8ce91ff0aca86a9b16b069ab8, under its
+  BSD 3-Clause license and additional patent grant.
 - pywin32 312, including Mark Hammond's BSD-style license and component
   licenses. Its adodbapi component is LGPL-2.1 and remains in source form.
 
@@ -29,6 +33,11 @@ the GPL declaration for VE does not replace those terms.
 
 Pillow includes FreeType, the Independent JPEG Group's work and other native
 libraries whose full notices remain in Pillow's bundled LICENSE file.
+Pillow's license does not replace the terms for its embedded libaom and libyuv
+libraries. The complete libaom terms are in
+runtime/Source/libaom-3.14.1.tar.gz at libaom-3.14.1/LICENSE and
+libaom-3.14.1/PATENTS. The complete libyuv terms are in
+runtime/Source/libyuv-644251f.tar at LICENSE and PATENTS.
 This software is based in part on the work of the Independent JPEG Group.
 Portions of this software are copyright (C) The FreeType Project
 (https://freetype.org/). All rights reserved.
@@ -46,6 +55,8 @@ Project pages:
 https://www.python.org/
 https://github.com/python-websockets/websockets
 https://python-pillow.github.io/
+https://aomedia.org/aomedia-video-1/
+https://chromium.googlesource.com/libyuv/libyuv/
 https://github.com/mhammond/pywin32
 
 

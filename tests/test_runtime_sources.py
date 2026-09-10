@@ -1,12 +1,14 @@
 # SPDX-License-Identifier: GPL-3.0-only
 """Runtime source releases must match their binaries and survive offline use."""
 
+import gzip
 import hashlib
 import io
 import json
 from pathlib import Path
 import subprocess
 import sys
+import tarfile
 import tempfile
 import time
 import unittest
@@ -70,6 +72,49 @@ def write_source_fixture(folder: Path, runtime_lock: Path | None = None) -> dict
     }
 
 
+def gitiles_archive(mtime: float, payload: bytes, *, reverse: bool = False) -> bytes:
+    entries = [("src/run.sh", payload, 0o755), ("README.txt", b"source\n", 0o644)]
+    if reverse:
+        entries.reverse()
+    output = io.BytesIO()
+    with tarfile.open(fileobj=output, mode="w:gz", format=tarfile.PAX_FORMAT) as archive:
+        directory = tarfile.TarInfo("src")
+        directory.type = tarfile.DIRTYPE
+        directory.mode = 0o755
+        directory.mtime = mtime
+        archive.addfile(directory)
+        for name, data, mode in entries:
+            item = tarfile.TarInfo(name)
+            item.mode = mode
+            item.mtime = mtime
+            item.size = len(data)
+            archive.addfile(item, io.BytesIO(data))
+    return output.getvalue()
+
+
+def archive_with_members(members, *, archive_format=tarfile.PAX_FORMAT) -> bytes:
+    output = io.BytesIO()
+    with tarfile.open(fileobj=output, mode="w:gz", format=archive_format) as archive:
+        for name, kind, data, pax_headers in members:
+            item = tarfile.TarInfo(name)
+            item.mode = 0o644
+            item.mtime = 1000
+            item.pax_headers = pax_headers
+            if kind == "file":
+                item.size = len(data)
+                archive.addfile(item, io.BytesIO(data))
+            elif kind == "symlink":
+                item.type = tarfile.SYMTYPE
+                item.linkname = data.decode("ascii")
+                archive.addfile(item)
+            elif kind == "fifo":
+                item.type = tarfile.FIFOTYPE
+                archive.addfile(item)
+            else:
+                raise AssertionError("unknown test archive member")
+    return output.getvalue()
+
+
 class RuntimeSourcesTests(unittest.TestCase):
     def setUp(self):
         self.folder = Path(self.enterContext(tempfile.TemporaryDirectory()))
@@ -91,6 +136,217 @@ class RuntimeSourcesTests(unittest.TestCase):
 
     def write_lock(self, lock):
         self.fixture["source_lock"].write_bytes(runtime_sources.json_bytes(lock))
+
+    def test_aom_source_uses_the_immutable_official_release_object(self):
+        lock = json.loads(runtime_sources.DEFAULT_SOURCE_LOCK.read_text(encoding="ascii"))
+        aom = next(item for item in lock["artifacts"] if item["name"] == "pillow-aom")
+        self.assertEqual("libaom-3.14.1.tar.gz", aom["filename"])
+        self.assertEqual(
+            "https://storage.googleapis.com/aom-releases/libaom-3.14.1.tar.gz"
+            "?generation=1779477091458380",
+            aom["url"],
+        )
+        self.assertNotIn("+archive", aom["url"])
+        self.assertEqual(
+            "44bf90dbd23e734d50e70a8c41c285193922938bd0d3bc2ee56764d181d55ef5",
+            aom["sha256"],
+        )
+        self.assertEqual(
+            ["libaom-3.14.1/LICENSE", "libaom-3.14.1/PATENTS"],
+            aom["license_files"],
+        )
+        self.assertIn("03087864cf4bea6abb0d28f95cf7843511413d8f", aom["provenance"])
+        self.assertIn("libaom-3.14.1.tar.gz.asc?generation=1779477091374696", aom["provenance"])
+        self.assertIn("B002F08B74A148DAA01F7123A48E86DB0B830498", aom["provenance"])
+
+    def test_libyuv_source_is_commit_and_semantic_tree_pinned(self):
+        lock = json.loads(runtime_sources.DEFAULT_SOURCE_LOCK.read_text(encoding="ascii"))
+        libyuv = next(item for item in lock["artifacts"] if item["name"] == "pillow-libyuv")
+        self.assertEqual("libyuv-644251f.tar", libyuv["filename"])
+        self.assertEqual(runtime_sources.GITILES_CANONICALIZATION, libyuv["canonicalization"])
+        self.assertEqual("ba22b636166dc16532fcc9d5a9524117432d1782", libyuv["git_tree_sha1"])
+        self.assertEqual(
+            "3938b5524e30ff82b953ee69b910726a97c4a0468084defe4107399ef5908ae8",
+            libyuv["sha256"],
+        )
+        self.assertEqual(["LICENSE", "PATENTS"], libyuv["license_files"])
+
+    def test_declared_license_files_must_exist_in_the_verified_archive(self):
+        archive_path = self.folder / "source.tar"
+        with tarfile.open(archive_path, "w", format=tarfile.USTAR_FORMAT) as archive:
+            for name in ("LICENSE", "PATENTS"):
+                payload = (name + " fixture\n").encode("ascii")
+                member = tarfile.TarInfo(name)
+                member.size = len(payload)
+                archive.addfile(member, io.BytesIO(payload))
+        item = {"filename": "source.tar", "license_files": ["LICENSE", "PATENTS"]}
+        runtime_sources.validate_declared_license_files(item, archive_path)
+        item["license_files"].append("MISSING")
+        with self.assertRaisesRegex(SystemExit, "missing declared license files"):
+            runtime_sources.validate_declared_license_files(item, archive_path)
+
+    def test_fresh_downloads_verify_notices_before_promoting_temporary_files(self):
+        members = [
+            ("LICENSE", "file", b"license\n", {}),
+            ("PATENTS", "file", b"patents\n", {}),
+        ]
+        release = archive_with_members(members)
+        release_item = {
+            "filename": "release.tar.gz",
+            "url": "https://example.test/release.tar.gz",
+            "sha256": hashlib.sha256(release).hexdigest(),
+            "license_files": ["LICENSE", "PATENTS"],
+        }
+        release_cache = self.folder / "release-cache"
+        with mock.patch.object(
+            runtime_sources.urllib.request, "urlopen", return_value=io.BytesIO(release),
+        ):
+            downloaded = runtime_sources.verified_download(release_item, release_cache)
+        self.assertEqual(release, downloaded.read_bytes())
+
+        raw_gitiles = archive_with_members(members)
+        source = self.folder / "raw.tar.gz"
+        canonical = self.folder / "canonical.tar"
+        source.write_bytes(raw_gitiles)
+        tree = runtime_sources.canonicalize_gitiles_archive(source, canonical)
+        gitiles_item = {
+            "filename": "snapshot.tar",
+            "url": "https://example.googlesource.com/code/+archive/" + "a" * 40 + ".tar.gz",
+            "sha256": hashlib.sha256(canonical.read_bytes()).hexdigest(),
+            "git_tree_sha1": tree,
+            "canonicalization": runtime_sources.GITILES_CANONICALIZATION,
+            "license_files": ["LICENSE", "PATENTS"],
+        }
+        gitiles_cache = self.folder / "gitiles-cache"
+        with mock.patch.object(
+            runtime_sources.urllib.request, "urlopen", return_value=io.BytesIO(raw_gitiles),
+        ):
+            downloaded = runtime_sources.verified_download(gitiles_item, gitiles_cache)
+        self.assertEqual(canonical.read_bytes(), downloaded.read_bytes())
+
+    def test_gitiles_snapshots_are_commit_pinned_and_never_raw_hash_pinned(self):
+        original = self.fixture["lock"]
+        lock = json.loads(json.dumps(original))
+        item = lock["artifacts"][0]
+        item["url"] = "https://example.googlesource.com/code/+archive/refs/tags/v1.tar.gz"
+        self.write_lock(lock)
+        with self.assertRaisesRegex(SystemExit, "require deterministic canonicalization"):
+            self.stage(offline=True)
+
+        item["canonicalization"] = runtime_sources.GITILES_CANONICALIZATION
+        item["filename"] = "snapshot.tar"
+        item["git_tree_sha1"] = "a" * 40
+        self.write_lock(lock)
+        with self.assertRaisesRegex(SystemExit, "must pin a full commit"):
+            self.stage(offline=True)
+
+        item["url"] = "https://example.googlesource.com/code/+archive/" + "a" * 40
+        self.write_lock(lock)
+        with self.assertRaisesRegex(SystemExit, "must pin a full commit"):
+            self.stage(offline=True)
+
+    def test_gitiles_request_metadata_is_removed_and_content_changes_fail_closed(self):
+        first = gitiles_archive(1000.25, b"echo safe\n")
+        second = gitiles_archive(2000.75, b"echo safe\n", reverse=True)
+        self.assertNotEqual(hashlib.sha256(first).digest(), hashlib.sha256(second).digest())
+        with tempfile.TemporaryDirectory() as folder:
+            folder = Path(folder)
+            source = folder / "source.tar.gz"
+            canonical = folder / "canonical.tar"
+            source.write_bytes(first)
+            tree = runtime_sources.canonicalize_gitiles_archive(source, canonical)
+            expected = canonical.read_bytes()
+            item = {
+                "filename": "snapshot.tar",
+                "url": "https://example.googlesource.com/code/+archive/" + "a" * 40 + ".tar.gz",
+                "sha256": hashlib.sha256(expected).hexdigest(),
+                "git_tree_sha1": tree,
+                "canonicalization": runtime_sources.GITILES_CANONICALIZATION,
+            }
+            cache = folder / "cache"
+            with mock.patch.object(runtime_sources.urllib.request, "urlopen", return_value=io.BytesIO(second)):
+                result = runtime_sources.verified_download(item, cache)
+            self.assertEqual(expected, result.read_bytes())
+
+            result.unlink()
+            changed = gitiles_archive(3000.5, b"echo changed\n")
+            with mock.patch.object(runtime_sources.urllib.request, "urlopen", return_value=io.BytesIO(changed)):
+                with self.assertRaisesRegex(SystemExit, "Git tree mismatch"):
+                    runtime_sources.verified_download(item, cache)
+            self.assertFalse(result.exists())
+
+    def test_gitiles_canonicalization_rejects_unsafe_or_ambiguous_archives(self):
+        cases = {
+            "parent traversal": [("../escape", "file", b"x", {})],
+            "absolute path": [("/escape", "file", b"x", {})],
+            "backslash path": [(r"dir\escape", "file", b"x", {})],
+            "escaping symlink": [("link", "symlink", b"../../outside", {})],
+            "special member": [("pipe", "fifo", b"", {})],
+            "duplicate path": [
+                ("same", "file", b"one", {}),
+                ("same", "file", b"two", {}),
+            ],
+            "case collision": [
+                ("Folder/one", "file", b"one", {}),
+                ("folder/two", "file", b"two", {}),
+            ],
+            "file and directory collision": [
+                ("node", "file", b"one", {}),
+                ("node/child", "file", b"two", {}),
+            ],
+            "unexpected PAX metadata": [("file", "file", b"x", {"comment": "no"})],
+        }
+        with tempfile.TemporaryDirectory() as folder:
+            folder = Path(folder)
+            for label, members in cases.items():
+                with self.subTest(case=label):
+                    source = folder / "source.tar.gz"
+                    target = folder / "target.tar"
+                    source.write_bytes(archive_with_members(members))
+                    with self.assertRaisesRegex(SystemExit, "invalid Gitiles source archive"):
+                        runtime_sources.canonicalize_gitiles_archive(source, target)
+                    self.assertFalse(target.exists())
+
+            source = folder / "source.tar.gz"
+            target = folder / "target.tar"
+            source.write_bytes(archive_with_members([
+                ("payload", "file", b"four", {}),
+            ]))
+            with mock.patch.object(runtime_sources, "MAX_EXPANDED_BYTES", 3):
+                with self.assertRaisesRegex(SystemExit, "size limit"):
+                    runtime_sources.canonicalize_gitiles_archive(source, target)
+            self.assertFalse(target.exists())
+
+            source.write_bytes(archive_with_members([
+                ("x" * 101, "file", b"x", {}),
+            ], archive_format=tarfile.GNU_FORMAT))
+            with self.assertRaisesRegex(SystemExit, "invalid Gitiles source archive"):
+                runtime_sources.canonicalize_gitiles_archive(source, target)
+            self.assertFalse(target.exists())
+
+    def test_gitiles_archive_bombs_are_rejected_before_payload_consumption(self):
+        with tempfile.TemporaryDirectory() as folder:
+            folder = Path(folder)
+            source = folder / "source.tar.gz"
+            target = folder / "target.tar"
+            claimed = tarfile.TarInfo("claimed-huge-file")
+            claimed.mode = 0o644
+            claimed.size = runtime_sources.MAX_EXPANDED_BYTES + 1
+            source.write_bytes(gzip.compress(
+                claimed.tobuf(format=tarfile.USTAR_FORMAT) + b"\0" * 1024,
+                mtime=0,
+            ))
+            with self.assertRaisesRegex(SystemExit, "size limit"):
+                runtime_sources.canonicalize_gitiles_archive(source, target)
+            self.assertFalse(target.exists())
+
+            source.write_bytes(archive_with_members([
+                ("payload", "file", b"small", {}),
+            ]))
+            with mock.patch.object(runtime_sources, "MAX_ARCHIVE_STREAM_BYTES", 511):
+                with self.assertRaisesRegex(SystemExit, "stream limit"):
+                    runtime_sources.canonicalize_gitiles_archive(source, target)
+            self.assertFalse(target.exists())
 
     def test_downloaded_archives_are_preserved_and_repeated_offline_stage_is_identical(self):
         fixture = self.fixture

@@ -1,30 +1,56 @@
 # SPDX-License-Identifier: GPL-3.0-only
 """Preserve verified upstream source inputs beside the bundled runtime.
 
-Archives stay intact: this helper never executes or extracts upstream code.
-Locks are editable build inputs, including for modified redistributions.
+The helper never executes upstream code. Release assets stay intact; Gitiles
+snapshots are safely repacked to remove request-time metadata. Locks are
+editable build inputs, including for modified redistributions.
 """
 
 from __future__ import annotations
 
 import argparse
+import gzip
 import hashlib
+import io
 import json
 import os
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 import re
 import shutil
+import tarfile
 import tempfile
+import urllib.parse
 import urllib.request
 
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_SOURCE_LOCK = ROOT / "Installer/runtime-sources.lock.json"
 DEFAULT_RUNTIME_LOCK = ROOT / "Installer/runtime-lock.json"
 MAX_DOWNLOAD_BYTES = 512 * 1024 * 1024
+MAX_ARCHIVE_MEMBERS = 100_000
+MAX_EXPANDED_BYTES = 512 * 1024 * 1024
+MAX_ARCHIVE_STREAM_BYTES = 512 * 1024 * 1024
 # A day inside ZIP's range even after UTC is converted to local time.
 SOURCE_MTIME = 315619200
 MANIFEST_NAME = "MANIFEST.json"
 README_NAME = "README.txt"
+GITILES_CANONICALIZATION = "gitiles-ustar-v1"
+
+
+class LimitedReader:
+    def __init__(self, stream, limit: int):
+        self.stream = stream
+        self.limit = limit
+        self.total = 0
+
+    def read(self, size: int = -1) -> bytes:
+        remaining = self.limit - self.total
+        if size < 0 or size > remaining + 1:
+            size = remaining + 1
+        data = self.stream.read(size)
+        self.total += len(data)
+        if self.total > self.limit:
+            raise ValueError("archive expands beyond the stream limit")
+        return data
 
 
 def normalized_digest(path: Path) -> str:
@@ -42,6 +68,183 @@ def file_digest(path: Path) -> str:
 
 def json_bytes(value: object) -> bytes:
     return (json.dumps(value, indent=2, sort_keys=True, ensure_ascii=True) + "\n").encode("ascii")
+
+
+def is_gitiles_archive_url(url: str) -> bool:
+    parsed = urllib.parse.urlsplit(url)
+    return (parsed.scheme == "https"
+            and (parsed.hostname or "").endswith(".googlesource.com")
+            and "/+archive/" in parsed.path)
+
+
+def gitiles_revision(url: str) -> str:
+    parsed = urllib.parse.urlsplit(url)
+    matched = re.search(r"/\+archive/([a-f0-9]{40})\.tar\.gz$", parsed.path)
+    if matched is None or parsed.query or parsed.fragment:
+        return ""
+    return matched.group(1)
+
+
+def _git_object_id(kind: bytes, payload: bytes) -> bytes:
+    header = kind + b" " + str(len(payload)).encode("ascii") + b"\0"
+    return hashlib.sha1(header + payload).digest()
+
+
+def _git_tree_id(files: dict[str, tuple[str, bytes]]) -> str:
+    root: dict[str, object] = {}
+    for path, value in files.items():
+        node = root
+        parts = path.split("/")
+        for part in parts[:-1]:
+            child = node.setdefault(part, {})
+            if not isinstance(child, dict):
+                raise ValueError("archive path collides with a file: " + path)
+            node = child
+        if parts[-1] in node:
+            raise ValueError("duplicate archive path: " + path)
+        node[parts[-1]] = value
+
+    def hash_tree(node: dict[str, object]) -> bytes:
+        rows = []
+        for name, value in node.items():
+            encoded = name.encode("ascii")
+            if isinstance(value, dict):
+                mode = b"40000"
+                object_id = hash_tree(value)
+                order = encoded + b"/"
+            else:
+                mode_text, payload = value
+                mode = mode_text.encode("ascii")
+                object_id = _git_object_id(b"blob", payload)
+                order = encoded
+            rows.append((order, mode + b" " + encoded + b"\0" + object_id))
+        payload = b"".join(row for _, row in sorted(rows))
+        return _git_object_id(b"tree", payload)
+
+    return hash_tree(root).hex()
+
+
+def canonicalize_gitiles_archive(source: Path, target: Path) -> str:
+    """Repack a Gitiles snapshot without its request-time tar metadata."""
+    files: dict[str, tuple[str, bytes]] = {}
+    explicit_directories = set()
+    case_names: dict[str, str] = {}
+    seen_names = set()
+    total = 0
+    try:
+        with gzip.open(source, "rb") as expanded, tarfile.open(
+            fileobj=LimitedReader(expanded, MAX_ARCHIVE_STREAM_BYTES), mode="r|",
+        ) as incoming:
+            count = 0
+            for member in incoming:
+                count += 1
+                if count > MAX_ARCHIVE_MEMBERS:
+                    raise ValueError("archive has too many members")
+                if set(member.pax_headers) - {"mtime"}:
+                    raise ValueError("archive has unsupported PAX metadata")
+                if getattr(member, "sparse", None):
+                    raise ValueError("archive has a sparse member")
+                name = member.name.rstrip("/")
+                path = PurePosixPath(name)
+                if (not name or "\\" in name or path.is_absolute()
+                        or any(part in {"", ".", ".."} for part in path.parts)):
+                    raise ValueError("archive has an unsafe path")
+                name = "/".join(path.parts)
+                name.encode("ascii")
+                for index in range(1, len(path.parts) + 1):
+                    prefix = "/".join(path.parts[:index])
+                    folded = prefix.casefold()
+                    previous = case_names.setdefault(folded, prefix)
+                    if previous != prefix:
+                        raise ValueError("archive has case-colliding paths")
+                if name in seen_names:
+                    raise ValueError("archive has a duplicate path")
+                seen_names.add(name)
+                if member.isdir():
+                    if member.size != 0:
+                        raise ValueError("archive directory has a payload")
+                    explicit_directories.add(name)
+                    continue
+                if member.isfile():
+                    if member.size > MAX_EXPANDED_BYTES - total:
+                        raise ValueError("archive expands beyond the size limit")
+                    stream = incoming.extractfile(member)
+                    if stream is None:
+                        raise ValueError("archive file payload is missing")
+                    payload = stream.read()
+                    if len(payload) != member.size:
+                        raise ValueError("archive file payload is truncated")
+                    total += len(payload)
+                    mode = "100755" if member.mode & 0o111 else "100644"
+                else:
+                    raise ValueError("archive has an unsupported member type")
+                files[name] = (mode, payload)
+
+        directories = {
+            "/".join(parts[:index])
+            for name in files
+            for parts in (name.split("/"),)
+            for index in range(1, len(parts))
+        }
+        if explicit_directories - directories:
+            raise ValueError("archive contains an empty or untracked directory")
+        tree = _git_tree_id(files)
+
+        with tarfile.open(target, "w", format=tarfile.USTAR_FORMAT) as output:
+            for name in sorted(directories | set(files)):
+                info = tarfile.TarInfo(name)
+                info.uid = 0
+                info.gid = 0
+                info.uname = ""
+                info.gname = ""
+                info.mtime = SOURCE_MTIME
+                if name in directories:
+                    info.type = tarfile.DIRTYPE
+                    info.mode = 0o755
+                    output.addfile(info)
+                    continue
+                mode, payload = files[name]
+                info.mode = 0o755 if mode == "100755" else 0o644
+                info.size = len(payload)
+                output.addfile(info, io.BytesIO(payload))
+    except (EOFError, OSError, tarfile.TarError, UnicodeError, ValueError) as error:
+        target.unlink(missing_ok=True)
+        raise SystemExit("invalid Gitiles source archive: " + source.name + ": " + str(error)) from error
+    return tree
+
+
+def validate_declared_license_files(item: dict, source: Path) -> None:
+    """Require audit pointers in the lock to exist in the verified archive."""
+    required = item.get("license_files", [])
+    if not required:
+        return
+    try:
+        filename = item.get("filename", "")
+        if filename.endswith(".tar.gz"):
+            expanded = gzip.open(source, "rb")
+        elif filename.endswith(".tar"):
+            expanded = source.open("rb")
+        else:
+            raise ValueError("declared license files require a tar archive")
+        names = set()
+        with expanded, tarfile.open(
+            fileobj=LimitedReader(expanded, MAX_ARCHIVE_STREAM_BYTES), mode="r|",
+        ) as archive:
+            for count, member in enumerate(archive, start=1):
+                if count > MAX_ARCHIVE_MEMBERS:
+                    raise ValueError("archive has too many members")
+                if member.isfile():
+                    names.add(member.name.rstrip("/"))
+    except (EOFError, OSError, tarfile.TarError, ValueError) as error:
+        raise SystemExit(
+            "cannot inspect declared source notices in " + source.name + ": " + str(error)
+        ) from error
+    missing = set(required) - names
+    if missing:
+        raise SystemExit(
+            "source archive is missing declared license files: "
+            + source.name + ": " + ", ".join(sorted(missing))
+        )
 
 
 def load_source_lock(source_lock: Path, runtime_lock: Path) -> dict:
@@ -78,6 +281,33 @@ def load_source_lock(source_lock: Path, runtime_lock: Path) -> dict:
             raise SystemExit("source artifact needs HTTPS URL and provenance: " + filename)
         if not item.get("name") or not item.get("version"):
             raise SystemExit("source artifact needs component and version: " + filename)
+        license_files = item.get("license_files", [])
+        if (not isinstance(license_files, list)
+                or any(not isinstance(path, str) for path in license_files)
+                or len(license_files) != len(set(license_files))):
+            raise SystemExit("invalid declared source license files: " + filename)
+        for name in license_files:
+            path = PurePosixPath(name)
+            try:
+                name.encode("ascii")
+            except UnicodeError as error:
+                raise SystemExit("unsafe declared source license file: " + filename) from error
+            if (not name or "\\" in name or path.is_absolute()
+                    or any(part in {"", ".", ".."} for part in path.parts)):
+                raise SystemExit("unsafe declared source license file: " + filename)
+        canonicalization = item.get("canonicalization")
+        if is_gitiles_archive_url(item["url"]):
+            if canonicalization != GITILES_CANONICALIZATION:
+                raise SystemExit(
+                    "Gitiles source archives require deterministic canonicalization: " + filename)
+            if not re.fullmatch(r"[a-f0-9]{40}", gitiles_revision(item["url"])):
+                raise SystemExit("Gitiles source archive must pin a full commit: " + filename)
+            if not filename.endswith(".tar"):
+                raise SystemExit("canonical Gitiles source filename must end in .tar: " + filename)
+            if not re.fullmatch(r"[a-f0-9]{40}", item.get("git_tree_sha1", "")):
+                raise SystemExit("canonical Gitiles source needs its Git tree SHA1: " + filename)
+        elif canonicalization is not None:
+            raise SystemExit("unsupported source canonicalization: " + filename)
         if item.get("runtime_component"):
             component = item["runtime_component"]
             if components.get(component) != item["version"]:
@@ -106,8 +336,10 @@ def expected_manifest(lock: dict, source_lock: Path) -> dict:
 def readme_bytes(lock: dict) -> bytes:
     lines = [
         "Matching upstream runtime source inputs", "=======================================", "",
-        "These are intact upstream archives and their original license notices.",
-        "MANIFEST.json records versions, provenance and SHA256 checksums.",
+        "These contain upstream source bytes and their original license notices.",
+        "Most are intact upstream archives. Generated Gitiles snapshots are repacked",
+        "as deterministic tar files without changing paths, modes or file contents.",
+        "MANIFEST.json records versions, provenance, Git trees and SHA256 checksums.",
         "The source and runtime locks are editable inputs for modified builds.",
         "Refresh their versions and checksums together when changing dependencies.",
         "No Git checkout or repository account is needed to use these archives.",
@@ -127,6 +359,7 @@ def verified_download(item: dict, cache: Path, *, offline: bool = False) -> Path
         if offline:
             raise SystemExit("source archive is missing from offline cache: " + target.name)
         temporary = None
+        canonical = None
         try:
             with tempfile.NamedTemporaryFile(dir=cache, prefix="source-", suffix=".part", delete=False) as output:
                 temporary = Path(output.name)
@@ -137,16 +370,30 @@ def verified_download(item: dict, cache: Path, *, offline: bool = False) -> Path
                         if size > MAX_DOWNLOAD_BYTES:
                             raise SystemExit("source download exceeds limit: " + target.name)
                         output.write(block)
-            if file_digest(temporary) != item["sha256"]:
+            candidate = temporary
+            if item.get("canonicalization") == GITILES_CANONICALIZATION:
+                with tempfile.NamedTemporaryFile(
+                    dir=cache, prefix="source-canonical-", suffix=".part", delete=False,
+                ) as output:
+                    canonical = Path(output.name)
+                tree = canonicalize_gitiles_archive(temporary, canonical)
+                if tree != item["git_tree_sha1"]:
+                    raise SystemExit("source Git tree mismatch: " + target.name)
+                candidate = canonical
+            if file_digest(candidate) != item["sha256"]:
                 raise SystemExit("source SHA256 mismatch: " + target.name)
-            temporary.replace(target)
+            validate_declared_license_files(item, candidate)
+            candidate.replace(target)
         except OSError as error:
             raise SystemExit("source download failed for " + target.name + ": " + str(error)) from error
         finally:
             if temporary is not None and temporary.exists():
                 temporary.unlink()
+            if canonical is not None and canonical.exists():
+                canonical.unlink()
     if file_digest(target) != item["sha256"]:
         raise SystemExit("source SHA256 mismatch: " + target.name)
+    validate_declared_license_files(item, target)
     return target
 
 
@@ -173,6 +420,7 @@ def validate_runtime_sources(
         path = source / item["filename"]
         if path.is_symlink() or not path.is_file() or file_digest(path) != item["sha256"]:
             raise SystemExit("runtime source SHA256 mismatch: " + item["filename"])
+        validate_declared_license_files(item, path)
     for name, wanted in ((MANIFEST_NAME, json_bytes(manifest)), (README_NAME, readme_bytes(lock))):
         path = source / name
         if path.is_symlink() or path.read_bytes() != wanted:
