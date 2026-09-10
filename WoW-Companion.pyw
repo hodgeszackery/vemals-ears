@@ -143,6 +143,8 @@ QUICK_CHAT_NAME_LIMIT = 32
 # Below this length, finding the member's line inside a server message is
 # coincidence rather than an echo. See transmit_quick_chat.
 QUICK_CHAT_ECHO_MIN_CHARS = 12
+AUTO_UPDATE_IDLE_GRACE_SECONDS = 5 * 60
+AUTO_UPDATE_MANUAL_PAUSE_GRACE_SECONDS = 30
 QUICK_CHAT_BIDI_CONTROLS = frozenset({
     "FSI",
     "LRE",
@@ -3505,6 +3507,11 @@ class Service:
     # overlay appearing unasked is noise a hearing player then has to
     # hunt down.
     paused_by_member: bool = False
+    paused_at: float = 0.0
+    # Wall-clock timestamp of the unknown marker the parent proved it wrote
+    # immediately before this voice process started. Automatic update state
+    # must be newer than this process generation.
+    update_session_reset_at: float = 0.0
     lines: queue.Queue = field(default_factory=queue.Queue)
     # A finished action reports here, drained on the Tk thread. Without
     # it an action that dies immediately is indistinguishable from one
@@ -3670,6 +3677,7 @@ class Service:
             self.restart_failures = 0
         # Starting is itself the member changing their mind.
         self.paused_by_member = False
+        self.paused_at = 0.0
         if getattr(self.window, "preview", False) is True:
             self.set_status("Ready", SUCCESS, "ready")
             self.set_lifecycle_state("running")
@@ -3679,6 +3687,27 @@ class Service:
             self.set_lifecycle_state("unavailable")
             self.reschedule_after_failed_start(automatic)
             return
+        if self.spec.key == "voice":
+            # The child publishes the relay's session state, but there is a
+            # small window between Popen and the child's first instruction.
+            # Clear a stopped marker before spawning so an old safe state can
+            # never authorize an update against the new caption process.
+            self.update_session_reset_at = 0.0
+            reset_started_at = time.time()
+            try:
+                from GuildHub.updater import read_session_state, write_session_state
+
+                write_session_state("unknown")
+                reset = read_session_state()
+                if (
+                    reset is not None
+                    and reset.state == "unknown"
+                    and reset.observed_at >= reset_started_at
+                ):
+                    self.update_session_reset_at = reset.observed_at
+            except Exception:
+                # Session bookkeeping must never prevent captions starting.
+                pass
         try:
             self.process = subprocess.Popen(
                 # -u: a piped child is block-buffered otherwise, which would
@@ -3816,6 +3845,7 @@ class Service:
             self.local_stop_in_flight = False
             self.local_stop_thread = None
             self.paused_by_member = False
+            self.paused_at = 0.0
             if self.button is not None:
                 self.button.config(state="normal")
             self.set_status("Could not stop - open Activity", DANGER, "attention")
@@ -3845,6 +3875,7 @@ class Service:
                 self.set_lifecycle_state("stopped")
             else:
                 self.paused_by_member = False
+                self.paused_at = 0.0
                 if self.button is not None:
                     self.button.config(state="normal")
                 self.set_status("Could not stop - open Activity", DANGER, "attention")
@@ -4051,6 +4082,7 @@ class Service:
             self.start()
         else:
             self.paused_by_member = True
+            self.paused_at = time.monotonic()
             self.request_stop()
             member_button = getattr(self.window, "member_caption_button", None)
             if member_button is not None:
@@ -9427,6 +9459,20 @@ class CompanionWindow:
         self.update_tick = 0
         self.update_offer = None
         self.update_busy = False
+        self.update_coordinator = None
+        if self.member_edition and not self.preview:
+            try:
+                from GuildHub.updater import UpdateCoordinator
+
+                self.update_coordinator = UpdateCoordinator(
+                    guild_credential_store(),
+                    app_root=ROOT,
+                    state_root=STATE_DIR,
+                    installed=installed_launcher() is not None,
+                )
+            except Exception:
+                # A damaged updater must not keep the caption app from opening.
+                self.update_coordinator = None
         self.update_banner = tk.Frame(self.main, bg=self.accent)
         update_inner = tk.Frame(self.update_banner, bg=self.theme.panel_alt)
         update_inner.pack(fill="x", padx=1, pady=1)
@@ -9453,8 +9499,6 @@ class CompanionWindow:
             self.update_offer = None
             self.update_banner.pack_forget()
             return
-        if self.update_busy:
-            return
         try:
             # Imported here like the other GuildHub entry points: a copy
             # without the caption client must still open its window.
@@ -9463,16 +9507,45 @@ class CompanionWindow:
             offer = read_update_notice()
         except Exception:
             offer = None
+        coordinator = getattr(self, "update_coordinator", None)
+        if coordinator is not None:
+            coordinator.offer_from_caption_client(offer)
+            offer = coordinator.offer
+            self.update_busy = coordinator.busy
         self.update_offer = offer
         if offer is None:
             self.update_banner.pack_forget()
             return
-        self.update_message.configure(
-            text=(
-                f"Vemal's Ears {offer['version']} is available. "
-                "Updating closes this window and reopens the installer."
-            )
-        )
+        version = offer["version"]
+        if coordinator is not None and coordinator.busy:
+            message = f"Vemal's Ears {version} is downloading and being checked."
+            button_text = "Checking..."
+            button_state = "disabled"
+        elif coordinator is not None and coordinator.staged is not None:
+            if coordinator.auto_trusted:
+                message = (
+                    f"Vemal's Ears {version} is ready. It will install "
+                    "automatically five minutes after captions stop, or shortly "
+                    "after you pause them."
+                )
+            else:
+                message = (
+                    f"Vemal's Ears {version} is downloaded and checksum checked. "
+                    "This release needs your approval because it is not signed "
+                    "for automatic installation."
+                )
+            button_text = "Open installer"
+            button_state = "normal"
+        else:
+            message = f"Vemal's Ears {version} is available. Preparing the update..."
+            button_text = "Preparing..."
+            button_state = "disabled"
+        if coordinator is not None and coordinator.error:
+            message = f"Vemal's Ears {version} is available. {coordinator.error}"
+            button_text = "Try again"
+            button_state = "normal"
+        self.update_message.configure(text=message)
+        self.update_button.configure(text=button_text, state=button_state)
         self.update_banner.pack(
             fill="x",
             padx=24,
@@ -9481,34 +9554,86 @@ class CompanionWindow:
         )
 
     def install_update(self) -> None:
-        """Download, verify, then hand the member the installer.
-
-        Nothing is run until the bytes match the checksum the guild
-        server gave over its authenticated connection, and the member
-        still clicks through the installer themselves - which is what
-        keeps an unsigned build honest.
-        """
-        offer = self.update_offer
-        if offer is None or self.update_busy:
+        """Request an interactive install without blocking the Tk thread."""
+        coordinator = getattr(self, "update_coordinator", None)
+        if coordinator is None or self.update_offer is None or self.update_busy:
             return
-        import tempfile
+        coordinator.request_manual_install()
+        self.update_busy = coordinator.busy
+        self.update_button.configure(state="disabled", text="Checking...")
+        self.update_message.configure(text="Checking the update before opening it...")
+
+    def update_safe_to_apply(self) -> bool:
+        """Return true only after local caption and message activity is quiet."""
+        if not self.member_edition or getattr(self, "preview", False):
+            return False
+        if getattr(self, "speak_box", None) is not None:
+            return False
+        if getattr(self, "quick_chat_in_flight", {}):
+            return False
+        if any(
+            getattr(self, name, None) is not None
+            for name in (
+                "menu",
+                "connect_guild_helper",
+                "caption_target_menu",
+                "speaker_mute_menu",
+            )
+        ):
+            return False
+        try:
+            if self.root.grab_current() is not None:
+                return False
+        except (AttributeError, tk.TclError):
+            return False
+        service = getattr(self, "member_caption_service", None)
+        if service is None:
+            return False
+        if service.paused_by_member:
+            paused_at = getattr(service, "paused_at", 0.0)
+            return bool(
+                paused_at
+                and service.process is None
+                and not getattr(service, "local_stop_in_flight", False)
+                and time.monotonic() - paused_at
+                >= AUTO_UPDATE_MANUAL_PAUSE_GRACE_SECONDS
+            )
+        if service.process is None:
+            return False
+        reset_at = getattr(service, "update_session_reset_at", 0.0)
+        if reset_at <= 0:
+            return False
+        try:
+            from GuildHub.updater import read_session_state
+
+            status = read_session_state()
+        except Exception:
+            return False
+        if (
+            status is None
+            or status.state != "stopped"
+            or status.observed_at < reset_at
+        ):
+            return False
+        age = time.time() - status.observed_at
+        return 0 <= age and age >= AUTO_UPDATE_IDLE_GRACE_SECONDS
+
+    def update_window_state(self) -> str:
+        if getattr(self, "hidden", False):
+            return "hidden"
+        try:
+            if self.root.state() == "iconic":
+                return "minimized"
+        except (AttributeError, tk.TclError):
+            pass
+        return "visible"
+
+    def launch_update(self, request) -> None:
+        """Launch a verified request and leave shutdown to the installer."""
         from tkinter import messagebox
 
-        from GuildHub.client import download_verified_update
-
-        self.update_busy = True
-        self.update_button.configure(state="disabled")
-        self.update_message.configure(text="Downloading the update...")
-        self.root.update_idletasks()
-        try:
-            target = Path(tempfile.gettempdir()) / "Vemals-Ears-Setup.exe"
-            download_verified_update(offer, target)
-        except Exception as error:
-            self.update_message.configure(text="The update could not be installed.")
-            self.update_button.configure(state="normal")
-            self.update_busy = False
-            messagebox.showerror("Vemal's Ears", str(error))
-            return
+        coordinator = self.update_coordinator
+        marker = None
         # The installer closes this copy. This copy does not close itself.
         #
         # Both of the obvious orderings were wrong. Launching and then
@@ -9529,17 +9654,54 @@ class CompanionWindow:
         # or failed install now leaves this copy exactly as it was - still
         # running, still captioning.
         try:
-            os.startfile(str(target))  # noqa: S606 - verified above
+            if request.automatic:
+                from GuildHub.updater import write_relaunch_state
+
+                marker = write_relaunch_state(
+                    STATE_DIR,
+                    request.version,
+                    self.update_window_state(),
+                )
+                subprocess.Popen(
+                    [
+                        str(request.path),
+                        "/VERYSILENT",
+                        "/SUPPRESSMSGBOXES",
+                        "/NORESTART",
+                        "/SP-",
+                        "/VEAUTOUPDATE",
+                    ],
+                    close_fds=True,
+                    creationflags=NO_WINDOW,
+                )
+            else:
+                os.startfile(str(request.path))  # noqa: S606 - verified above
         except OSError as error:
+            if marker is not None:
+                try:
+                    marker.unlink(missing_ok=True)
+                except OSError:
+                    pass
+            coordinator.mark_launch_failed(
+                "The update could not be started.",
+                automatic=request.automatic,
+            )
             self.update_message.configure(text="The update could not be started.")
             self.update_button.configure(state="normal")
             self.update_busy = False
-            messagebox.showerror("Vemal's Ears", str(error))
+            if not request.automatic:
+                messagebox.showerror("Vemal's Ears", str(error), parent=self.root)
             return
+        coordinator.mark_launched(automatic=request.automatic)
+        self.update_busy = True
         # Stays busy: the installer is what ends this process, and
         # re-offering the button meanwhile would start a second one.
         self.update_message.configure(
-            text="The installer is open. It closes this window when you continue."
+            text=(
+                "Installing the update..."
+                if request.automatic
+                else "The installer is open. It closes this window when you continue."
+            )
         )
 
     def make_button(self, parent: tk.Frame, label: str, command) -> tk.Button:
@@ -9767,6 +9929,11 @@ class CompanionWindow:
         # explicitly ignores the captions-only installer in the method.
         if self.update_tick % 25 == 0:
             self.refresh_update_banner()
+        coordinator = getattr(self, "update_coordinator", None)
+        if coordinator is not None:
+            request = coordinator.tick(safe_to_apply=self.update_safe_to_apply())
+            if request is not None:
+                self.launch_update(request)
         self.update_tick += 1
         if self.consume_pairing_signal():
             self.refresh_pairing_identity()
@@ -9979,11 +10146,22 @@ def main(*, edition: str | None = None) -> int:
     icon = ensure_icon(edition)
     pairing_links_ready = register_pairing_links(icon)
     migrate_autostart()
-    CompanionWindow(
+    window = CompanionWindow(
         root,
         edition=edition,
         result_carrier_available=result_carrier_available,
     )
+    if edition == MEMBER_EDITION:
+        try:
+            from GuildHub.updater import consume_relaunch_state
+
+            restored = consume_relaunch_state(STATE_DIR)
+        except Exception:
+            restored = None
+        if restored == "hidden":
+            root.after(0, window.hide)
+        elif restored == "minimized":
+            root.after(0, window.minimize)
     if pairing is not None:
         root.after(250, lambda: messagebox.showinfo(product_name, pairing.message))
     if not pairing_links_ready:

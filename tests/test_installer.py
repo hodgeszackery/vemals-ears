@@ -58,6 +58,8 @@ class InstallerAllowlistTests(unittest.TestCase):
             "WoW-Companion.pyw",
             "GuildHub/client.py",
             "GuildHub/credentials.py",
+            "GuildHub/updater.py",
+            "GuildHub/verify_update.ps1",
             "GuildHub/windows_integration.py",
             "VoiceCaptions/member_overlay.py",
             "VoiceCaptions/overlay.py",
@@ -139,13 +141,37 @@ class InstallerAllowlistTests(unittest.TestCase):
                 return_value="a" * 40,
             ):
                 manifest = self.stage.stage_payload(source, stage, "1.2.3")
+                trusted_stage = Path(folder) / "trusted-stage"
+                trusted_manifest = self.stage.stage_payload(
+                    source,
+                    trusted_stage,
+                    "1.2.3",
+                    trusted_publishers=("CN=Zackery Hodges", "CN=Future Publisher"),
+                )
 
-            icon.assert_called_once()
+            self.assertEqual(2, icon.call_count)
             self.assertEqual(
                 ["allowed/member.py", "Source/vemals-ears-source.zip", "vemals-ears-member.json"],
                 [row["path"] for row in manifest["app_files"]],
             )
             self.assertEqual("member", manifest["audience"])
+            self.assertNotIn("update_trust", manifest)
+            self.assertEqual(
+                {
+                    "schema": 1,
+                    "authenticode_publishers": [
+                        "CN=Zackery Hodges",
+                        "CN=Future Publisher",
+                    ],
+                },
+                trusted_manifest["update_trust"],
+            )
+            self.assertEqual(
+                trusted_manifest,
+                json.loads(
+                    (trusted_stage / "payload-manifest.json").read_text(encoding="ascii")
+                ),
+            )
             self.assertEqual(
                 {"edition": "member", "schema": 1},
                 json.loads(
@@ -165,6 +191,19 @@ class InstallerAllowlistTests(unittest.TestCase):
             root = Path(folder)
             with self.assertRaises(self.stage.StageError):
                 self.stage._safe_source_file(root, "../private.txt")
+
+    def test_update_trust_rejects_ambiguous_publisher_subjects(self):
+        for publishers in (
+            (),
+            ("",),
+            (" CN=Publisher",),
+            ("CN=Publisher\nOU=Injected",),
+            ("CN=" + "x" * 321,),
+            ("CN=Publisher", "CN=Publisher"),
+            tuple("CN=Publisher " + str(index) for index in range(5)),
+        ):
+            with self.subTest(publishers=publishers), self.assertRaises(self.stage.StageError):
+                self.stage._update_trust(publishers)
 
     def test_icon_staging_accepts_canonicalized_root_alias_but_rejects_resolved_escape(self):
         with tempfile.TemporaryDirectory() as folder:
@@ -394,7 +433,7 @@ class InstallerPolicyTests(unittest.TestCase):
         """
         source = (INSTALLER / "VemalsEars.iss").read_text(encoding="utf-8")
         for name in (
-            "Files", "InstallDelete", "Icons", "Registry", "Run", "UninstallRun"
+            "Files", "InstallDelete", "Icons", "Registry", "UninstallRun"
         ):
             source = re.sub(
                 r"^\[" + name + r"\]\n(?:(?!^\[).*\n)*",
@@ -761,6 +800,82 @@ class InstallerPolicyTests(unittest.TestCase):
         # refusing here cannot leave a half-installed copy.
         self.assertIn("PathIsSafeForPayloadCleanup(WizardDirValue)", prepare)
 
+    def test_silent_auto_update_is_the_only_unattended_relaunch_path(self):
+        source = (INSTALLER / "VemalsEars.iss").read_text(encoding="ascii")
+        run = source[source.index("[Run]"):source.index("[UninstallRun]")]
+        launch_lines = [line for line in run.splitlines() if line.startswith("Filename:")]
+        self.assertEqual(2, len(launch_lines))
+        interactive, automatic = launch_lines
+        self.assertIn("postinstall skipifsilent", interactive)
+        self.assertNotIn("Check:", interactive)
+        self.assertIn("Check: IsAutomaticUpdateInvocation", automatic)
+        self.assertNotIn("postinstall", automatic)
+        self.assertEqual(1, source.count("'/VEAUTOUPDATE'"))
+        check = source[
+            source.index("function IsAutomaticUpdateInvocation"):
+            source.index("function PathIsSafeForPayloadCleanup")
+        ]
+        self.assertIn("if not WizardSilent then", check)
+        self.assertIn("ParamStr(Index)", check)
+        self.assertNotIn("SetupCloseRunningCompanion", check)
+
+        build = (INSTALLER / "build_installer.ps1").read_text(encoding="ascii")
+        self.assertIn('if ($Signed -and -not $AllowUntrustedSigner)', build)
+        self.assertIn('$stageArguments += @("--trusted-publisher", $ExpectedPublisher)', build)
+        self.assertIn('$stageArguments += @("--trusted-publisher", $publisher)', build)
+        self.assertIn("The official signed payload is missing its update publisher trust", build)
+        self.assertIn("An unsigned or proof payload must not authorize", build)
+
+    @unittest.skipUnless(ISCC.is_file(), "Inno Setup 7 is not installed here")
+    def test_compiled_auto_update_switch_gates_the_silent_relaunch(self):
+        source = (INSTALLER / "VemalsEars.iss").read_text(encoding="ascii")
+        check = source[
+            source.index("function IsAutomaticUpdateInvocation"):
+            source.index("function PathIsSafeForPayloadCleanup")
+        ]
+        with tempfile.TemporaryDirectory(prefix="ve-update-switch-") as folder:
+            stage = Path(folder)
+            receipt = stage / "launches.txt"
+            probe = stage / "update-switch-probe.iss"
+            probe.write_text(
+                textwrap.dedent(
+                    r'''
+                    [Setup]
+                    AppName=VE update switch probe
+                    AppVersion=0.0.0
+                    DefaultDirName={tmp}\VE-update-switch-probe
+                    CreateAppDir=no
+                    Uninstallable=no
+                    CreateUninstallRegKey=no
+                    PrivilegesRequired=lowest
+                    OutputBaseFilename=update-switch-probe
+                    OutputDir=__OUTPUT__
+                    Compression=none
+
+                    [Run]
+                    Filename: "{cmd}"; Parameters: "/D /C echo launched>>""__RECEIPT__"""; Flags: waituntilterminated; Check: IsAutomaticUpdateInvocation
+
+                    [Code]
+                    '''
+                ).replace("__OUTPUT__", str(stage)).replace("__RECEIPT__", str(receipt))
+                + check,
+                encoding="ascii",
+            )
+            compiled = subprocess.run(
+                [str(ISCC), str(probe)], capture_output=True, text=True, timeout=60
+            )
+            self.assertEqual(0, compiled.returncode, compiled.stdout + compiled.stderr)
+            installer = stage / "update-switch-probe.exe"
+            quiet = [str(installer), "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART"]
+            ordinary = subprocess.run(quiet, capture_output=True, text=True, timeout=30)
+            self.assertEqual(0, ordinary.returncode, ordinary.stdout + ordinary.stderr)
+            self.assertFalse(receipt.exists())
+            automatic = subprocess.run(
+                quiet + ["/VEAUTOUPDATE"], capture_output=True, text=True, timeout=30
+            )
+            self.assertEqual(0, automatic.returncode, automatic.stdout + automatic.stderr)
+            self.assertEqual(["launched"], receipt.read_text(encoding="ascii").splitlines())
+
     def test_release_signing_is_fail_closed_and_hash_is_post_sign(self):
         inno = (INSTALLER / "VemalsEars.iss").read_text(encoding="utf-8")
         build = (INSTALLER / "build_installer.ps1").read_text(encoding="utf-8")
@@ -907,6 +1022,15 @@ class SigningProviderTests(unittest.TestCase):
         self.assertNotEqual(0, code)
         self.assertIn("only means something for a -Signed", output)
 
+    def test_unsigned_build_cannot_grant_a_future_publisher_update_trust(self):
+        with tempfile.TemporaryDirectory() as out:
+            code, output = self.run_script(
+                "build_installer.ps1", "-AdditionalUpdatePublisher", "CN=Future",
+                "-OutputDirectory", out,
+            )
+        self.assertNotEqual(0, code)
+        self.assertIn("only in an official signed build", output)
+
     def test_the_azure_path_still_demands_its_metadata(self):
         with tempfile.TemporaryDirectory() as out:
             code, output = self.run_script(
@@ -915,6 +1039,15 @@ class SigningProviderTests(unittest.TestCase):
             )
         self.assertNotEqual(0, code)
         self.assertIn("Artifact Signing metadata file is required", output)
+
+    def test_signed_build_rejects_a_publisher_the_updater_cannot_parse(self):
+        with tempfile.TemporaryDirectory() as out:
+            code, output = self.run_script(
+                "build_installer.ps1", "-Signed", "-ExpectedPublisher", " CN=Anyone",
+                "-OutputDirectory", out,
+            )
+        self.assertNotEqual(0, code)
+        self.assertIn("exact certificate subject accepted by the updater", output)
 
     def test_verify_refuses_untrusted_mode_without_a_thumbprint(self):
         with tempfile.TemporaryDirectory() as folder:
