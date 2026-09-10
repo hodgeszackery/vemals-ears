@@ -3368,6 +3368,7 @@ class QuickChatTests(unittest.TestCase):
         self.assertTrue(result.success)
         self.assertEqual(request_id, result.request_id)
         self.assertEqual(4, result.cursor)
+        self.assertEqual("Accepted by the Vemal's Ears relay.", result.message)
         self.assertNotIn(private_line, repr(result))
         sender.assert_awaited_once_with(
             store,
@@ -3760,7 +3761,7 @@ class QuickChatTests(unittest.TestCase):
         self.assertGreaterEqual(y, -1080)
         self.assertLessEqual(y + 110, 0)
 
-    def test_member_ui_exposes_button_hotkey_and_discord_copy(self):
+    def test_member_ui_exposes_button_hotkey_and_voice_audience_boundary(self):
         source = (ROOT / "WoW-Companion.pyw").read_text(encoding="utf-8")
         # The separate VE UI reserves red emphasis for communication,
         # both on the main screen and inside its quick-message window.
@@ -3769,8 +3770,14 @@ class QuickChatTests(unittest.TestCase):
         self.assertIn('"Message Group",\n            self.open_speak_box', source)
         self.assertIn('prefix + "Message Group: " + hotkey', source)
         self.assertIn("shortcut unavailable.", source)
-        self.assertIn("Enter sends and closes. Captions get it at once; ", source)
-        self.assertIn("Discord keeps a copy.", source)
+        self.assertIn("Accepted by the Vemal's Ears relay.", source)
+        self.assertIn(
+            "Enter sends and closes. Only paired members in the exact active ", source
+        )
+        self.assertIn("voice channel may see or replay it.", source)
+        self.assertNotIn("Posted to Discord", source)
+        self.assertNotIn("Discord keeps a copy", source)
+        self.assertNotIn("round trip includes a Discord post", source)
         self.assertNotIn("Discord keeps them.", source)
         self.assertNotIn("Sending to your guild", source)
         self.assertNotIn("messages stay memory-only", source)

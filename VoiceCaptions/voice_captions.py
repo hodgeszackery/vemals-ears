@@ -416,9 +416,10 @@ def _caption_forwarder(router: CaptionRouter) -> Callable[[ProtocolEvent], bool]
             status(message)
 
     forward.voice_state = voice_state  # type: ignore[attr-defined]
-    # Hosted guild sinks also carry the private relay-to-Discord quick-chat
-    # control channel. Keep it attached to the callable handed to the
-    # coordinator without making the local overlay depend on GuildHub.
+    # Hosted guild sinks still expose the legacy quick-chat compatibility
+    # channel. Current relays leave it idle, but keep it attached to the
+    # coordinator for safe mixed-version upgrades without making the local
+    # overlay depend on GuildHub.
     if hasattr(router.sink, "next_quick_chat"):
         forward.next_quick_chat = router.sink.next_quick_chat  # type: ignore[attr-defined]
     if hasattr(router.sink, "complete_quick_chat"):

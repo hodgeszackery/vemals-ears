@@ -1,8 +1,9 @@
-"""Private worker connection for Discord-backed member quick chat.
+"""Legacy private worker connection retained for protocol compatibility.
 
-The public relay never receives the Discord token. Instead, the trusted guild
-worker authenticates with its existing publisher credential, accepts bounded
-typed commands in memory, and returns only redacted delivery outcomes.
+Current relays never send typed bodies to this connection. It remains so a
+deployed worker can authenticate during mixed-version upgrades and so older
+bounded command frames receive only redacted terminal outcomes. The adapter has
+no Discord sink for those bodies.
 """
 
 from __future__ import annotations

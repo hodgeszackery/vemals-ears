@@ -1561,7 +1561,7 @@ def transmit_quick_chat(text: str, request_id: str) -> QuickChatSendResult:
         return QuickChatSendResult(
             request_id,
             True,
-            "Posted to Discord and in-game captions.",
+            "Accepted by the Vemal's Ears relay.",
             cursor,
         )
     except GuildHubClientError as error:
@@ -9201,8 +9201,8 @@ class CompanionWindow:
         status = tk.Label(
             meta,
             text=(
-                "Enter sends and closes. Captions get it at once; "
-                "Discord keeps a copy."
+                "Enter sends and closes. Only paired members in the exact active "
+                "voice channel may see or replay it."
             ),
             bg=self.theme.panel,
             fg=self.theme.muted,
@@ -9340,9 +9340,8 @@ class CompanionWindow:
         attempt_id = self.quick_chat_attempt_sequence
         self.quick_chat_in_flight[attempt_id] = (request_id, text)
         # Gone before the relay is even asked. The member is mid-fight and
-        # the round trip includes a Discord post; his words: "there's a
-        # sending delay but the game is still happening." The draft stays so
-        # a failure can hand the line back.
+        # the one-shot relay round trip can still take time. The draft stays
+        # so a failure can hand the line back.
         self.destroy_speak_box(clear_draft=False)
         self.deliver_spoken_text(text, request_id, attempt_id)
 

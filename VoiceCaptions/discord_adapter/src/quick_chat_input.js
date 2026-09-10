@@ -74,8 +74,9 @@ export function readQuickChatLines({ input, queue, log = () => {} }) {
   // used to close stdin, which is the adapter's shutdown channel: one
   // malformed typed message ended the voice session and everybody's
   // captions with it. A newline-delimited pipe does not desynchronise on
-  // a bad line, and nothing unvalidated can reach Discord either way, so
-  // there was never anything for that shutdown to protect.
+  // a bad line. Invalid input cannot enter the compatibility queue, whose
+  // terminal has no Discord sink, so there was nothing for that shutdown to
+  // protect.
   input.on("line", (line) => {
     let command;
     try {
