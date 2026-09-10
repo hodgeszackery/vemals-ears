@@ -10,4 +10,4 @@ through two releases while the real one moved to 0.2.2, because the
 release tooling only ever updated one of them. Do not add a third.
 """
 
-CLIENT_VERSION = "0.5.10"
+CLIENT_VERSION = "0.5.11"
