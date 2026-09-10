@@ -44,6 +44,25 @@ class LicenseDeclarationTests(unittest.TestCase):
         self.assertIn("under the terms of the GNU General Public License", grant)
         self.assertNotIn("MIT License", grant)
 
+    def test_embedded_aom_and_libyuv_notices_point_to_bundled_terms(self):
+        lock = json.loads(
+            (ROOT / "Installer/runtime-sources.lock.json").read_text(encoding="ascii")
+        )
+        artifacts = {item["name"]: item for item in lock["artifacts"]}
+        notice = (ROOT / "Installer/THIRD-PARTY-NOTICES.txt").read_text(encoding="ascii")
+        expected = {
+            "pillow-aom": "AOMedia libaom 3.14.1",
+            "pillow-libyuv": "libyuv commit 644251f252a84bf8ce91ff0aca86a9b16b069ab8",
+        }
+        for name, label in expected.items():
+            with self.subTest(component=name):
+                item = artifacts[name]
+                self.assertIn(label, notice)
+                self.assertIn("runtime/Source/" + item["filename"], notice)
+                self.assertEqual(2, len(item["license_files"]))
+                for path in item["license_files"]:
+                    self.assertIn(path, notice)
+
 
     def test_the_discord_adapter_manifest_declares_it(self):
         manifest = json.loads(

@@ -30,12 +30,31 @@ param(
 $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
 
+function Get-Sha256 {
+    param([Parameter(Mandatory = $true)] [string]$LiteralPath)
+
+    $stream = [System.IO.File]::OpenRead([System.IO.Path]::GetFullPath($LiteralPath))
+    try {
+        $algorithm = [System.Security.Cryptography.SHA256]::Create()
+        try {
+            $digest = $algorithm.ComputeHash($stream)
+        }
+        finally {
+            $algorithm.Dispose()
+        }
+    }
+    finally {
+        $stream.Dispose()
+    }
+    return [System.BitConverter]::ToString($digest).Replace("-", "").ToLowerInvariant()
+}
+
 $installerRoot = $PSScriptRoot
 $repoRoot = (Resolve-Path -LiteralPath (Join-Path $installerRoot "..")).Path
 $lockPath = Join-Path $installerRoot "runtime-lock.json"
 $lock = Get-Content -Raw -LiteralPath $lockPath | ConvertFrom-Json
 $runtimeSourcesLockPath = Join-Path $installerRoot "runtime-sources.lock.json"
-$runtimeSourcesLockHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $runtimeSourcesLockPath).Hash
+$runtimeSourcesLockHash = Get-Sha256 -LiteralPath $runtimeSourcesLockPath
 
 # Argument validation comes before any tool is probed: a wrong flag
 # combination should fail in milliseconds, and be testable on a machine
@@ -143,13 +162,13 @@ function Get-LockedDownload {
     $target = Join-Path $cacheRoot $FileName
     $needsDownload = $true
     if (Test-Path -LiteralPath $target -PathType Leaf) {
-        $existing = (Get-FileHash -Algorithm SHA256 -LiteralPath $target).Hash.ToLowerInvariant()
+        $existing = Get-Sha256 -LiteralPath $target
         $needsDownload = $existing -cne $Sha256
     }
     if ($needsDownload) {
         Invoke-WebRequest -Uri $Url -OutFile $target
     }
-    $actual = (Get-FileHash -Algorithm SHA256 -LiteralPath $target).Hash.ToLowerInvariant()
+    $actual = Get-Sha256 -LiteralPath $target
     if ($actual -cne $Sha256) {
         throw "Hash verification failed for $FileName."
     }
@@ -297,8 +316,8 @@ $snapshotLock = Get-Content -Raw -LiteralPath (Join-Path $installerBuildRoot "ru
 if (($lock | ConvertTo-Json -Depth 20 -Compress) -cne ($snapshotLock | ConvertTo-Json -Depth 20 -Compress)) {
     throw "The runtime lock changed while preparing the corresponding source."
 }
-$snapshotSourcesLockHash = (Get-FileHash -Algorithm SHA256 -LiteralPath `
-    (Join-Path $installerBuildRoot "runtime-sources.lock.json")).Hash
+$snapshotSourcesLockHash = Get-Sha256 -LiteralPath `
+    (Join-Path $installerBuildRoot "runtime-sources.lock.json")
 if ($runtimeSourcesLockHash -cne $snapshotSourcesLockHash) {
     throw "The upstream source lock changed while preparing the corresponding source."
 }
@@ -414,7 +433,7 @@ if ($Signed) {
     }
     & $verifyScript -FilePath $launcherPath @verifyArguments
     & $verifyScript -FilePath $installerPath @verifyArguments
-    $digest = (Get-FileHash -Algorithm SHA256 -LiteralPath $installerPath).Hash.ToLowerInvariant()
+    $digest = Get-Sha256 -LiteralPath $installerPath
     $checksumPath = $installerPath + ".sha256"
     [System.IO.File]::WriteAllText(
         $checksumPath,
@@ -431,7 +450,7 @@ elseif ($AllowUnsigned) {
     # A checksum for an unsigned build is not a signature and cannot
     # prove who made it. It proves the file did not change between here
     # and the relay, which is the one thing it can honestly prove.
-    $digest = (Get-FileHash -Algorithm SHA256 -LiteralPath $installerPath).Hash.ToLowerInvariant()
+    $digest = Get-Sha256 -LiteralPath $installerPath
     $checksumPath = $installerPath + ".sha256"
     [System.IO.File]::WriteAllText(
         $checksumPath,

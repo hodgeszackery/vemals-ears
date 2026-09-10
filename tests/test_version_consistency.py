@@ -16,6 +16,7 @@ The second half is the one that survives someone adding a fifth addon
 without reading the release notes.
 """
 
+import json
 import re
 import subprocess
 import unittest
@@ -72,6 +73,15 @@ class VersionConsistencyTests(unittest.TestCase):
                     relative + " says " + found.group(1) + " but version.py "
                     "says " + expected,
                 )
+
+    def test_discord_adapter_lockfile_metadata_agrees_with_the_release(self):
+        expected = shipped_version()
+        adapter = ROOT / "VoiceCaptions" / "discord_adapter"
+        package = json.loads((adapter / "package.json").read_text(encoding="utf-8"))
+        lock = json.loads((adapter / "package-lock.json").read_text(encoding="utf-8"))
+        self.assertEqual(expected, package["version"])
+        self.assertEqual(expected, lock["version"])
+        self.assertEqual(expected, lock["packages"][""]["version"])
 
 
 

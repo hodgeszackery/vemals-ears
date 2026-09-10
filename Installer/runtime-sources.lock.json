@@ -37,10 +37,14 @@
     {
       "name": "pillow-aom",
       "version": "3.14.1",
-      "filename": "aom-3.14.1.tar.gz",
-      "url": "https://aomedia.googlesource.com/aom/+archive/refs/tags/v3.14.1.tar.gz",
-      "sha256": "6e52af5ba6884a9879b48c9f40ad09d87f366e93d6d98073a5b6c4c133ed9b48",
-      "provenance": "libavif-1.4.2/cmake/Modules/LocalAom.cmake"
+      "filename": "libaom-3.14.1.tar.gz",
+      "url": "https://storage.googleapis.com/aom-releases/libaom-3.14.1.tar.gz?generation=1779477091458380",
+      "sha256": "44bf90dbd23e734d50e70a8c41c285193922938bd0d3bc2ee56764d181d55ef5",
+      "provenance": "Official AOM v3.14.1 release asset for tag commit 03087864cf4bea6abb0d28f95cf7843511413d8f, selected by libavif-1.4.2/cmake/Modules/LocalAom.cmake; release announcement https://aomedia.org/blog%20posts/AOMedia-Announces-Availability-of-Libaom-v3_14/; detached signature https://storage.googleapis.com/aom-releases/libaom-3.14.1.tar.gz.asc?generation=1779477091374696; signer fingerprint B002F08B74A148DAA01F7123A48E86DB0B830498",
+      "license_files": [
+        "libaom-3.14.1/LICENSE",
+        "libaom-3.14.1/PATENTS"
+      ]
     },
     {
       "name": "cpython-bzip2",
@@ -133,10 +137,16 @@
     {
       "name": "pillow-libyuv",
       "version": "644251f252a84bf8ce91ff0aca86a9b16b069ab8",
-      "filename": "libyuv-644251f.tar.gz",
+      "filename": "libyuv-644251f.tar",
       "url": "https://chromium.googlesource.com/libyuv/libyuv/+archive/644251f252a84bf8ce91ff0aca86a9b16b069ab8.tar.gz",
-      "sha256": "f28b362a82ffbdb8cfc4e974e02caefe9c546bac165ac8e89249492a84c039a6",
-      "provenance": "libavif-1.4.2/cmake/Modules/LocalLibyuv.cmake"
+      "sha256": "3938b5524e30ff82b953ee69b910726a97c4a0468084defe4107399ef5908ae8",
+      "provenance": "Exact libyuv commit selected by libavif-1.4.2/cmake/Modules/LocalLibyuv.cmake; Git tree ba22b636166dc16532fcc9d5a9524117432d1782",
+      "canonicalization": "gitiles-ustar-v1",
+      "git_tree_sha1": "ba22b636166dc16532fcc9d5a9524117432d1782",
+      "license_files": [
+        "LICENSE",
+        "PATENTS"
+      ]
     },
     {
       "name": "cpython-macholib",
@@ -305,8 +315,9 @@
   "build_notes": [
     "CPython: extract Python-3.14.7.tar.xz. PCbuild/readme.txt, PCbuild/build.bat and PCbuild/get_externals.bat are the Windows build recipe. Its PCbuild preparation scripts cover OpenSSL/libffi/Tcl/Tk. The accompanying official SPDX identifies the exact bundled source-dependency snapshots. Extract those cpython-source-deps archives into the externals directories named by PCbuild/python.props and PCbuild/tcltk.props. Unmodified MSVC, Windows SDK, NASM and other general-purpose build tools are separate prerequisites.",
     "Pillow: the PyPI sdist is supplied unchanged. The release Git archive Pillow-12.3.0-build.tar.gz adds .github/dependencies.json, .github/workflows/wheels.yml, winbuild/build_prepare.py and all recipe patches missing from the sdist. Read winbuild/README.md and build.rst. The Windows wheel workflow calls build_prepare.py --no-imagequant --architecture=AMD64, then build_dep_all.cmd and cibuildwheel; consult the supplied workflow and pyproject.toml for options.",
-    "Pillow dependencies: place supplied release archives in winbuild/depends under the filenames required by build_prepare.py (rename only the archive file where this manifest prefixes pillow-). All original archive bytes and notices remain unchanged. The WebP source comes from the official Google release bucket because the historical downloads.webmproject.org HTTPS hostname failed certificate validation.",
-    "libavif: its supplied cmake/Modules/LocalAom.cmake, LocalDav1d.cmake, LocalLibyuv.cmake and LocalLibsharpyuv.cmake pin aom v3.14.1, dav1d 1.5.3, libyuv 644251f252a84bf8ce91ff0aca86a9b16b069ab8 and WebP v1.6.0. Extract their supplied sources to libavif ext/aom, ext/dav1d, ext/libyuv and ext/libwebp to use the documented local-source paths. Gitiles archives for aom/libyuv have no enclosing top directory.",
+    "Pillow dependencies: place supplied release archives in winbuild/depends under the filenames required by build_prepare.py (rename only the archive file where this manifest prefixes pillow-). Supplied release-archive bytes and notices remain unchanged. The libyuv Gitiles snapshot is the documented exception: its request-varying container metadata is deterministically repacked while file bytes, paths, executable modes, LICENSE and PATENTS remain unchanged. The WebP source comes from the official Google release bucket because the historical downloads.webmproject.org HTTPS hostname failed certificate validation.",
+    "libavif: its supplied cmake/Modules/LocalAom.cmake, LocalDav1d.cmake, LocalLibyuv.cmake and LocalLibsharpyuv.cmake pin aom v3.14.1, dav1d 1.5.3, libyuv 644251f252a84bf8ce91ff0aca86a9b16b069ab8 and WebP v1.6.0. Extract libaom-3.14.1 from its official release archive as libavif ext/aom, and extract the other supplied sources to ext/dav1d, ext/libyuv and ext/libwebp, to use the documented local-source paths. The deterministic libyuv tar has no enclosing top directory; its file contents and executable modes match the pinned Git tree.",
+    "AOM authenticity: the official detached signature at https://storage.googleapis.com/aom-releases/libaom-3.14.1.tar.gz.asc?generation=1779477091374696 verifies the release archive with signer fingerprint B002F08B74A148DAA01F7123A48E86DB0B830498. The distributed release archive is also pinned by its immutable GCS generation and SHA256.",
     "pywin32: pywin32-312.tar.gz is the verified b312 release commit 2a277cb5552756c2b4d42b524dc36d25e0bb6354. Read README.md and setup.py; build with the matching Python headers/import libraries and Visual Studio Windows SDK. This source includes its native extensions and build workflow.",
     "websockets: extract the unchanged PyPI websockets-13.1.tar.gz and follow its pyproject.toml and build documentation. The distributed runtime uses the pure-Python wheel.",
     "Rebuilding modified dependencies: build new artifacts from these editable sources, update Installer/runtime-lock.json with your artifact URLs/checksums, then update Installer/runtime-sources.lock.json to bind the matching source inputs. The source helper does not require Git or a private repository account. Its --offline option reuses a verified cache. No signing certificate is required for an unsigned modified VE build."

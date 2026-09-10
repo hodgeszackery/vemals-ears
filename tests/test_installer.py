@@ -1,3 +1,4 @@
+import hashlib
 import importlib.util
 import json
 import os
@@ -886,7 +887,7 @@ class InstallerPolicyTests(unittest.TestCase):
         self.assertIn("TimeStamperCertificate", verify)
         self.assertIn("-cne $ExpectedPublisher", verify)
         verify_position = build.index("verify_signature.ps1")
-        checksum_position = build.index("Get-FileHash", verify_position)
+        checksum_position = build.index("Get-Sha256", verify_position)
         self.assertGreater(checksum_position, verify_position)
         self.assertIn("PROOF BUILD signed by an untrusted certificate", build)
         self.assertIn("not an official release", build)
@@ -991,6 +992,37 @@ class SigningProviderTests(unittest.TestCase):
             build.index("-AllowUntrustedSigner only means something"),
             build.index("Inno Setup 7.1.0 is required"),
         )
+
+    def test_installer_hashing_is_independent_of_powershell_utility_cmdlets(self):
+        build = (INSTALLER / "build_installer.ps1").read_text(encoding="utf-8")
+        self.assertNotIn("Get-FileHash", build)
+        function = re.search(r"(?ms)^function Get-Sha256 \{.*?^\}\n", build)
+        self.assertIsNotNone(function)
+        with tempfile.TemporaryDirectory() as folder:
+            folder = Path(folder)
+            payload = folder / "payload.bin"
+            payload.write_bytes(b"host independent sha256 fixture\n")
+            probe = folder / "hash-probe.ps1"
+            probe.write_text(
+                function.group(0) + "Get-Sha256 -LiteralPath $args[0]\n",
+                encoding="ascii",
+            )
+            expected = hashlib.sha256(payload.read_bytes()).hexdigest()
+            hosts = dict.fromkeys(
+                found for name in ("powershell", "pwsh")
+                if (found := shutil.which(name)) is not None
+            )
+            if not hosts:
+                self.skipTest("PowerShell is unavailable")
+            for host in hosts:
+                with self.subTest(host=host):
+                    completed = subprocess.run(
+                        [host, "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
+                         "-File", str(probe), str(payload)],
+                        capture_output=True, text=True, timeout=30,
+                    )
+                    self.assertEqual(0, completed.returncode, completed.stderr)
+                    self.assertEqual(expected, completed.stdout.strip())
 
     # -------------------------------------------------------- behaviour
 
