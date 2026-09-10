@@ -1,9 +1,12 @@
 """Small, strict wire contract shared by the Guild Hub server and client.
 
 Caption and typed quick-chat text are allowed on the wire. The relay keeps
-them in bounded memory and never writes them to its database or logs; a
-confirmed quick-chat destination is Discord, where the guild's normal text
-retention applies. Tokens and raw audio are never valid caption events.
+them in bounded memory and never writes them to its database or logs.
+Quick-chat acceptance assigns a cursor without requiring a session, publisher,
+or compatibility worker; it does not guarantee viewer delivery. Visibility
+and replay are limited to the relay's current fresh, publisher-owned voice
+audience. The relay sends no typed body to Discord or the compatibility
+worker. Tokens and raw audio are never valid caption events.
 """
 
 from __future__ import annotations
@@ -455,9 +458,11 @@ def parse_quick_chat_profile(payload: Any) -> QuickChatProfile:
 
 @dataclass(frozen=True, repr=False)
 class QuickChatCommand:
-    """A relay-authorized Discord delivery command.
+    """A legacy compatibility command retained for strict parsing.
 
-    Text is deliberately excluded from repr because commands remain
+    The current relay does not emit this command. The bundled adapter can
+    validate and acknowledge it, but has no Discord output sink. Text is
+    deliberately excluded from repr because compatibility commands remain
     memory-only and must never become diagnostic output.
     """
 

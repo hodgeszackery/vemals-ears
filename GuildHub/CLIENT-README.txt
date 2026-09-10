@@ -33,6 +33,19 @@ Join the exact voice channel where the caption session is active. Captions
 stop and clear when you leave. Speech captured before you joined is not
 delivered later, and captions from an absence are not replayed on rejoining.
 
+MESSAGE YOUR GROUP
+
+Message Group submits one typed line to the guild relay. An accepted response
+means the relay validated the request and assigned a cursor; it does not
+guarantee that a viewer received the line. Only paired devices in the relay's
+fresh, publisher-owned audience for the exact active voice channel may see or
+replay it. Without that current audience, the relay still accepts the line but
+delivers its body to nobody.
+
+Quick-chat acceptance does not depend on an active caption session, publisher,
+or compatibility worker. The typed body is sent to neither Discord nor the
+compatibility worker and is never written to a ledger or diagnostic log.
+
 MOVE THE CAPTIONS
 
 Choose Move in Vemal's Ears. Drag the sample rows, then choose Save. The live
@@ -56,6 +69,7 @@ PRIVACY
 - The guild's Discord bot token never comes to your computer.
 - Your revocable device credential stays in Windows Credential Manager.
 - Caption text stays in memory and is not written to an addon or log file.
+- Typed quick-chat bodies are never posted to Discord.
 - Each Discord speaker must consent before their own audio is processed.
 - The local mute picker keeps only opaque speaker identifiers and display
   names, never audio or transcript text.

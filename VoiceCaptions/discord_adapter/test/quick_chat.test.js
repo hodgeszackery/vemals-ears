@@ -147,8 +147,8 @@ test("quick-chat text bounds count Unicode code points like Python", () => {
 
 test("typed chat is never mirrored into Discord", async () => {
   // Shino, 2026-09-06: no outbound VE messages except the consent and
-  // association dialogues. The relay already published the line to the
-  // members; the worker only has to say it is done with it.
+  // association dialogues. This retained compatibility terminal validates
+  // and acknowledges an old command shape without having a Discord sink.
   const posts = [];
   const runtime = runtimeWithSession(async (payload) => posts.push(payload));
   const status = await runtime.postQuickChat({

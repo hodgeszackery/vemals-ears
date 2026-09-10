@@ -363,9 +363,8 @@ function consentModal(nonce, { state, remembered }) {
     );
 }
 
-// Names render, nobody is notified. Quick chat already posted under this
-// exact shape; the control notices now share it, which is what stops a
-// re-join from buzzing everyone's phone.
+// Names render, nobody is notified. Every allowed control notice uses this
+// exact shape, which is what stops a re-join from buzzing everyone's phone.
 const SILENT_MENTIONS = Object.freeze({
   parse: [],
   users: [],
@@ -467,10 +466,10 @@ export class DiscordAdapterRuntime {
     // here is authoritative: it is what someone has picked so far, and it
     // is written to the session manager only once it is complete.
     this.mappingDrafts = new Map();
-    // A delivered request stays here briefly so a lost relay acknowledgement
-    // can be retried without posting the same line to Discord twice. The map
-    // is deliberately bounded and memory-only; message bodies never reach a
-    // ledger or diagnostic event.
+    // A terminal result stays here briefly so an older relay can retry a lost
+    // acknowledgement without executing the compatibility command twice. The
+    // map is deliberately bounded and memory-only; message bodies never reach
+    // a Discord sink, ledger, or diagnostic event.
     this.quickChatDeliveries = new Map();
     this.discordHealthy = false;
     this.gatewayFailed = false;
@@ -714,12 +713,10 @@ export class DiscordAdapterRuntime {
     }
 
     // Never a rejected promise, and never a rejected promise in the cache.
-    // #postQuickChat guards the Discord call itself, but the lookups either
-    // side of it are not inside that try. A throw there rejected this
-    // promise, which reached the queue as an error - and the queue's error
-    // path used to shut the adapter down. Worse, the rejection was stored:
-    // the relay retries the same request ID three times, so every retry
-    // awaited the same rejected promise and threw again.
+    // The inert terminal below cannot throw today, but validation and session
+    // lookups around it can. A throw used to reach the queue as an error, and
+    // the queue's error path shut the adapter down. Worse, the rejection was
+    // stored, so every retry from an older relay awaited it and threw again.
     const delivery = this.#postQuickChat(bound).catch(() => "delivery_failed");
     this.quickChatDeliveries.set(bound.requestId, {
       signature,
@@ -731,9 +728,9 @@ export class DiscordAdapterRuntime {
     this.#pruneQuickChatDeliveries();
     const status = await delivery;
     if (status !== "delivered") {
-      // A missing session or transient Discord failure is safe to retry with
-      // the same request ID. Successful posts remain cached so an ack-loss
-      // retry cannot duplicate them.
+      // A missing session or validation failure is safe for an older relay to
+      // retry with the same request ID. Successful terminal outcomes remain
+      // cached so an acknowledgement-loss retry stays idempotent.
       this.quickChatDeliveries.delete(bound.requestId);
     }
     return status;
@@ -779,12 +776,10 @@ export class DiscordAdapterRuntime {
 
   async #postQuickChat(command) {
     // Shino, 2026-09-06: no outbound VE messages to Discord except the
-    // consent and association dialogues, so a typed line is NOT mirrored
-    // into the control channel. Members already have it: the relay
-    // published the caption before asking for this copy. "delivered" is
-    // the shared protocol's only "done, do not retry" answer - it has no
-    // "suppressed" status, and adding one means a relay deploy - so it is
-    // what the worker reports for a line it has finished with.
+    // consent and association dialogues. Current relays never call this
+    // compatibility terminal. An older relay may still send this strict
+    // command shape, so acknowledge it with the protocol's existing terminal
+    // status while discarding the body. There is no Discord output sink.
     void command;
     return "delivered";
   }

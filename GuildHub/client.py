@@ -479,13 +479,17 @@ async def send_quick_chat(
     connector: Callable[..., Any] = connect,
     timeout: float = DEFAULT_AUTH_TIMEOUT_SECONDS,
 ) -> QuickChatAcknowledgement:
-    """Post one typed line to Discord and the guild caption stream.
+    """Submit one typed line to the guild relay.
 
     The one-shot connection keeps the long-running caption receiver
     receive-only and avoids replacing its authenticated session. The request
-    ID makes a retry safe when delivery succeeded but its acknowledgement was
-    lost. Success is returned only after the Discord worker confirms its post
-    and the relay publishes the matching caption.
+    ID makes a retry safe when the relay accepted the line but its
+    acknowledgement was lost. Success means the relay validated the request
+    and assigned a cursor; it does not guarantee that a viewer received it.
+    Visibility and replay are limited to paired devices in the relay's current
+    fresh, publisher-owned voice-channel audience. Acceptance does not depend
+    on an active session, publisher, or compatibility worker, and the typed
+    body is sent to neither Discord nor that worker.
     """
     _require_websockets()
     if timeout <= 0 or timeout > 60:

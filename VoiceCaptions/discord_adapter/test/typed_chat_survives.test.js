@@ -2,11 +2,10 @@
 //
 // Shino, 2026-09-05: "there is a bug where when a message is sent via the
 // 'Message Group' button VE disconnects from discord after showing the
-// text." The caption is published by the relay, which is why the text
-// appeared; the Discord copy goes down a private pipe into this adapter,
-// and every failure on that pipe closed stdin. stdin is the adapter's
-// shutdown channel. So one typed message that went wrong made the bot
-// leave the voice channel and ended captions for the whole room.
+// text." At that time the relay sent a compatibility command down a private
+// pipe into this adapter, and every failure on that pipe closed stdin. stdin
+// is the adapter's shutdown channel. So one typed message that went wrong
+// made the bot leave the voice channel and ended captions for the whole room.
 //
 // His rule for the other direction, 2026-09-04: "ability to type when
 // voice goes down is a feature not a bug." These pin the converse, which

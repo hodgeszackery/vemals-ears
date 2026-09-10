@@ -88,18 +88,21 @@ the session ledger) instead of posting a fresh prompt.
 ## Quick chat boundary
 
 The paired member companion can submit a deliberate typed line to the guild
-relay. The relay publishes it to the members immediately, then sends the
-command over the worker's private authenticated connection so the worker
-can say it is done with it. The adapter does not mirror the line into
-Discord: it validates the bounded command, keeps the request bound to the
-session that accepted it, and reports `delivered` - the shared protocol's
-only "finished, do not retry" status - without sending a message. No
-Discord TTS, no voice transmission, no text message.
+relay. The relay validates it and assigns a cursor without requiring an active
+caption session, publisher, or compatibility worker. That acknowledgement does
+not guarantee viewer delivery. Only paired devices in the relay's current
+fresh, publisher-owned audience for the exact active voice channel may see or
+replay the line. With no such audience, the cursor advances but the body is
+delivered to nobody.
 
-Accepted lines use a bounded eight-item serial queue, expire after seven
-seconds if they have not started, and stay bound to the exact raid session
-that accepted them. No typed body is written to the consent or
-character-mapping ledgers or placed in a diagnostic event.
+The current relay sends no typed body to Discord or to the compatibility
+worker. The adapter's legacy quick-chat input remains as an inert compatibility
+terminal: if an older relay sends a command, the adapter validates it, uses a
+bounded eight-item serial queue, and returns a terminal status without any
+Discord output sink. Current relay versions send no such command and ignore
+stale compatibility receipts. No typed body is written to the consent or
+character-mapping ledgers or placed in a diagnostic event. No Discord TTS,
+voice transmission, or text message is produced.
 
 ## Audio boundary
 
