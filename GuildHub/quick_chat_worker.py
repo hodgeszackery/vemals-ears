@@ -241,9 +241,9 @@ class RemoteQuickChatWorker:
                     raise PublisherError("Invalid quick-chat delivery result.")
                 connection.send(encode_message(result))
             except Exception:
-                # The socket can fail after Node has already delivered the
-                # message. Preserve the redacted receipt for the replacement
-                # connection; server and Discord nonce idempotency make an
+                # The socket can fail after the compatibility terminal has
+                # completed the command. Preserve the redacted receipt for the
+                # replacement connection; request-id result handling makes an
                 # uncertain resend safe.
                 try:
                     self._results.put_nowait(result)
@@ -268,8 +268,9 @@ class RemoteQuickChatWorker:
                 if previous_fingerprint != fingerprint:
                     replay_status = "delivery_failed"
                 elif previous_status is None:
-                    # The original is queued or already with Discord. Its one
-                    # eventual result will answer every relay resend.
+                    # The original is queued or already being handled by the
+                    # compatibility terminal. Its one eventual result will
+                    # answer every relay resend.
                     return
                 else:
                     replay_status = previous_status
