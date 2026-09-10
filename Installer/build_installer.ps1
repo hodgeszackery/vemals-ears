@@ -12,6 +12,7 @@ param(
     [switch]$AllowUnsigned,
     [string]$SigningMetadataPath = "",
     [string]$ExpectedPublisher = "",
+    [string[]]$AdditionalUpdatePublisher = @(),
     # Which signer holds the key - see sign_file.ps1. "artifact" is Azure
     # Artifact Signing; "store" is any certificate in the current user's
     # Windows store, which is how hardware tokens and cloud HSMs present.
@@ -54,10 +55,18 @@ if ($AllowUntrustedSigner -and -not $Signed) {
 if ($AllowUntrustedSigner -and $SigningProvider -ne "store") {
     throw "A proof build signs from the certificate store; -AllowUntrustedSigner requires -SigningProvider store."
 }
+if ($AdditionalUpdatePublisher.Count -gt 0 -and (-not $Signed -or $AllowUntrustedSigner)) {
+    throw "Additional update publishers are allowed only in an official signed build."
+}
 
 if ($Signed) {
     if ([string]::IsNullOrWhiteSpace($ExpectedPublisher)) {
         throw "The exact validated publisher subject is required for signed builds."
+    }
+    if ($ExpectedPublisher -cne $ExpectedPublisher.Trim() -or
+        $ExpectedPublisher.Length -gt 320 -or
+        $ExpectedPublisher -match '[\x00-\x1F\x7F]') {
+        throw "ExpectedPublisher must be an exact certificate subject accepted by the updater."
     }
     switch ($SigningProvider) {
         "artifact" {
@@ -71,6 +80,19 @@ if ($Signed) {
                 throw "A 40-hex-digit certificate thumbprint is required for -SigningProvider store."
             }
         }
+    }
+    $seenUpdatePublishers = @($ExpectedPublisher)
+    foreach ($publisher in $AdditionalUpdatePublisher) {
+        if ([string]::IsNullOrWhiteSpace($publisher) -or
+            $publisher -cne $publisher.Trim() -or
+            $publisher.Length -gt 320 -or
+            $publisher -match '[\x00-\x1F\x7F]') {
+            throw "Additional update publishers must be exact non-blank certificate subjects."
+        }
+        if ($seenUpdatePublishers -ccontains $publisher) {
+            throw "The update publisher allowlist must not contain duplicates."
+        }
+        $seenUpdatePublishers += $publisher
     }
 }
 
@@ -232,9 +254,40 @@ $stageArguments = @(
 if ($Signed) {
     $stageArguments += "--require-clean"
 }
+if ($Signed -and -not $AllowUntrustedSigner) {
+    # The same exact subject is verified against the finished installer below.
+    # A list in the installed manifest permits an old trusted release to bridge
+    # a future publisher rotation. Unsigned and proof builds grant no trust.
+    $stageArguments += @("--trusted-publisher", $ExpectedPublisher)
+    foreach ($publisher in $AdditionalUpdatePublisher) {
+        $stageArguments += @("--trusted-publisher", $publisher)
+    }
+}
 & $privatePython -E -s -B @stageArguments
 if ($LASTEXITCODE -ne 0) {
     throw "The generic application payload could not be staged."
+}
+$stagedManifestPath = Join-Path $stageRoot "payload-manifest.json"
+$stagedManifest = Get-Content -Raw -LiteralPath $stagedManifestPath | ConvertFrom-Json
+$updateTrustProperty = $stagedManifest.PSObject.Properties["update_trust"]
+if ($Signed -and -not $AllowUntrustedSigner) {
+    if ($null -eq $updateTrustProperty -or $updateTrustProperty.Value.schema -ne 1) {
+        throw "The official signed payload is missing its update publisher trust."
+    }
+    $expectedUpdatePublishers = @($ExpectedPublisher) + @($AdditionalUpdatePublisher)
+    $actualUpdatePublishers = @($updateTrustProperty.Value.authenticode_publishers)
+    if ($actualUpdatePublishers.Count -ne $expectedUpdatePublishers.Count) {
+        throw "The staged update publisher allowlist differs from the signed build request."
+    }
+    for ($index = 0; $index -lt $expectedUpdatePublishers.Count; $index++) {
+        if ([string]($actualUpdatePublishers[$index]) -cne
+            [string]($expectedUpdatePublishers[$index])) {
+            throw "The staged update publisher allowlist differs from the signed build request."
+        }
+    }
+}
+elseif ($null -ne $updateTrustProperty) {
+    throw "An unsigned or proof payload must not authorize automatic installer execution."
 }
 $installerBuildRoot = Join-Path $stageRoot "source\Installer"
 $sourceArchivePath = Join-Path $stageRoot "app\Source\vemals-ears-source.zip"

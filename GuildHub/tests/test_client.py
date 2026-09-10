@@ -1887,6 +1887,11 @@ class UpdateOfferTests(unittest.TestCase):
 
     def test_the_version_already_running_is_not_offered(self):
         self.assertIsNone(client_module.parse_update_offer(self.offer(), "0.2.0"))
+        self.assertIsNone(
+            client_module.parse_update_offer(
+                self.offer(version="0.2.0.0"), "0.2.0"
+            )
+        )
 
     def test_an_older_version_is_never_offered(self):
         """A rollback must not hand every member a downgrade.
@@ -1914,14 +1919,32 @@ class UpdateOfferTests(unittest.TestCase):
             client_module.parse_update_offer(self.offer(version="0.9.0"), "0.10.0")
         )
 
-    def test_versions_that_cannot_be_ranked_defer_to_the_relay(self):
-        """Refusing everything unrankable would strand a non-numeric scheme."""
-        self.assertIsNotNone(
+    def test_versions_that_cannot_be_ranked_are_refused(self):
+        """Automatic downloads never let the relay invent version ordering."""
+        self.assertIsNone(
             client_module.parse_update_offer(self.offer(version="2026.09-beta"), "0.2.0")
         )
-        self.assertIsNotNone(
+        self.assertIsNone(
             client_module.parse_update_offer(self.offer(), "not-a-version")
         )
+        for version in ("1", "0.2", "0.2.0.1.2", "0.2.65536"):
+            with self.subTest(version=version):
+                self.assertIsNone(
+                    client_module.parse_update_offer(
+                        self.offer(version=version), "0.1.0"
+                    )
+                )
+
+    def test_update_url_rejects_userinfo_fragments_and_unbounded_text(self):
+        for url in (
+            "https://user:secret@ears.example.invalid/download",
+            "https://ears.example.invalid/download#fragment",
+            "https://ears.example.invalid/" + "x" * 2048,
+        ):
+            with self.subTest(url=url[:80]):
+                self.assertIsNone(
+                    client_module.parse_update_offer(self.offer(url=url), "0.1.0")
+                )
 
     def test_no_offer_at_all_is_fine(self):
         self.assertIsNone(
@@ -2039,6 +2062,30 @@ class VerifiedDownloadTests(unittest.TestCase):
                 self.offer(), target, fetch=self.fetcher(self.payload[:-10])
             )
         self.assertFalse(target.exists())
+
+    def test_a_redirect_that_leaves_https_is_refused(self):
+        from pathlib import Path
+        target = Path(self.temp.name) / "Setup.exe"
+
+        class Response:
+            def read(self, _size):
+                return b""
+
+            def geturl(self):
+                return "http://downloads.example.invalid/Setup.exe"
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+        with self.assertRaises(client_module.GuildHubClientError):
+            client_module.download_verified_update(
+                self.offer(), target, fetch=lambda _request, timeout=None: Response()
+            )
+        self.assertFalse(target.exists())
+        self.assertFalse(target.with_name("Setup.exe.part").exists())
 
 
 class UpdateNoticeTests(unittest.TestCase):

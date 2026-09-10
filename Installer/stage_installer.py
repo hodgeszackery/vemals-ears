@@ -16,6 +16,9 @@ sys.path.insert(0, str(ROOT))
 import source_distribution
 MEMBER_EDITION_PATH = "vemals-ears-member.json"
 MEMBER_EDITION_DOCUMENT = {"edition": "member", "schema": 1}
+UPDATE_TRUST_SCHEMA = 1
+MAX_UPDATE_PUBLISHERS = 4
+MAX_PUBLISHER_LENGTH = 320
 
 
 class StageError(RuntimeError):
@@ -125,12 +128,38 @@ def _write_icon(source_root: Path, target: Path) -> None:
     shutil.copyfile(artwork, target)
 
 
+def _update_trust(publishers: tuple[str, ...]) -> dict[str, object]:
+    """Build the exact publisher allowlist that can authorize auto-execution."""
+    if not 1 <= len(publishers) <= MAX_UPDATE_PUBLISHERS:
+        raise StageError("update trust requires between one and four publishers")
+    trusted: list[str] = []
+    for publisher in publishers:
+        if (
+            not isinstance(publisher, str)
+            or not publisher
+            or publisher != publisher.strip()
+            or len(publisher) > MAX_PUBLISHER_LENGTH
+            or any(ord(character) < 32 or ord(character) == 127 for character in publisher)
+        ):
+            raise StageError("trusted update publishers must be exact non-blank certificate subjects")
+        if publisher in trusted:
+            raise StageError("trusted update publishers must not contain duplicates")
+        trusted.append(publisher)
+    if not trusted:
+        raise StageError("update trust requires at least one publisher")
+    return {
+        "schema": UPDATE_TRUST_SCHEMA,
+        "authenticode_publishers": trusted,
+    }
+
+
 def stage_payload(
     source_root: Path,
     stage_root: Path,
     version: str,
     *,
     require_clean: bool = False,
+    trusted_publishers: tuple[str, ...] = (),
 ) -> dict[str, object]:
     source_root = source_root.resolve(strict=True)
     if require_clean:
@@ -185,6 +214,12 @@ def stage_payload(
         "guild_configuration_embedded": False,
         "app_files": records,
     }
+    if trusted_publishers:
+        # This metadata is deliberately generated rather than copied from
+        # source. Only the official signed build passes the publisher that
+        # its post-build Authenticode check requires. Source, test, proof,
+        # and unsigned builds therefore grant no unattended execution trust.
+        manifest["update_trust"] = _update_trust(trusted_publishers)
     (stage_root / "payload-manifest.json").write_text(
         json.dumps(manifest, indent=2, ensure_ascii=True) + "\n",
         encoding="ascii",
@@ -198,6 +233,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--stage", type=Path, required=True)
     parser.add_argument("--version", required=True)
     parser.add_argument("--require-clean", action="store_true")
+    parser.add_argument("--trusted-publisher", action="append", default=[])
     arguments = parser.parse_args(argv)
     try:
         manifest = stage_payload(
@@ -205,6 +241,7 @@ def main(argv: list[str] | None = None) -> int:
             arguments.stage,
             arguments.version,
             require_clean=arguments.require_clean,
+            trusted_publishers=tuple(arguments.trusted_publisher),
         )
     except (OSError, StageError, ValueError, source_distribution.SourceError) as error:
         print("Installer staging failed: " + str(error), file=sys.stderr)

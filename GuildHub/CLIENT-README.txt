@@ -22,6 +22,23 @@ The same generic companion is used by every guild. Your pairing link teaches
 it which encrypted guild server to use. If the link expired or was already
 used, ask your guild administrator for a new one.
 
+UPDATES
+
+A paired member app checks the guild relay for a newer Vemal's Ears release
+in the background. It downloads the installer to local application state and
+checks its advertised size, SHA-256 digest, and embedded version before the
+app offers it.
+
+An installer-managed copy may apply a release automatically only when the
+installed manifest names a trusted publisher and Windows validates the new
+installer's Authenticode signature, exact publisher, and timestamp. Automatic
+installation waits until captions have been stopped for five minutes, or until
+you have deliberately paused them for 30 seconds. Message Group activity and
+open dialogs block the install. The installer closes and relaunches the app.
+
+Unsigned and source-built copies do not grant automatic execution trust. They
+download and verify the offered installer, then wait for you to open it.
+
 VOICE-CHANNEL ACCESS
 
 The one-use pairing invitation is already bound to the Discord member it was

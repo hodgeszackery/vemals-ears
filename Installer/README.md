@@ -35,8 +35,18 @@ embedded in the installer.
 - This installer intentionally remains caption-only. The hosted Gear Helper,
   Great Vault, and Boss Talents forwarding client ships separately as
   `downtime-lite.zip`; it is not staged or installed by this signed EXE.
-- There is no automatic updater yet. A signed installer can be run again for
-  each release.
+- The member app can stage an advertised update in the background. It may run
+  that installer unattended only when Authenticode is valid and the exact
+  signer subject appears in the installed `payload-manifest.json` under
+  `update_trust.authenticode_publishers`.
+- Official signed builds generate that publisher list from the same exact
+  `ExpectedPublisher` value checked against the finished installer. Unsigned,
+  test, source-rebuilt, and proof-certificate builds omit `update_trust`, so a
+  download hash by itself never grants unattended execution trust.
+- An unattended update invokes Setup with the explicit `/VEAUTOUPDATE` switch.
+  Setup still owns closing the running companion in `PrepareToInstall`, and it
+  relaunches the app once after a successful silent update. Ordinary silent
+  installs remain non-launching.
 
 ## Local unsigned build
 
@@ -50,6 +60,10 @@ The result is `dist/Vemals-Ears-Setup-UNSIGNED.exe`. The build downloads the
 exact Python runtime and wheels recorded in `runtime-lock.json`, verifies every
 SHA-256 digest, stages only the explicit application allowlist, compiles the
 native launcher, and uses the locked Inno Setup version.
+
+Unsigned builds deliberately contain no automatic-execution trust metadata.
+They can still be installed manually, but the app will not silently run a
+future installer on the authority of an unsigned build.
 
 This label describes the project's release process, not a restriction on your
 GPL rights. You may rebuild, modify and redistribute under GPL-3.0-only. Use
@@ -95,11 +109,20 @@ workflow does the following in order:
    SHA-256 and an RFC3161 timestamp.
 6. Verifies Authenticode status, the exact publisher subject, the timestamp,
    and SignTool policy before creating the checksum from the final signed bytes.
-7. Passes only `Vemals-Ears-Setup.exe` and its `.sha256` file to a separate
+7. Writes that exact publisher subject into the installed manifest as a list,
+   allowing a signed transition release to carry both publisher identities
+   when a certificate identity must rotate.
+8. Passes only `Vemals-Ears-Setup.exe` and its `.sha256` file to a separate
    `contents: write` job. The unsigned proof build is never published.
 
 A manual dispatch leaves the signed files as a protected workflow artifact. A
 matching pushed tag also creates the GitHub release.
+
+For a planned certificate identity rotation, pass each future exact subject in
+`-AdditionalUpdatePublisher` while the release is still signed by the current
+`ExpectedPublisher`. The current subject is always included first. The build
+rejects this option for unsigned and proof-certificate installers, and rejects
+blank or duplicate subjects.
 
 ## GitHub environment configuration
 

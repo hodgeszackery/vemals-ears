@@ -230,6 +230,9 @@ try {
     if (-not $manifest.generic -or $manifest.audience -ne "member" -or $manifest.guild_configuration_embedded) {
         throw "The installed payload is not marked as generic."
     }
+    if ($manifest.PSObject.Properties.Name -contains "update_trust") {
+        throw "An unsigned test build must not authorize automatic installer execution."
+    }
     foreach ($record in $manifest.app_files) {
         $relative = [string]$record.path
         if ($relative.Contains("..") -or $relative.StartsWith("/") -or $relative.StartsWith("\")) {

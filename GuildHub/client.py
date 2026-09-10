@@ -46,6 +46,7 @@ from GuildHub.credentials import (
     normalize_server_url,
     validate_device_credentials,
 )
+from GuildHub.updater import write_session_state
 from GuildHub.pairing import (
     DEFAULT_PAIR_TIMEOUT_SECONDS,
     DEEP_LINK_SCHEME,
@@ -271,12 +272,13 @@ def _authenticated_response(payload: Any) -> tuple[str, int]:
 
 
 MAX_UPDATE_BYTES = 200 * 1024 * 1024
+MAX_UPDATE_URL = 2048
 _SHA256_TEXT = re.compile(r"^[0-9a-f]{64}$")
 _VERSION_PART = re.compile(r"^[0-9]{1,6}$")
 
 
 def _version_order(value: str):
-    """Dotted integers as a comparable tuple, or None if it is not one.
+    """A Windows three/four-part version as a four-tuple, or None.
 
     ASCII digits only, on purpose: str.isdigit() is true for characters
     like the Arabic-Indic numerals, and a version that sorts by
@@ -286,11 +288,15 @@ def _version_order(value: str):
     declines to guess rather than inventing a ranking.
     """
     parts = value.strip().split(".")
-    if not 1 <= len(parts) <= 4:
+    if not 3 <= len(parts) <= 4:
         return None
     if not all(_VERSION_PART.fullmatch(part) for part in parts):
         return None
-    return tuple(int(part) for part in parts)
+    numbers = [int(part) for part in parts]
+    if any(number > 65535 for number in numbers):
+        return None
+    numbers.extend([0] * (4 - len(numbers)))
+    return (numbers[0], numbers[1], numbers[2], numbers[3])
 
 
 def parse_update_offer(payload: Any, current_version: str = CLIENT_VERSION):
@@ -316,6 +322,7 @@ def parse_update_offer(payload: Any, current_version: str = CLIENT_VERSION):
         or not isinstance(digest, str)
         or not _SHA256_TEXT.fullmatch(digest)
         or not isinstance(url, str)
+        or len(url) > MAX_UPDATE_URL
         or isinstance(size, bool)
         or not isinstance(size, int)
         or size <= 0
@@ -324,8 +331,19 @@ def parse_update_offer(payload: Any, current_version: str = CLIENT_VERSION):
         return None
     # https only. An update is the one thing a member is invited to run,
     # so it does not travel in clear text however the relay asks.
-    parts = urlsplit(url)
-    if parts.scheme != "https" or not parts.hostname:
+    try:
+        parts = urlsplit(url)
+        port = parts.port
+    except ValueError:
+        return None
+    if (
+        parts.scheme != "https"
+        or not parts.hostname
+        or parts.username is not None
+        or parts.password is not None
+        or parts.fragment
+        or port is not None and not 1 <= port <= 65535
+    ):
         return None
     offered = version.strip()
     running = (current_version or "").strip()
@@ -343,16 +361,12 @@ def parse_update_offer(payload: Any, current_version: str = CLIENT_VERSION):
     #
     # Xenon's agent updater carries the same guard for the same reason.
     #
-    # Unorderable numbers fall through to the old behaviour deliberately:
-    # if we cannot rank them we defer to the relay rather than silently
-    # refusing every update a non-numeric scheme might offer.
+    # The installer accepts numeric Windows versions only. Letting an
+    # unorderable label through would make the relay, rather than the client,
+    # decide whether a download is a forward update.
     offered_order = _version_order(offered)
     running_order = _version_order(running)
-    if (
-        offered_order is not None
-        and running_order is not None
-        and offered_order <= running_order
-    ):
+    if offered_order is None or running_order is None or offered_order <= running_order:
         return None
     return {
         "version": version.strip(),
@@ -439,6 +453,16 @@ def download_verified_update(offer, destination: Path, *, fetch=None,
     try:
         with opener(request, timeout=timeout) as response, \
                 open(temporary, "wb") as handle:
+            final_url = getattr(response, "geturl", lambda: offer["url"])()
+            try:
+                final_scheme = urlsplit(final_url).scheme
+            except (TypeError, ValueError):
+                final_scheme = ""
+            if final_scheme != "https":
+                raise GuildHubClientError(
+                    "The update download left its secure HTTPS connection, "
+                    "so it was discarded."
+                )
             while True:
                 # Bounded by the advertised size, so a hostile or broken
                 # response cannot fill a member's disk.
@@ -453,6 +477,8 @@ def download_verified_update(offer, destination: Path, *, fetch=None,
                     )
                 digest.update(block)
                 handle.write(block)
+            handle.flush()
+            os.fsync(handle.fileno())
         if received != expected or digest.hexdigest() != offer["sha256"]:
             raise GuildHubClientError(
                 "The update download did not match the guild server's "
@@ -738,6 +764,7 @@ class GuildCaptionClient:
         retry_max: float = DEFAULT_RETRY_MAX_SECONDS,
         auth_timeout: float = DEFAULT_AUTH_TIMEOUT_SECONDS,
         connection_status: Callable[[bool], None] | None = None,
+        session_status: Callable[[str], None] | None = None,
     ) -> None:
         if max_retries < 0 or max_retries > 20:
             raise ValueError("max_retries must be between 0 and 20")
@@ -747,6 +774,8 @@ class GuildCaptionClient:
             raise ValueError("auth_timeout must be between 0 and 60 seconds")
         if connection_status is not None and not callable(connection_status):
             raise ValueError("connection_status must be callable")
+        if session_status is not None and not callable(session_status):
+            raise ValueError("session_status must be callable")
         self._credential_store = credential_store
         self._sink = sink
         self._connector = connector
@@ -755,6 +784,7 @@ class GuildCaptionClient:
         self._retry_max = retry_max
         self._auth_timeout = auth_timeout
         self._connection_status = connection_status
+        self._session_status = session_status
         self._stop_event = asyncio.Event()
         self._active_socket: Any | None = None
         self._running = False
@@ -795,6 +825,12 @@ class GuildCaptionClient:
     def _send_session_state(self, event: SessionEvent) -> bool:
         if event == self._last_session_event:
             return True
+        if self._session_status is not None:
+            try:
+                self._session_status(event.state)
+            except Exception:
+                # Update scheduling is best effort and must never stop captions.
+                pass
         if not self._sink.send(event):
             return False
         self._last_session_event = event
@@ -1218,6 +1254,7 @@ async def watch_captions(
     stop_event: asyncio.Event | None = None,
     poll_interval: float = DEFAULT_WATCH_POLL_SECONDS,
     report: Callable[[str], None] = print,
+    session_status: Callable[[str], None] | None = None,
 ) -> None:
     """Wait for pairing and keep the caption receiver available.
 
@@ -1320,6 +1357,7 @@ async def watch_captions(
                 credential_store,
                 sink,
                 connection_status=connection_status,
+                **({"session_status": session_status} if session_status else {}),
             )
             run_task = asyncio.create_task(client.run())
             stop_task = asyncio.create_task(stopped.wait())
@@ -1437,18 +1475,28 @@ async def _pair_cli(args: argparse.Namespace) -> int:
 async def _captions_cli(_args: argparse.Namespace) -> int:
     store = WindowsDeviceCredentialStore()
     sink = OverlaySink.start()
-    client = GuildCaptionClient(store, sink)
+    write_session_state("unknown")
+    client = GuildCaptionClient(store, sink, session_status=write_session_state)
     print("Vemal's Ears caption window is ready.", flush=True)
     try:
         await client.run()
     finally:
         await client.stop()
         sink.close()
+        write_session_state("unknown")
     return 0
 
 
 async def _watch_cli(_args: argparse.Namespace) -> int:
-    await watch_captions(WindowsDeviceCredentialStore(), OverlaySink.start)
+    write_session_state("unknown")
+    try:
+        await watch_captions(
+            WindowsDeviceCredentialStore(),
+            OverlaySink.start,
+            session_status=write_session_state,
+        )
+    finally:
+        write_session_state("unknown")
     return 0
 
 

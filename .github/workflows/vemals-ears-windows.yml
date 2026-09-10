@@ -102,6 +102,7 @@ jobs:
             tests.test_runtime_licenses `
             tests.test_companion_window `
             GuildHub.tests.test_client `
+            GuildHub.tests.test_updater `
             GuildHub.tests.test_windows_integration `
             VoiceCaptions.tests.test_runtime
 

@@ -151,6 +151,7 @@ Root: HKCU; Subkey: "Software\VemalsEars\Installer"; ValueType: string; ValueNam
 
 [Run]
 Filename: "{app}\{#AppExeName}"; Description: "Open Vemal's Ears"; Flags: nowait postinstall skipifsilent
+Filename: "{app}\{#AppExeName}"; Flags: nowait; Check: IsAutomaticUpdateInvocation
 
 [UninstallRun]
 Filename: "{app}\runtime\pythonw.exe"; Parameters: "-E -s -B ""{app}\app\Installer\uninstall_cleanup.py"""; WorkingDir: "{app}\app"; Flags: runhidden waituntilterminated; RunOnceId: "VemalsEarsMemberCleanup"
@@ -166,6 +167,26 @@ const
   ProtocolCommandKey = 'Software\Classes\vemalsears\shell\open\command';
   RunKey = 'Software\Microsoft\Windows\CurrentVersion\Run';
   RunValueName = 'Vemal''s Ears';
+
+function IsAutomaticUpdateInvocation(): Boolean;
+var
+  Index: Integer;
+begin
+  Result := False;
+  { Only the updater supplies this exact switch. The silent check keeps a
+    copied command line from creating a second interactive post-install
+    launch, while an ordinary silent deployment continues to launch nothing. }
+  if not WizardSilent then
+    Exit;
+  for Index := 1 to ParamCount do
+  begin
+    if CompareText(ParamStr(Index), '/VEAUTOUPDATE') = 0 then
+    begin
+      Result := True;
+      Exit;
+    end;
+  end;
+end;
 
 function PathIsSafeForPayloadCleanup(InstallPath: String): Boolean;
 var

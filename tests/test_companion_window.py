@@ -186,6 +186,64 @@ class CompanionIntegrationTests(unittest.TestCase):
                 command,
             )
 
+    def test_voice_start_clears_stale_stopped_state_before_popen(self):
+        from GuildHub import updater
+
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            script = root / "GuildHub" / "client.py"
+            script.parent.mkdir()
+            script.write_text("", encoding="ascii")
+            state_path = root / "update-session.json"
+            updater.write_session_state(
+                "stopped",
+                state_path,
+                now=lambda: 1.0,
+            )
+            spec = replace(self.companion.MEMBER_SERVICES[0], script=script)
+            service = self.companion.Service(spec=spec, window=mock.Mock())
+            events = []
+            real_write = updater.write_session_state
+            real_read = updater.read_session_state
+
+            def clear_state(state):
+                real_write(state, state_path)
+                events.append("write:" + state)
+
+            def launch(*_args, **_kwargs):
+                current = real_read(state_path)
+                events.append("popen:" + current.state)
+                return mock.Mock()
+
+            with mock.patch.object(
+                updater,
+                "write_session_state",
+                side_effect=clear_state,
+            ), mock.patch.object(
+                updater,
+                "read_session_state",
+                side_effect=lambda: real_read(state_path),
+            ), mock.patch.object(
+                self.companion,
+                "child_python",
+                return_value="pythonw.exe",
+            ), mock.patch.object(
+                self.companion.subprocess,
+                "Popen",
+                side_effect=launch,
+            ), mock.patch.object(
+                self.companion,
+                "assign_to_watcher_job",
+            ), mock.patch.object(self.companion.threading, "Thread"):
+                service.start()
+
+            self.assertEqual(
+                ["write:unknown", "popen:unknown"],
+                events,
+                "the old stopped marker survived until after the new child spawned",
+            )
+            self.assertGreater(service.update_session_reset_at, 1.0)
+
     def test_hosted_job_progress_format_updates_the_status_row(self):
         line = "[########----------------] 8/20 Simulating candidates"
         self.assertIsNotNone(self.companion.PROGRESS.match(line))
@@ -338,6 +396,7 @@ class CompanionIntegrationTests(unittest.TestCase):
     def test_update_offer_is_promoted_below_the_hero(self):
         banner = mock.Mock()
         message = mock.Mock()
+        button = mock.Mock()
         service_section = mock.Mock()
         window = SimpleNamespace(
             member_edition=True,
@@ -346,6 +405,7 @@ class CompanionIntegrationTests(unittest.TestCase):
             update_offer=None,
             update_banner=banner,
             update_message=message,
+            update_button=button,
             service_section=service_section,
             update_busy=False,
         )
@@ -358,11 +418,9 @@ class CompanionIntegrationTests(unittest.TestCase):
         self.assertIs(window.update_offer, offer)
         read_notice.assert_called_once_with()
         message.configure.assert_called_once_with(
-            text=(
-                "Vemal's Ears 9.9.9 is available. "
-                "Updating closes this window and reopens the installer."
-            )
+            text="Vemal's Ears 9.9.9 is available. Preparing the update..."
         )
+        button.configure.assert_called_once_with(text="Preparing...", state="disabled")
         banner.pack.assert_called_once_with(
             fill="x",
             padx=24,
@@ -855,29 +913,27 @@ class CompanionIntegrationTests(unittest.TestCase):
         So this pins the absence: downloaded, launched, and still here.
         """
         events = []
+        coordinator = mock.Mock()
         window = SimpleNamespace(
-            update_offer={"version": "9.9.9"},
+            update_coordinator=coordinator,
             update_busy=False,
-            update_button=SimpleNamespace(configure=lambda **_kw: None),
             update_message=SimpleNamespace(configure=lambda **_kw: None),
-            root=SimpleNamespace(
-                update_idletasks=lambda: None,
-                destroy=lambda: events.append("destroyed"),
-            ),
-            release_for_shutdown=lambda: events.append("closed"),
         )
-        with mock.patch(
-            "GuildHub.client.download_verified_update",
-            lambda _offer, _target: events.append("downloaded"),
-        ), mock.patch.object(
+        request = SimpleNamespace(
+            automatic=False,
+            path=Path("C:/staged/Vemals-Ears-Setup.exe"),
+            version="9.9.9",
+        )
+        with mock.patch.object(
             self.companion.os,
             "startfile",
             lambda _path: events.append("launched"),
             create=True,
         ):
-            self.companion.CompanionWindow.install_update(window)
+            self.companion.CompanionWindow.launch_update(window, request)
 
-        self.assertEqual(["downloaded", "launched"], events)
+        self.assertEqual(["launched"], events)
+        coordinator.mark_launched.assert_called_once_with(automatic=False)
         # Still busy, so the banner cannot offer a second installer while
         # the first one is on screen.
         self.assertTrue(window.update_busy)
@@ -889,41 +945,247 @@ class CompanionIntegrationTests(unittest.TestCase):
         hand the member back a companion that still captions, instead of
         stopped services and an apology.
         """
-        shown = []
         closed = []
         states = []
+        coordinator = mock.Mock()
         window = SimpleNamespace(
-            update_offer={"version": "9.9.9"},
+            update_coordinator=coordinator,
             update_busy=False,
             update_button=SimpleNamespace(
                 configure=lambda **kw: states.append(kw.get("state"))
             ),
             update_message=SimpleNamespace(configure=lambda **_kw: None),
-            root=SimpleNamespace(
-                update_idletasks=lambda: None,
-                destroy=lambda: closed.append("destroyed"),
-            ),
-            release_for_shutdown=lambda: closed.append("closed"),
+            root=SimpleNamespace(),
+        )
+        request = SimpleNamespace(
+            automatic=False,
+            path=Path("C:/staged/Vemals-Ears-Setup.exe"),
+            version="9.9.9",
         )
 
         def explode(_path):
             raise OSError("no shell association")
 
-        with mock.patch(
-            "GuildHub.client.download_verified_update", lambda _offer, _target: None
-        ), mock.patch.object(
+        with mock.patch.object(
             self.companion.os, "startfile", explode, create=True
         ), mock.patch(
             "tkinter.messagebox.showerror",
-            lambda title, message: shown.append((title, message)),
-        ):
-            self.companion.CompanionWindow.install_update(window)
+        ) as shown:
+            self.companion.CompanionWindow.launch_update(window, request)
 
         self.assertEqual([], closed, "a failed launch must not close anything")
-        self.assertIn("no shell association", shown[0][1])
+        self.assertIn("no shell association", shown.call_args.args[1])
+        coordinator.mark_launch_failed.assert_called_once_with(
+            "The update could not be started.", automatic=False
+        )
         # And the member can try again.
         self.assertFalse(window.update_busy)
         self.assertEqual("normal", states[-1])
+
+    def test_manual_update_request_is_queue_driven_and_does_not_download_on_tk(self):
+        coordinator = mock.Mock()
+        coordinator.busy = True
+        window = SimpleNamespace(
+            update_coordinator=coordinator,
+            update_offer={"version": "9.9.9"},
+            update_busy=False,
+            update_button=mock.Mock(),
+            update_message=mock.Mock(),
+        )
+
+        self.companion.CompanionWindow.install_update(window)
+
+        coordinator.request_manual_install.assert_called_once_with()
+        window.update_button.configure.assert_called_once_with(
+            state="disabled", text="Checking..."
+        )
+        self.assertTrue(window.update_busy)
+
+    def test_automatic_launch_uses_silent_relaunch_switch_and_keeps_ve_alive(self):
+        events = []
+        coordinator = mock.Mock()
+        window = SimpleNamespace(
+            update_coordinator=coordinator,
+            update_busy=False,
+            update_message=mock.Mock(),
+            update_window_state=lambda: "hidden",
+        )
+        request = SimpleNamespace(
+            automatic=True,
+            path=Path("C:/staged/Vemals-Ears-Setup.exe"),
+            version="0.5.11",
+        )
+        with tempfile.TemporaryDirectory() as folder, mock.patch.object(
+            self.companion, "STATE_DIR", Path(folder)
+        ), mock.patch.object(
+            self.companion.subprocess, "Popen"
+        ) as launch:
+            self.companion.CompanionWindow.launch_update(window, request)
+            marker = json.loads(
+                (Path(folder) / "update-relaunch.json").read_text(encoding="ascii")
+            )
+
+        arguments = launch.call_args.args[0]
+        self.assertEqual(str(request.path), arguments[0])
+        self.assertIn("/VERYSILENT", arguments)
+        self.assertIn("/VEAUTOUPDATE", arguments)
+        self.assertEqual("hidden", marker["window_state"])
+        self.assertEqual("0.5.11", marker["version"])
+        coordinator.mark_launched.assert_called_once_with(automatic=True)
+        self.assertEqual([], events, "the installer still owns closing VE")
+
+    def test_auto_update_requires_a_stopped_session_and_message_group_idle(self):
+        now = time.time()
+        service = SimpleNamespace(
+            paused_by_member=False,
+            process=object(),
+            update_session_reset_at=now - 7200,
+        )
+        root = SimpleNamespace(grab_current=lambda: None)
+        window = SimpleNamespace(
+            member_edition=True,
+            preview=False,
+            speak_box=None,
+            quick_chat_in_flight={},
+            root=root,
+            member_caption_service=service,
+        )
+        from GuildHub.updater import SessionState
+
+        with mock.patch(
+            "GuildHub.updater.read_session_state",
+            return_value=SessionState("stopped", now - 301),
+        ):
+            self.assertTrue(self.companion.CompanionWindow.update_safe_to_apply(window))
+        with mock.patch(
+            "GuildHub.updater.read_session_state",
+            return_value=SessionState("active", now - 900),
+        ):
+            self.assertFalse(self.companion.CompanionWindow.update_safe_to_apply(window))
+
+        window.speak_box = object()
+        with mock.patch(
+            "GuildHub.updater.read_session_state",
+            return_value=SessionState("stopped", now - 900),
+        ):
+            self.assertFalse(self.companion.CompanionWindow.update_safe_to_apply(window))
+        window.speak_box = None
+        window.quick_chat_in_flight = {1: ("request", "message")}
+        with mock.patch(
+            "GuildHub.updater.read_session_state",
+            return_value=SessionState("stopped", now - 900),
+        ):
+            self.assertFalse(self.companion.CompanionWindow.update_safe_to_apply(window))
+        window.quick_chat_in_flight = {}
+        for name in (
+            "menu",
+            "connect_guild_helper",
+            "caption_target_menu",
+            "speaker_mute_menu",
+        ):
+            with self.subTest(open_window=name), mock.patch(
+                "GuildHub.updater.read_session_state",
+                return_value=SessionState("stopped", now - 900),
+            ):
+                setattr(window, name, object())
+                self.assertFalse(
+                    self.companion.CompanionWindow.update_safe_to_apply(window)
+                )
+                setattr(window, name, None)
+
+    def test_active_session_stays_unsafe_when_health_returns_to_ready(self):
+        now = time.time()
+        window = SimpleNamespace(
+            member_edition=True,
+            preview=False,
+            speak_box=None,
+            quick_chat_in_flight={},
+            root=SimpleNamespace(grab_current=lambda: None),
+            member_caption_service=SimpleNamespace(
+                paused_by_member=False,
+                process=object(),
+                update_session_reset_at=now - 7200,
+            ),
+        )
+        from GuildHub.updater import SessionState
+
+        for state in ("active", "unknown", "ready"):
+            with self.subTest(state=state), mock.patch(
+                "GuildHub.updater.read_session_state",
+                return_value=SessionState(state, now - 3600),
+            ):
+                self.assertFalse(
+                    self.companion.CompanionWindow.update_safe_to_apply(window),
+                    "a health/reconnect state was mistaken for stopped captions",
+                )
+
+    def test_stopped_session_must_complete_the_full_grace_period(self):
+        now = time.time()
+        window = SimpleNamespace(
+            member_edition=True,
+            preview=False,
+            speak_box=None,
+            quick_chat_in_flight={},
+            root=SimpleNamespace(grab_current=lambda: None),
+            member_caption_service=SimpleNamespace(
+                paused_by_member=False,
+                process=object(),
+                update_session_reset_at=now - 7200,
+            ),
+        )
+        from GuildHub.updater import SessionState
+
+        for observed_at, expected in (
+            (now - 299, False),
+            (now - 301, True),
+            (now + 1, False),
+        ):
+            with self.subTest(observed_at=observed_at), mock.patch(
+                "GuildHub.updater.read_session_state",
+                return_value=SessionState("stopped", observed_at),
+            ):
+                self.assertEqual(
+                    expected,
+                    self.companion.CompanionWindow.update_safe_to_apply(window),
+                )
+
+        window.member_caption_service.update_session_reset_at = now - 60
+        with mock.patch(
+            "GuildHub.updater.read_session_state",
+            return_value=SessionState("stopped", now - 301),
+        ):
+            self.assertFalse(
+                self.companion.CompanionWindow.update_safe_to_apply(window),
+                "a stopped marker from the previous child authorized an update",
+            )
+
+    def test_member_pause_is_an_explicit_safe_point_but_modal_still_blocks(self):
+        root = SimpleNamespace(grab_current=lambda: None)
+        window = SimpleNamespace(
+            member_edition=True,
+            preview=False,
+            speak_box=None,
+            quick_chat_in_flight={},
+            root=root,
+            member_caption_service=SimpleNamespace(
+                paused_by_member=True,
+                paused_at=time.monotonic() - 31,
+                process=None,
+                local_stop_in_flight=False,
+            ),
+        )
+        self.assertTrue(self.companion.CompanionWindow.update_safe_to_apply(window))
+        window.member_caption_service.paused_at = time.monotonic() - 29
+        self.assertFalse(self.companion.CompanionWindow.update_safe_to_apply(window))
+        window.member_caption_service.paused_at = time.monotonic() - 31
+        window.member_caption_service.process = object()
+        self.assertFalse(self.companion.CompanionWindow.update_safe_to_apply(window))
+        window.member_caption_service.process = None
+        window.member_caption_service.local_stop_in_flight = True
+        self.assertFalse(self.companion.CompanionWindow.update_safe_to_apply(window))
+        window.member_caption_service.local_stop_in_flight = False
+        window.root = SimpleNamespace(grab_current=lambda: object())
+        self.assertFalse(self.companion.CompanionWindow.update_safe_to_apply(window))
 
     def test_source_legacy_autostart_remains_truthful(self):
         legacy = self.companion.legacy_source_autostart_commands()[0]

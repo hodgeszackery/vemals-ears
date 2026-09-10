@@ -40,6 +40,8 @@ VEMALS_EARS_CLIENT_FILES = (
     "GuildHub/protocol.py",
     "GuildHub/requirements-client.txt",
     "GuildHub/setup.py",
+    "GuildHub/updater.py",
+    "GuildHub/verify_update.ps1",
     # The version the Preferences panel shows and the member client imports.
     "GuildHub/version.py",
     "GuildHub/windows_integration.py",
