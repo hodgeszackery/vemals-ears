@@ -6,6 +6,7 @@ import {
   CaptionCommandController,
   ENROLLMENT_TTL_SECONDS,
   newEnrollmentCode,
+  publicCommandError,
 } from "../src/command_controller.js";
 import { SessionManager, SessionPhase } from "../src/session_manager.js";
 
@@ -142,8 +143,8 @@ test("controller creates a visible consent session before capture", () => {
 test("start tells the channel capture is ON when consent is remembered", () => {
   // The existing test above builds a manager with no ledger, so its
   // AWAITING_CONSENT and its "capture is OFF" are both correct. This is
-  // the other path, which the hosted worker makes real: everybody's
-  // consent is already on record, startSession returns ACTIVE, and the
+  // the other path, which the hosted worker makes real: at least one
+  // participant has a remembered grant, startSession returns ACTIVE, and the
   // runtime subscribes immediately after. Saying capture is OFF there is
   // the one thing this reply must never do.
   const remembered = {
@@ -369,4 +370,14 @@ test("forget never calls an uncertain mapping ledger empty", () => {
 
   assert.doesNotMatch(forgotten.content, /Nothing to forget/i);
   assert.match(forgotten.content, /could not erase.*character mapping/i);
+});
+
+test("an unexpected command error does not invent a capture state", () => {
+  const safe = publicCommandError(new Error("private detail"));
+
+  assert.deepEqual(safe, {
+    code: "command_failed",
+    message: "Vemal's Ears could not complete that command.",
+  });
+  assert.doesNotMatch(safe.message, /capture/i);
 });

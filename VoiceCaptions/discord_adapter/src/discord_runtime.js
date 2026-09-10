@@ -1212,7 +1212,7 @@ export class DiscordAdapterRuntime {
         if (!noticeDelivered) {
           throw new CommandInputError(
             "consent_notice_delivery_failed",
-            "Vemal's Ears could not post the consent update. Capture remains off.",
+            "Vemal's Ears could not post the consent update.",
           );
         }
         let panelDelivered = true;
@@ -1421,11 +1421,11 @@ export class DiscordAdapterRuntime {
   async #resumeSessions() {
     // Shino's ask, 2026-09-01: every deploy restarts this process, and the
     // bot used to sit outside voice until somebody re-ran /vem start.
-    // The session ledger remembers where it was. Consent is NOT carried
-    // here - it comes back through startSession from the consent ledger,
-    // exactly as a fresh command would, so nobody is captioned on the
-    // strength of a file. Bounded by resumeWindowMs: a restart takes
-    // seconds, and a session hours old belongs to a raid that ended.
+    // The session ledger carries only location and control metadata, never
+    // consent. startSession recomputes each participant from the separate
+    // consent ledger and the live voice roster, exactly as a fresh command
+    // would. Bounded by resumeWindowMs: a restart takes seconds, and a
+    // session hours old belongs to a raid that ended.
     if (typeof this.sessions.resumableSessions !== "function") {
       return;
     }

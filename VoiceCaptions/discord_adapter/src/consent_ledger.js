@@ -15,8 +15,8 @@ import {
 import { dirname, isAbsolute, join } from "node:path";
 
 /*
-Remembers who has consented to being captioned, so the same group does not
-re-consent every session.
+Remembers each person's caption consent choice across sessions and process
+restarts.
 
 The rules here are the whole reason persisting consent is defensible at all,
 so they are worth stating plainly:
@@ -31,7 +31,7 @@ so they are worth stating plainly:
   choice.
 
   Nothing is remembered for a user who never answered. An absent record is
-  PENDING, which pauses capture, which is the safe direction.
+  PENDING, which excludes that speaker until they consent.
 
   Forgetting is available and complete. /vem forget erases the record
   rather than flipping it, so a user can leave no trace at all.
@@ -145,15 +145,13 @@ export class ConsentLedger {
       // the ledger was empty. That is what made consent persistence look
       // like it was not working at all.
       //
-      // Shino, 2026-09-01: "Everyone has to reconsent when the discord bot
-      // disconnects." Every unclean exit - a disconnect that failed closed
-      // and was restarted by the worker, a kill, a crash - used to drop
-      // every grant on the next start, because the marker only said "a
-      // run was in progress", never whether the file on disk was faithful.
+      // The old marker could only say that a run was in progress. It could
+      // not distinguish a normal in-progress file from an interrupted write,
+      // so every grant was dropped after any process exit without close().
       // The marker now carries that: every write flips it to unsynced
       // first and back to synced after the atomic save lands, so a run
-      // that died between writes loads everything, and only a run whose
-      // LAST write never reached disk loads declines only.
+      // that died between writes loads everything. Only a run whose marker
+      // cannot confirm the last write reached disk loads declines only.
       const prior = this.#beginRun();
       this.#load({ declinesOnly: prior.dirty && !prior.synced });
       this.#sweepAbandonedWrites();
@@ -308,8 +306,8 @@ export class ConsentLedger {
         return;
       }
       // A ledger that cannot be read must not take the bot down, and must
-      // not be treated as "everyone consented" either: starting empty means
-      // everyone is asked again, which is the safe failure.
+      // not be treated as consent either. Starting empty leaves every person
+      // without a trustworthy record pending, which is the safe failure.
       return;
     }
     let parsed;

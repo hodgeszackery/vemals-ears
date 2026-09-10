@@ -865,8 +865,13 @@ class CaptionClientTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(CAPTION, sink.events[-3])
         self.assertIsInstance(sink.events[-2], ClearEvent)
         self.assertEqual("paused", sink.events[-1].state)
-        # The member has actually left, so this sentence is true here.
-        self.assertIn("you left the voice channel", sink.events[-1].message)
+        self.assertEqual(
+            "Captions paused - join the active Discord voice channel. If this device "
+            "was paired without an invitation made for your Discord account, pair it "
+            "again with one.",
+            sink.events[-1].message,
+        )
+        self.assertNotIn("linked", sink.events[-1].message.lower())
 
     async def test_a_stopped_worker_does_not_tell_the_member_they_left(self):
         """Shino, 2026-09-07. They never moved; the worker stopped."""
@@ -1577,7 +1582,7 @@ class VoiceChannelWatchTests(unittest.IsolatedAsyncioTestCase):
             }
         )
 
-    def start_watch(self, *sockets, **client_options):
+    def start_watch(self, *sockets, report=None, **client_options):
         connector = FakeConnector(*sockets)
         owner = self
 
@@ -1614,7 +1619,7 @@ class VoiceChannelWatchTests(unittest.IsolatedAsyncioTestCase):
                 client_factory=make_client,
                 stop_event=self.stopped,
                 poll_interval=0.01,
-                report=lambda _message: None,
+                report=report or (lambda _message: None),
             )
         )
 
@@ -1652,6 +1657,31 @@ class VoiceChannelWatchTests(unittest.IsolatedAsyncioTestCase):
         self.stopped.set()
         await asyncio.wait_for(self.watch_task, timeout=5)
         self.assertTrue(sink.closed)
+
+    async def test_voice_denial_report_explains_account_bound_pairing(self):
+        self.pause_target = 1
+        reports = []
+        guidance_seen = asyncio.Event()
+
+        def report(message):
+            reports.append(message)
+            if "account-bound invitation" in message:
+                guidance_seen.set()
+
+        self.start_watch(FakeSocket([self.denial()]), report=report)
+        await asyncio.wait_for(guidance_seen.wait(), timeout=5)
+
+        message = next(
+            item for item in reports if "account-bound invitation" in item
+        )
+        self.assertIn("join the active Discord voice channel", message)
+        self.assertIn(
+            "Re-pair first if this device has no account-bound invitation.",
+            message,
+        )
+        self.assertNotIn("rejoin", message.lower())
+        self.assertNotIn("link discord", message.lower())
+        self.assertNotIn("linked your vemal's ears application", message.lower())
 
     async def test_rejoin_resumes_same_window_from_authoritative_snapshot(self):
         fresh_caption = CaptionEvent(

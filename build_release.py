@@ -227,13 +227,36 @@ Open Vemal's Ears when the browser asks. If the browser cannot open it, choose
 Pair in the window and paste the complete invitation. If the link expired or
 was already used, ask your administrator for a new one.
 
+VOICE-CHANNEL ACCESS
+
+The pairing invitation is already bound to the Discord member it was created
+for. Pairing associates this computer with that member; there is no separate
+Link Discord step. Voice-channel membership is required. Join the exact voice
+channel where the caption session is active. Captions clear when you leave and
+content from before you joined or while you were away is not replayed later.
+
+MESSAGE YOUR GROUP
+
+Message Group submits one typed line to the relay. The relay accepts a valid
+request and assigns a cursor even without an active caption session, publisher,
+or compatibility worker. Acceptance does not prove that a viewer received it.
+Only paired devices in the fresh publisher-owned audience for the exact active
+voice channel can receive or replay the line. Without that audience, its body
+is delivered to nobody and is not held for later.
+
+Message Group bodies are never posted to Discord or sent to the compatibility
+worker. Stopping captions or losing the publisher clears that session's
+viewers and caption and Message Group replay. Restarting the relay clears all
+replay.
+
 PRIVACY
 
 Your computer receives caption text, never Discord voice audio. The guild's
 bot token never comes to your computer. Your device credential is revocable
 and stays in Windows Credential Manager. Caption text stays in memory and is
 not written to an addon file or a log. Every Discord speaker must consent
-before the guild host captures or transcribes them.
+before the guild host captures or transcribes their own voice. A pending or
+declined speaker stays uncaptured while consenting speakers continue.
 
 Keep the VoiceCaptions, GuildHub and runtime folder names as they are.
 

@@ -22,16 +22,16 @@ The same generic companion is used by every guild. Your pairing link teaches
 it which encrypted guild server to use. If the link expired or was already
 used, ask your guild administrator for a new one.
 
-LINK YOUR DISCORD ACCOUNT
+VOICE-CHANNEL ACCESS
 
-If your guild requires voice-channel membership, choose Link Discord in the
-Guild & Privacy card. Copy the command shown, open Discord, and run it in the
-paired guild within five minutes. This links this computer to the Discord
-account that runs the command; it does not change anyone's voice consent.
+The one-use pairing invitation is already bound to the Discord member it was
+created for. Pairing this computer associates it with that member. There is no
+separate Link Discord step.
 
-Join the exact voice channel where the caption session is active. Captions
-stop and clear when you leave. Speech captured before you joined is not
-delivered later, and captions from an absence are not replayed on rejoining.
+Voice-channel membership is required. Join the exact voice channel where the
+caption session is active. Captions stop and clear when you leave. Speech and
+Message Group lines from before you joined or while you were away are not
+replayed when you join or return.
 
 MESSAGE YOUR GROUP
 
@@ -45,6 +45,10 @@ delivers its body to nobody.
 Quick-chat acceptance does not depend on an active caption session, publisher,
 or compatibility worker. The typed body is sent to neither Discord nor the
 compatibility worker and is never written to a ledger or diagnostic log.
+Stopping the caption session or losing its publisher clears that session's
+viewers and caption and Message Group replay. Restarting the relay clears all
+replay. Lines accepted while no fresh publisher-owned audience exists are not
+held for a later audience.
 
 MOVE THE CAPTIONS
 
@@ -70,7 +74,9 @@ PRIVACY
 - Your revocable device credential stays in Windows Credential Manager.
 - Caption text stays in memory and is not written to an addon or log file.
 - Typed quick-chat bodies are never posted to Discord.
-- Each Discord speaker must consent before their own audio is processed.
+- Each Discord speaker must consent before their own audio is processed. A
+  pending or declined speaker remains uncaptured while consenting speakers
+  continue.
 - The local mute picker keeps only opaque speaker identifiers and display
   names, never audio or transcript text.
 

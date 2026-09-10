@@ -100,9 +100,9 @@ export class SessionManager {
   What a participant starts as when they appear.
 
   A remembered DECLINE is honoured on sight, so somebody who said no is not
-  asked again and is never captured by silence. A remembered GRANT saves the
-  regular group re-consenting nightly. No record at all is PENDING, which
-  pauses capture - the safe direction.
+  asked again and is never captured by silence. A remembered GRANT restores
+  that speaker's choice. No record at all is PENDING, which excludes that
+  speaker unless and until they consent.
   */
   #initialConsent(guildId, userId) {
     const remembered = this.consentLedger?.recall(guildId, userId) ?? null;
@@ -264,8 +264,9 @@ export class SessionManager {
       session.consentRetention.delete(userId);
       const participant = session.participants.get(userId);
       if (participant) {
-        // Forgetting inside a live session drops back to PENDING, which
-        // pauses capture. It must never read as a grant.
+        // Forgetting inside a live session drops this participant back to
+        // PENDING. It stops capture for that speaker and must never read as a
+        // grant; other granted speakers can keep the session active.
         participant.consent = ConsentState.PENDING;
         this.#recomputePhase(session);
       }
@@ -328,9 +329,10 @@ export class SessionManager {
   }
 
   /**
-   * Sessions a fresh process may put back: remembered, and saved within
-   * maxAgeMs of now. Anything older is forgotten on the spot - a restart
-   * takes seconds, and a session hours old belongs to a raid that ended.
+   * Session locations a fresh process may put back: remembered, and saved
+   * within maxAgeMs of now. This ledger carries no consent. Anything older is
+   * forgotten on the spot - a restart takes seconds, and a session hours old
+   * belongs to a raid that ended.
    */
   /**
    * Remember which consent prompt is live so its buttons survive a restart.
@@ -597,8 +599,8 @@ Consent persistence was implemented, documented and tested well before it was
 ever connected: index.js built a runtime without a session manager, the
 runtime defaulted one, and that default carried a null ledger. Because every
 call site here goes through `this.consentLedger?.`, the whole feature no-opped
-in silence - the group re-consented every session while the tests stayed
-green, because the tests build a ledger directly.
+in silence - remembered choices disappeared on process restart while the tests
+stayed green, because the tests build a ledger directly.
 
 So the wiring gets a named entry point rather than a default. A config that
 cannot say where consent lives is a programming error, not a reason to fall
@@ -615,8 +617,8 @@ export function createProductionSessionManager(config) {
   return new SessionManager({
     consentLedger: new ConsentLedger({ path: config.consentStatePath }),
     mappingLedger: new MappingLedger({ path: config.mappingStatePath }),
-    // Beside the consent ledger, so the companion supplies nothing new
-    // and a memory-only test configuration stays memory-only.
+    // Stored beside consent state for path convenience. This ledger contains
+    // session location and control metadata, never consent choices.
     sessionLedger: new SessionLedger({
       path: config.consentStatePath
         ? join(dirname(config.consentStatePath), "sessions.json")

@@ -1565,9 +1565,8 @@ def transmit_quick_chat(text: str, request_id: str) -> QuickChatSendResult:
             cursor,
         )
     except GuildHubClientError as error:
-        # GuildHubClientError text is already bounded and protocol-validated;
-        # preserving it tells the member whether the raid session is absent,
-        # the host still needs to assign their name, or the device was revoked.
+        # Keep short client or relay guidance when it is safe to show. The
+        # fallback below withholds diagnostics that echo the member's line.
         safe = str(error).strip()
         # The echo check only applies to a line long enough that finding it
         # inside the relay's message cannot be coincidence. A plain
@@ -1580,16 +1579,13 @@ def transmit_quick_chat(text: str, request_id: str) -> QuickChatSendResult:
         # contain member text, so this guard could only ever misfire.
         echoed = len(text) >= QUICK_CHAT_ECHO_MIN_CHARS and text in safe
         if not safe or len(safe) > 160 or echoed:
-            safe = "Quick chat could not post. Check the connection and try again."
+            safe = "Quick chat could not send. Try again."
         return QuickChatSendResult(request_id, False, safe)
     except DeviceCredentialStoreError:
         return QuickChatSendResult(
             request_id,
             False,
-            (
-                "Quick chat could not post. Check the raid session, guild "
-                "setup, or connection, then try again."
-            ),
+            "Quick chat could not send. Try again.",
         )
     except Exception:
         # Network libraries can include request bodies in diagnostics. Keep
@@ -9319,10 +9315,9 @@ class CompanionWindow:
                 )
             return
 
-        # The same line keeps its request id, whether it is the failed draft
-        # being retried or a line still in flight sent twice on a nervous
-        # Enter - the relay dedups on the id, so a fresh one would post it
-        # twice. Anything else is a new line and gets a new id.
+        # Reuse the request id for an identical failed or in-flight draft so
+        # a retry remains the same relay request. A different line gets a new
+        # id.
         request_id = ""
         if text == self.quick_chat_draft_text:
             request_id = self.quick_chat_request_id
@@ -9379,8 +9374,9 @@ class CompanionWindow:
                 continue
             request_id, text = record
             if result.success:
-                # Silent on purpose: the caption landing on screen is the
-                # confirmation, and a tray balloon over a raid is noise.
+                # The acknowledgement confirms relay acceptance, not viewer
+                # delivery. Retire the local draft silently; a tray balloon
+                # over a raid is noise.
                 if self.quick_chat_draft_text == text:
                     self.quick_chat_draft_text = ""
                     self.quick_chat_request_id = ""

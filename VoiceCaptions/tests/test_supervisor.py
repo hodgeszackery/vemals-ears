@@ -42,7 +42,7 @@ class SupervisorPrivacyTests(unittest.TestCase):
         self.assertIsNone(public_status)
         self.assertEqual(secret_words, sink.events[0].text)
 
-    def test_session_message_is_replaced_with_public_constant(self):
+    def test_session_message_is_replaced_with_neutral_public_status(self):
         sink = FakeSink()
         router = CaptionRouter(sink)
         public_status = router.route_line(
@@ -54,7 +54,7 @@ class SupervisorPrivacyTests(unittest.TestCase):
                 }
             )
         )
-        self.assertEqual("Captions paused - waiting for consent", public_status)
+        self.assertEqual("Captions paused", public_status)
         self.assertNotIn("Alice", public_status)
 
     def test_invalid_input_is_dropped_without_echo(self):
@@ -196,7 +196,7 @@ class FocusModeTests(unittest.TestCase):
         router = CaptionRouter(sink, focus_provider=lambda: True)
         status = router.route_event(SessionEvent(state="paused"))
         self.assertEqual(1, len(sink.events))
-        self.assertEqual("Captions paused - waiting for consent", status)
+        self.assertEqual("Captions paused", status)
 
     def test_focus_flips_mid_stream_without_a_rebuild(self):
         sink = FakeSink()

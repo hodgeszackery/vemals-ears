@@ -3262,7 +3262,7 @@ class QuickChatTests(unittest.TestCase):
         window.speak_status = self.Entry()
         window.speak_box = self.Box()
 
-    def result(self, attempt, request_id, success, message="Posted"):
+    def result(self, attempt, request_id, success, message="Accepted"):
         return self.companion.QueuedQuickChatResult(
             attempt,
             self.companion.QuickChatSendResult(
@@ -3452,7 +3452,21 @@ class QuickChatTests(unittest.TestCase):
             result = self.companion.transmit_quick_chat(line, "qch_echo")
         self.assertFalse(result.success)
         self.assertNotIn(line, result.message)
-        self.assertIn("could not post", result.message)
+        self.assertEqual("Quick chat could not send. Try again.", result.message)
+
+    def test_credential_failure_uses_neutral_send_wording(self):
+        from GuildHub.credentials import DeviceCredentialStoreError
+
+        with mock.patch(
+            "GuildHub.credentials.WindowsDeviceCredentialStore",
+            side_effect=DeviceCredentialStoreError("private credential detail"),
+        ):
+            result = self.companion.transmit_quick_chat(
+                "Stack now", "qch_credential"
+            )
+        self.assertFalse(result.success)
+        self.assertEqual("Quick chat could not send. Try again.", result.message)
+        self.assertNotIn("private credential detail", result.message)
 
     def test_enter_destroys_the_box_before_any_result_arrives(self):
         """Shino, 2026-09-04: "there's a sending delay but the game is still
@@ -3481,7 +3495,9 @@ class QuickChatTests(unittest.TestCase):
 
         def transmit(text, request_id):
             sends.append((text, request_id))
-            return self.companion.QuickChatSendResult(request_id, True, "Posted", 8)
+            return self.companion.QuickChatSendResult(
+                request_id, True, "Accepted", 8
+            )
 
         with mock.patch.object(self.companion.threading, "Thread", Thread), \
                 mock.patch.object(self.companion, "transmit_quick_chat", transmit):
@@ -3763,6 +3779,20 @@ class QuickChatTests(unittest.TestCase):
 
     def test_member_ui_exposes_button_hotkey_and_voice_audience_boundary(self):
         source = (ROOT / "WoW-Companion.pyw").read_text(encoding="utf-8")
+        transmit_start = source.index("def transmit_quick_chat(")
+        transmit_end = source.index("\ndef dev_coexist_requested(", transmit_start)
+        window_start = source.index("    def open_speak_box(", transmit_end)
+        window_end = source.index(
+            "    def refresh_member_caption_button(", window_start
+        )
+        quick_chat_source = (
+            source[transmit_start:transmit_end]
+            + source[window_start:window_end]
+        )
+        normalized_quick_chat_source = " ".join(
+            line.strip().lstrip("#").strip().lower()
+            for line in quick_chat_source.splitlines()
+        )
         # The separate VE UI reserves red emphasis for communication,
         # both on the main screen and inside its quick-message window.
         self.assertIn("self.hero_chat_button = self.make_chat_button", source)
@@ -3787,6 +3817,13 @@ class QuickChatTests(unittest.TestCase):
         self.assertNotIn("Message raid", source)
         self.assertNotIn("Message your raid", source)
         self.assertNotIn("Sending to your raid", source)
+        for stale_wording in (
+            "could not post",
+            "raid session",
+            "fresh one would post it twice",
+            "caption landing on screen is the confirmation",
+        ):
+            self.assertNotIn(stale_wording, normalized_quick_chat_source)
 
 
 class QuickChatProfileTests(unittest.TestCase):

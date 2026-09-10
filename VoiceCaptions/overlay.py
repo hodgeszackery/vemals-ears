@@ -1342,7 +1342,7 @@ class CaptionOverlay:
     def draw_status(self) -> None:
         font = self.fonts["status"]
         label = self.session_message or (
-            "Captions paused - waiting for consent"
+            "Captions paused"
             if self.session_state == "paused"
             else "Captions unavailable"
         )

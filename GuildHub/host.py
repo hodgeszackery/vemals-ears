@@ -506,16 +506,15 @@ def _clear_marker(marker: WorkerHealthMarker) -> bool:
 
 
 def _install_stop_handlers(stop_event: threading.Event) -> None:
-    """SIGTERM must run the shutdown chain, or consent persistence is fiction.
+    """SIGTERM must run the shutdown chain so adapter state finishes cleanly.
 
     The container stops this process with SIGTERM, and Python's default
-    disposition terminates without unwinding. run_watch's finally never
-    runs, so the node adapter is never asked to stop, so the consent
-    ledger's close() - the only remover of its dirty marker - never
-    happens, and the next run distrusts the file and re-asks everyone.
-    Every docker compose restart therefore discarded every remembered
-    choice, declines included. Setting the stop event instead lets the
-    ordinary stop path run end to end.
+    disposition terminates without unwinding. run_watch's finally would not
+    close the node adapter's stdin, so its final ledger save and run-marker
+    cleanup would be skipped. Setting the stop event lets the ordinary stop
+    path run end to end. If a forced stop interrupts the adapter's last write,
+    its unsynced marker makes the next run re-ask grants while retaining
+    declines.
     """
 
     def request_stop(_signum: int, _frame: object) -> None:

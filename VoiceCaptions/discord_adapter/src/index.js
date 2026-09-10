@@ -60,12 +60,12 @@ if (config && sessionManager) {
 
   // The shutdown channel that works on Windows.
   //
-  // The coordinator stops this process with terminate(), which on Windows
-  // is TerminateProcess: no signal is delivered, so neither handler above
-  // ever runs, so the consent ledger's close() - the only thing that
-  // clears its dirty marker - never happened on the platform this is
-  // actually deployed on. Every run started dirty, and consent
-  // persistence was a no-op that quietly ate the file.
+  // The coordinator closes stdin before falling back to terminate(), which
+  // on Windows is TerminateProcess and delivers no signal. Closing stdin lets
+  // the shutdown chain finish its ledger save and remove the run marker. If a
+  // forced stop leaves the marker behind, its sync bit distinguishes a fully
+  // written file from an interrupted last write; only the latter drops grants,
+  // while declines remain protective.
   //
   // Closing our stdin is something Node sees everywhere. The coordinator
   // closes it, waits, and only then falls back to terminate().

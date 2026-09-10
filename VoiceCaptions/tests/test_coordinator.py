@@ -481,10 +481,9 @@ class QuickChatCoordinatorTests(unittest.IsolatedAsyncioTestCase):
 class GracefulStopTests(unittest.IsolatedAsyncioTestCase):
     """Closing stdin is the shutdown request; terminate is the fallback.
 
-    This matters beyond tidiness: the adapter's consent ledger clears its
-    dirty marker in the shutdown chain, and on Windows terminate() runs
-    none of it. Every stop was therefore unclean, and consent persistence
-    - the whole point of remembering an answer - silently did nothing.
+    This matters beyond tidiness: the adapter's shutdown chain performs its
+    final ledger save and removes a synced run marker. On Windows terminate()
+    runs none of it, so stdin is the portable clean-shutdown path.
     """
 
     async def test_a_healthy_adapter_stops_by_having_its_stdin_closed(self):
@@ -1582,11 +1581,10 @@ class NodeBoundaryTests(unittest.IsolatedAsyncioTestCase):
     def test_child_is_told_where_consent_persists(self):
         """The companion must name the ledger path, or persistence no-ops.
 
-        The adapter builds a memory-only ledger when this is absent, and every
-        call site there is an optional-chain, so the failure is silent: the
-        group re-consents every session while nothing errors and every test
-        stays green. That is exactly how it shipped. An absolute path is
-        required because the adapter's working directory is not ours to assume.
+        The adapter builds a memory-only ledger when this is absent, so each
+        remembered choice disappears on process restart without an error. An
+        absolute path is required because the adapter's working directory is
+        not ours to assume.
         """
         credentials = DiscordCredentials(
             "123456789012345678", "not-a-real-token." + "x" * 40
@@ -1601,8 +1599,7 @@ class NodeBoundaryTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn(
             credentials.bot_token, consent_path, "the path must not carry the token"
         )
-        # And the mapping ledger, or /vem map dies with every restart -
-        # which under strict focus mode mutes the whole group.
+        # And the mapping ledger, or each /vem map choice dies with a restart.
         mapping_path = environment.get("CAPTIONS_MAPPING_STATE_PATH", "")
         self.assertTrue(mapping_path, "the adapter was never told where mappings live")
         self.assertTrue(Path(mapping_path).is_absolute())

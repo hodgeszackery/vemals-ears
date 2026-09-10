@@ -327,6 +327,119 @@ class ReleaseSplit(unittest.TestCase):
         self.assertIn("--require-hashes", instructions)
         self.assertIn("GuildHub\\requirements-client.txt", instructions)
 
+    def test_member_how_to_pins_voice_and_message_group_privacy_contract(self):
+        path, missing = self.member
+        self.assertFalse(missing, "member bundle is missing: " + str(missing))
+        with zipfile.ZipFile(path) as archive:
+            instructions = archive.read("VemalsEars/HOW-TO-RUN.txt").decode("ascii")
+        instructions_flat = " ".join(instructions.split())
+
+        self.assertIn("already bound to the Discord member", instructions)
+        self.assertIn("Voice-channel membership is required.", instructions)
+        self.assertNotIn("If your guild requires voice-channel membership", instructions)
+        self.assertNotIn("choose Link Discord", instructions)
+        self.assertIn("even without an active caption session, publisher, or", instructions_flat)
+        self.assertIn("fresh publisher-owned audience for the exact active", instructions)
+        self.assertIn("Acceptance does not prove that a viewer received it.", instructions)
+        self.assertIn("Message Group bodies are never posted to Discord", instructions)
+        self.assertIn("losing the publisher clears that session's", instructions)
+        self.assertIn("Restarting the relay clears all", instructions)
+
+    def test_shipped_client_readme_requires_the_exact_voice_audience(self):
+        client = (ROOT / "GuildHub" / "CLIENT-README.txt").read_text(encoding="ascii")
+
+        self.assertIn("already bound to the Discord member", client)
+        self.assertIn("Voice-channel membership is required.", client)
+        self.assertNotIn("If your guild requires voice-channel membership", client)
+        self.assertNotIn("choose Link Discord", client)
+        self.assertIn("fresh, publisher-owned audience for the exact active voice channel", client)
+        self.assertIn("Lines accepted while no fresh publisher-owned audience exists", client)
+        self.assertIn("Typed quick-chat bodies are never posted to Discord.", client)
+
+    def test_host_docs_pin_consent_ledgers_and_failure_boundaries(self):
+        host = (ROOT / "VoiceCaptions" / "README.txt").read_text(encoding="ascii")
+        adapter = (
+            ROOT / "VoiceCaptions" / "discord_adapter" / "README.md"
+        ).read_text(encoding="ascii")
+        adapter_flat = " ".join(adapter.split())
+
+        self.assertIn("Remember my answer is on for a new user.", host)
+        self.assertNotIn("Remember my answer is off for a new user.", host)
+        self.assertIn("New, pending, and declined speakers are not captured.", host)
+        self.assertIn("bounded session-resume record", host)
+        self.assertIn("worker restart within 30 minutes", host)
+        self.assertIn("Message Group bodies are never posted to Discord", host)
+
+        self.assertIn("Three purpose-specific local ledgers", adapter_flat)
+        self.assertIn(
+            "A remembered answer has no automatic expiry; it remains until that "
+            "person changes it or runs `/vem forget`.",
+            adapter_flat,
+        )
+        self.assertIn(
+            "Turning Remember off removes any older durable answer",
+            adapter_flat,
+        )
+        self.assertIn(
+            "A mapping has no automatic expiry; `/vem unmap` or `/vem forget` "
+            "erases it.",
+            adapter_flat,
+        )
+        for field in (
+            "voice-channel ID",
+            "control-channel ID",
+            "starter's user ID",
+            "participant user IDs",
+            "save time",
+            "consent-prompt nonce",
+        ):
+            self.assertIn(field, adapter)
+        self.assertIn(
+            "It contains no consent answer, audio, or transcript.",
+            adapter_flat,
+        )
+        self.assertIn("The default restart window is 30 minutes.", adapter_flat)
+        self.assertIn(
+            "`/vem stop`, expiry, an empty or missing target voice channel, or a "
+            "failed resume erases the entry.",
+            adapter_flat,
+        )
+        self.assertIn(
+            "character name, optional realm, WoW class, role, and mapping time",
+            adapter_flat,
+        )
+        self.assertIn(
+            "The adapter does send the live fields needed by the pipeline over "
+            "its local JSONL pipe.",
+            adapter_flat,
+        )
+        self.assertIn(
+            "Before anything goes to the relay, the coordinator replaces Discord "
+            "IDs with stable guild-scoped opaque tokens.",
+            adapter_flat,
+        )
+        self.assertIn(
+            "Raw Discord IDs, session timestamps, prompt nonce, participant consent "
+            "state, and join time are not sent to the relay.",
+            adapter_flat,
+        )
+        self.assertIn("The optional realm is not sent to the relay", adapter_flat)
+        self.assertIn("private Discord mapping flow", adapter_flat)
+        self.assertIn("inert legacy quick-chat compatibility terminal", adapter_flat)
+        self.assertIn(
+            "A corrupt Opus packet or routine source-stream error fails and drops "
+            "only that speaker's segment, so other consenting speakers continue.",
+            adapter_flat,
+        )
+        self.assertIn(
+            "Decoder creation or cleanup failure, duplicate segments, stream-capacity "
+            "exhaustion, PCM conversion failure, or JSONL output failure destroys "
+            "every active speaker stream and leaves the sink blocked for the life of "
+            "the process.",
+            adapter_flat,
+        )
+        self.assertIn("A relay restart clears every session's replay.", adapter_flat)
+
 
     @unittest.skipUnless(sys.platform == "win32", "the desktop UI uses Windows APIs")
     def test_extracted_products_construct_their_window_and_preferences(self):

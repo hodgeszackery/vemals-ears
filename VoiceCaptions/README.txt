@@ -43,25 +43,27 @@ per-user installation and refuses to replace a newer version with an older
 one. Uninstall removes the local pairing credential, but the guild
 administrator must still revoke that device on the server.
 
-The member installer also carries Gear Helper and Boss Talents, but their
-external setup remains separate. Gear Helper needs the Gear Helper and
-SimulationCraft WoW addons plus an authenticated GitHub CLI for its first local
-SimulationCraft download. Its Defender-safe source fallback needs Microsoft
-Visual Studio Build Tools. Boss Talents needs the member's own permitted
-Warcraft Logs OAuth client credentials, configured once with the installed
-Set up Boss Talents shortcut. No such credentials are bundled.
+The standalone member installer carries only Vemal's Ears and its private
+runtime. It does not install Downtime's Gear Helper or Boss Talents tools.
 
 USE IN DISCORD
 
 Run /vem start while you are in the voice channel, then use the shared
 Manage my consent button. Its private window lets each person allow or decline
-captioning for only their own voice. Remember my answer is off for a new user.
-Leave it unchecked for a choice that ends with this caption session, or check
-it to reuse the answer in future sessions. A brief disconnect does not erase a
-session-only choice. Any current participant can run /vem stop.
+captioning for only their own voice. Remember my answer is on for a new user.
+Leave it on to reuse the answer in future sessions. Turn it off for a choice
+that ends with this caption session and removes any older saved answer. A brief
+voice disconnect keeps that session-only choice, but a worker restart does not.
+Any current participant can run /vem stop.
 
 Use /vem map to connect your Discord speaker to a character name, class,
 and role for the overlay. Mappings are remembered until you run /vem unmap.
+
+Use /vem setup for a one-use pairing invitation for yourself, or /vem invite
+to make one for a selected member. Each invitation is already bound to that
+Discord member. Pairing associates the device with them, so there is no
+separate Link Discord step. A paired member must be in the exact active voice
+channel to receive captions or Message Group lines.
 
 PLACEMENT
 
@@ -77,6 +79,30 @@ and how many speakers may appear at once. The choices apply immediately: 2,
 3.6, 6, or 10 seconds and one through four speaker cards. These are local
 reader preferences and never change what the guild captures or sends.
 
+MESSAGE GROUP AND REPLAY
+
+Valid Message Group requests are accepted by the relay even when there is no
+active caption session, publisher, or compatibility worker. Acceptance assigns
+a cursor; it does not prove that anyone saw the line. Only paired devices in
+the fresh publisher-owned audience for the exact active voice channel receive
+or replay it. Message Group bodies are never posted to Discord or sent through
+the compatibility worker.
+
+/vem stop and publisher loss clear the session's viewers and caption and
+Message Group replay. A relay restart clears all replay. A line accepted with
+no fresh audience is delivered to nobody and is not held for a later audience.
+
+LOCAL STATE
+
+Audio and transcript text are never written to disk. The adapter keeps three
+purpose-specific local ledgers: remembered consent answers, character mappings,
+and a bounded session-resume record. Consent and mappings remain until the
+person changes or erases them. The resume record contains Discord guild,
+channel, starter and participant identifiers, a save time, and the consent
+prompt nonce; it contains no consent answer, audio, or transcript. It is used
+only for a worker restart within 30 minutes and is erased by /vem stop, expiry,
+an empty target voice channel, or a failed resume.
+
 PRIVACY
 
 - A red REC tally means an active caption session may be listening to
@@ -87,8 +113,13 @@ PRIVACY
 - Speech recognition runs on this PC through a loopback-only local service.
 - Caption text is never written to the companion log or an addon file.
 - The Discord token is stored only in Windows Credential Manager.
-- New participants pause capture instead of being recorded without consent.
-- A pipeline error stops capture rather than continuing in an uncertain state.
+- New, pending, and declined speakers are not captured. They do not pause
+  consenting speakers.
+- A corrupt packet or routine stream error drops only that speaker's segment.
+  A voice connection, decoder setup or cleanup, shared sink, or output failure
+  stops all capture safely.
+- Stopping a session, losing its publisher, or restarting the relay clears the
+  applicable in-memory caption and Message Group replay.
 
 The Discord voice receive interface is less stable than its normal bot APIs.
 Vemal's Ears isolates that boundary and stops safely if Discord changes it.
