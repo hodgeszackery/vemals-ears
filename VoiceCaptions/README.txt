@@ -41,11 +41,13 @@ The installed member app checks its paired guild server for newer releases.
 It downloads and checks the offered installer's size, SHA-256 hash and
 embedded version in the background. A release signed by the trusted publisher
 recorded in the current installation can install automatically after captions
-are safely idle. An unsigned release stays behind the explicit Open installer
-button and Windows approval prompts. The same generic installer upgrades the
-existing per-user installation and refuses to replace a newer version with an
-older one. Uninstall removes the local pairing credential, but the guild
-administrator must still revoke that device on the server.
+are safely idle. An installation without recorded publisher trust keeps the
+checked update behind the explicit Open installer button and Windows approval
+prompts. An installation that records a trusted publisher rejects releases not
+signed by that publisher. The same generic installer upgrades the existing
+per-user installation and refuses to replace a newer version with an older
+one. Uninstall removes the local pairing credential, but the guild administrator
+must still revoke that device on the server.
 
 The standalone member installer carries only Vemal's Ears and its private
 runtime. It does not install Downtime's Gear Helper or Boss Talents tools.
