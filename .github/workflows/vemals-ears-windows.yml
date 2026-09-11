@@ -47,7 +47,8 @@ jobs:
             throw "GuildHub/version.py does not declare an installer version."
           }
           $version = ($versionLine -split "=", 2)[1].Trim().Trim('"')
-          if ($version -notmatch '^\d+\.\d+\.\d+(?:\.\d+)?$') {
+          python -c "from GuildHub.update_contract import is_canonical_release_version; import sys; raise SystemExit(0 if is_canonical_release_version(sys.argv[1]) else 1)" $version
+          if ($LASTEXITCODE -ne 0) {
             throw "The installer version is invalid: $version"
           }
           if ($env:GITHUB_REF_TYPE -eq "tag") {
