@@ -343,6 +343,9 @@ def readme_bytes(lock: dict) -> bytes:
         "The source and runtime locks are editable inputs for modified builds.",
         "Refresh their versions and checksums together when changing dependencies.",
         "No Git checkout or repository account is needed to use these archives.",
+        "A slim installed runtime keeps only this guide and MANIFEST.json as its",
+        "source receipt. Get its exact source-complete member ZIP from the URL in",
+        "app/docs/SOURCE.txt; the full member ZIP keeps every archive listed here.",
         "", "BUILDING AND MODIFYING", "",
         *lock["build_notes"], "", "COVERAGE AND LIMITS", "",
         *lock.get("coverage_notes", []), "",
@@ -406,13 +409,20 @@ def source_directory(runtime: Path) -> Path:
 
 def validate_runtime_sources(
     runtime: Path, *, source_lock: Path = DEFAULT_SOURCE_LOCK,
-    runtime_lock: Path = DEFAULT_RUNTIME_LOCK,
+    runtime_lock: Path = DEFAULT_RUNTIME_LOCK, allow_receipt_only: bool = False,
 ) -> dict:
     lock = load_source_lock(source_lock, runtime_lock)
     source = source_directory(runtime)
     manifest = expected_manifest(lock, source_lock)
     expected = {item["filename"] for item in lock["artifacts"]} | {MANIFEST_NAME, README_NAME}
     actual = {path.name for path in source.iterdir()} if source.is_dir() else set()
+    receipts = {MANIFEST_NAME, README_NAME}
+    if allow_receipt_only and actual == receipts:
+        for name, wanted in ((MANIFEST_NAME, json_bytes(manifest)), (README_NAME, readme_bytes(lock))):
+            path = source / name
+            if path.is_symlink() or not path.is_file() or path.read_bytes() != wanted:
+                raise SystemExit("runtime source receipt differs: " + name)
+        return manifest
     if actual != expected:
         raise SystemExit("runtime source inventory mismatch; missing=" + ", ".join(sorted(expected - actual))
                          + "; unexpected=" + ", ".join(sorted(actual - expected)))

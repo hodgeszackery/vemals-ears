@@ -10,6 +10,10 @@ param(
     # honest way to ship, and it has to be an explicit flag rather than a
     # default so nobody publishes an unsigned build by accident.
     [switch]$AllowUnsigned,
+    # Build the public source-complete member ZIP from this exact staged
+    # source and runtime. The signed tag workflow uses this to avoid a second
+    # runtime download and gives the verified archive an immutable name.
+    [switch]$SourceCompleteMember,
     [string]$SigningMetadataPath = "",
     [string]$ExpectedPublisher = "",
     [string[]]$AdditionalUpdatePublisher = @(),
@@ -476,3 +480,13 @@ else {
 }
 Copy-Item -LiteralPath $sourceArchivePath -Destination (Join-Path $OutputDirectory "vemals-ears-source.zip") -Force
 Write-Output "Matching source archive: $(Join-Path $OutputDirectory 'vemals-ears-source.zip')"
+if ($SourceCompleteMember) {
+    # Use the frozen source snapshot that produced the installer payload. A
+    # live checkout edit during this long build must not pair two revisions.
+    & $privatePython -E -s -B (Join-Path $stageRoot "source\build_release.py") `
+        --member --require-runtime --runtime $runtimeRoot --output-directory $OutputDirectory
+    if ($LASTEXITCODE -ne 0) {
+        throw "The source-complete member ZIP could not be built."
+    }
+    Write-Output "Source-complete member ZIP: $(Join-Path $OutputDirectory 'vemals-ears-member.zip')"
+}

@@ -17,6 +17,8 @@ import source_distribution
 
 ROOT = Path(__file__).resolve().parent.parent
 INSTALLER = ROOT / "Installer"
+sys.path.insert(0, str(ROOT / "packaging"))
+import runtime_sources
 # Same path build_installer.ps1 defaults to. Overridable for a machine
 # that keeps it elsewhere; the compile test skips when it is absent, so
 # CI without Inno stays green rather than failing on a missing tool.
@@ -402,6 +404,39 @@ class InstallerPolicyTests(unittest.TestCase):
         self.assertIn("{#AppExeName}", command_line)
         self.assertNotIn("python", command_line.casefold())
         self.assertNotIn(".pyw", command_line.casefold())
+
+    def test_slim_installer_omits_runtime_archives_but_keeps_exact_receipts(self):
+        source = (INSTALLER / "VemalsEars.iss").read_text(encoding="ascii")
+        runtime_line = next(
+            line for line in source.splitlines()
+            if line.startswith('Source: "{#StageRoot}\\runtime\\*";')
+        )
+        self.assertIn('Excludes: "Source\\*"', runtime_line)
+        self.assertIn(
+            'Source: "{#StageRoot}\\runtime\\Source\\MANIFEST.json"; '
+            'DestDir: "{app}\\runtime\\Source";',
+            source,
+        )
+        self.assertIn(
+            'Source: "{#StageRoot}\\runtime\\Source\\README.txt"; '
+            'DestDir: "{app}\\runtime\\Source";',
+            source,
+        )
+        self.assertIn("app/docs/SOURCE.txt", runtime_sources.readme_bytes(
+            runtime_sources.load_source_lock(
+                runtime_sources.DEFAULT_SOURCE_LOCK,
+                runtime_sources.DEFAULT_RUNTIME_LOCK,
+            )
+        ).decode("ascii"))
+
+    def test_source_complete_member_uses_the_frozen_installer_snapshot(self):
+        source = (INSTALLER / "build_installer.ps1").read_text(encoding="ascii")
+        self.assertIn(
+            '(Join-Path $stageRoot "source\\build_release.py")', source
+        )
+        self.assertNotIn(
+            '(Join-Path $repoRoot "build_release.py")', source
+        )
 
     def test_app_shortcut_uses_the_native_taskbar_identity_and_ear_icon(self):
         source = (INSTALLER / "VemalsEars.iss").read_text(encoding="ascii")

@@ -123,8 +123,8 @@ def digest(path: Path) -> str:
 def refresh_snapshot(target: Path, required: list[str], manifest: Path | None) -> dict[str, bytes]:
     """Preflight the full source and retained binaries before changing a file.
 
-    Older installed EXEs have no source capsule to verify. Install a source-
-    complete installer once to enable this development refresh safely.
+    Older installed EXEs have no source capsule to verify. Install a current
+    release once to enable this development refresh safely.
     """
     files = source_distribution.snapshot(ROOT, tuple(required))
     if manifest is not None:
@@ -135,25 +135,28 @@ def refresh_snapshot(target: Path, required: list[str], manifest: Path | None) -
     for runtime in runtimes:
         if runtime.exists():
             try:
-                source_distribution.validate_runtime(runtime, ROOT)
+                source_distribution.validate_runtime(
+                    runtime, ROOT, allow_source_receipt=True
+                )
             except (OSError, ValueError, SystemExit) as error:
                 raise source_distribution.SourceError(
                     'the retained runtime does not match the current license/source inputs (' + str(error) +
-                    '); rebuild the full ZIP or install a source-complete installer before refreshing') from error
+                    '); use the matching source-complete member ZIP or reinstall '
+                    'this release before refreshing') from error
     native = manifest is not None and (target.parent / "VemalsEars.exe").is_file()
     if native:
         capsule = target / source_distribution.EMBEDDED_PATH
         if not capsule.is_file():
             raise source_distribution.SourceError(
-                "this installed EXE has no matching source archive; install a source-complete "
-                "Vemal's Ears installer once before refreshing it")
+                "this installed EXE has no matching source archive; install a current "
+                "Vemal's Ears release once before refreshing it")
         previous = source_distribution.read_archive(capsule.read_bytes(), set(files))
         changed = [relative for relative in RETAINED_BINARY_INPUTS
                    if previous.get(relative) != files.get(relative)]
         if changed:
             raise source_distribution.SourceError(
                 "retained native/runtime build inputs changed (" + ", ".join(changed) +
-                "); build and install the updated source-complete installer before refreshing")
+                "); build and install the updated release before refreshing")
         # The native installer also carries Python used only at uninstall.
         # Keep its real installed bytes in the source capsule during refresh.
         for relative in set(build_release.WINDOWS_INSTALLER_APP_FILES) - set(required):

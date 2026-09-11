@@ -34,17 +34,18 @@ the GPL declaration for VE does not replace those terms.
 Pillow includes FreeType, the Independent JPEG Group's work and other native
 libraries whose full notices remain in Pillow's bundled LICENSE file.
 Pillow's license does not replace the terms for its embedded libaom and libyuv
-libraries. The complete libaom terms are in
-runtime/Source/libaom-3.14.1.tar.gz at libaom-3.14.1/LICENSE and
-libaom-3.14.1/PATENTS. The complete libyuv terms are in
-runtime/Source/libyuv-644251f.tar at LICENSE and PATENTS.
+libraries. In the exact source-complete member bundle, the complete libaom
+terms are in runtime/Source/libaom-3.14.1.tar.gz at
+libaom-3.14.1/LICENSE and libaom-3.14.1/PATENTS. The complete libyuv terms are
+in runtime/Source/libyuv-644251f.tar at LICENSE and PATENTS.
 This software is based in part on the work of the Independent JPEG Group.
 Portions of this software are copyright (C) The FreeType Project
 (https://freetype.org/). All rights reserved.
 
-Matching upstream runtime source archives, build inputs and provenance are
-included in runtime/Source. Its README.txt and MANIFEST.json describe the
-exact inputs and upstream build procedures. See docs/SOURCE.txt.
+Matching upstream runtime source archives, build inputs and provenance are in
+the exact public source-complete member bundle named by docs/SOURCE.txt. The
+slim install retains runtime/Source/README.txt and MANIFEST.json as its receipt
+and pointer; the versioned public bundle contains every archive they list.
 
 The Windows setup executable is created with Inno Setup 7.1.0. Its original
 copyright and license are preserved in Installer/INNO-SETUP-LICENSE.txt.

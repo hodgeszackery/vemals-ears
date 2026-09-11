@@ -7,7 +7,9 @@ Local checkout: E:/Projects/vemals-ears
 License: GPL-3.0-only; see LICENSE.
 
 Release recipients receive matching client source in
-Source/vemals-ears-source.zip and upstream runtime sources in runtime/Source.
+Source/vemals-ears-source.zip. The slim installer retains the exact runtime
+source manifest and guide; the complete upstream source archives are in the
+versioned public member bundle at https://ears.xenon.solutions/source/0.5.13.
 Read docs/SOURCE.txt to modify and rebuild without private repository access
 or signing keys. Preferences has a License & source card for these files.
 

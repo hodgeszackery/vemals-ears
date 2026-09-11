@@ -117,6 +117,27 @@ class DiscoveryTests(unittest.TestCase):
                     )
                 )
 
+    def test_real_previous_installer_size_reaches_numeric_version_filter(self):
+        for advertised, current, expected in (
+            ("0.5.14", "0.5.13", True),
+            ("0.5.13", "0.5.13", False),
+            ("0.5.13.0", "0.5.13", False),
+            ("0.5.12", "0.5.13", False),
+        ):
+            with self.subTest(advertised=advertised, current=current):
+                offer = self.offer()
+                offer.update(version=advertised, bytes=307_985_107)
+                body = json.dumps({
+                    "type": "update_manifest",
+                    "update": offer,
+                }).encode()
+                result = updater.fetch_update_offer(
+                    MemoryStore(credentials()),
+                    current_version=current,
+                    opener=lambda _request, timeout, body=body: Response(body),
+                )
+                self.assertEqual(expected, result is not None)
+
     def test_malformed_non_null_manifest_body_fails_closed(self):
         malformed = (
             [],

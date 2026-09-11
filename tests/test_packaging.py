@@ -1,8 +1,10 @@
 """The independent member package and refresh boundary."""
 import ast
 import contextlib
+import hashlib
 import io
 import json
+import os
 import re
 import sys
 import subprocess
@@ -173,6 +175,47 @@ class CorrespondingSourceTests(unittest.TestCase):
 
 
 class IndependentReleaseTests(unittest.TestCase):
+    @staticmethod
+    def write_source_complete_member(path, *, include_runtime_archive=True):
+        upstream = b"editable upstream source fixture\n"
+        app_source = io.BytesIO()
+        with zipfile.ZipFile(app_source, "w") as archive:
+            archive.writestr(
+                "VemalsEars-source/SOURCE-MANIFEST.json",
+                '{"schema": 1, "files": []}\n',
+            )
+        manifest = {
+            "schema": 1,
+            "runtime_lock_sha256": "a" * 64,
+            "runtime_lock_hash_mode": "sha256-lf",
+            "source_lock_sha256": "b" * 64,
+            "runtime_components": {"fixture": "1.0.0"},
+            "artifacts": [{
+                "filename": "dependency-source.zip",
+                "sha256": hashlib.sha256(upstream).hexdigest(),
+            }],
+            "build_notes": ["Build fixture source."],
+            "coverage_notes": [],
+        }
+        with zipfile.ZipFile(path, "w") as archive:
+            archive.writestr(
+                "VemalsEars/Source/vemals-ears-source.zip",
+                app_source.getvalue(),
+            )
+            archive.writestr(
+                "VemalsEars/runtime/Source/MANIFEST.json",
+                json.dumps(manifest),
+            )
+            archive.writestr(
+                "VemalsEars/runtime/Source/README.txt",
+                "matching source fixture\n",
+            )
+            if include_runtime_archive:
+                archive.writestr(
+                    "VemalsEars/runtime/Source/dependency-source.zip",
+                    upstream,
+                )
+
     def test_member_refresh_uses_exactly_the_member_application_allowlist(self):
         with tempfile.TemporaryDirectory() as folder:
             target = Path(folder)
@@ -240,24 +283,403 @@ class IndependentReleaseTests(unittest.TestCase):
             downloads.mkdir()
             installer = dist / "Vemals-Ears-Setup.exe"
             installer.write_bytes(b"MZ isolated installer")
-            (dist / "vemals-ears-member.zip").write_bytes(b"member archive")
+            member = dist / "vemals-ears-member.zip"
+            self.write_source_complete_member(member)
             existing = downloads / "downtime.zip"
             existing.write_bytes(b"independent downtime release")
+            older_source = downloads / "vemals-ears-member-0.5.7.zip"
+            older_source.write_bytes(b"retained older corresponding source")
+            state = root / "VemalsEars"
+            state.mkdir()
+            (state / "relay.env").write_text(
+                "VEMALS_EARS_CLIENT_VERSION=0.5.8\n", encoding="ascii"
+            )
             with mock.patch.object(publish_release, "DIST", dist), \
                     mock.patch.object(publish_release, "INSTALLER", installer), \
                     mock.patch.object(publish_release, "client_version", return_value="0.5.8"), \
                     mock.patch.object(publish_release, "stamped_version", return_value="0.5.8"), \
                     mock.patch.object(publish_release, "run") as run, \
+                    mock.patch.object(publish_release, "console", return_value={"restart": "ok"}) as console, \
+                    mock.patch.dict(os.environ, {"PROGRAMDATA": str(root)}), \
+                    contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(0, publish_release.publish("0.5.8", False, downloads=downloads))
+            commands = [call.args[1] for call in run.call_args_list]
+            self.assertIn("Installer/build_installer.ps1", commands[0])
+            self.assertIn("-SourceCompleteMember", commands[0])
+            self.assertEqual(
+                [sys.executable, "packaging/verify_bundle.py"], commands[1]
+            )
+            self.assertFalse(any("--companion" in command or "--hosted" in command for command in commands))
+            console.assert_called_once_with(
+                "/api/config", {"VEMALS_EARS_CLIENT_VERSION": "0.5.8"}
+            )
+            self.assertEqual(b"independent downtime release", existing.read_bytes())
+            self.assertEqual(b"retained older corresponding source", older_source.read_bytes())
+            self.assertEqual(installer.read_bytes(), (downloads / installer.name).read_bytes())
+            self.assertEqual(member.read_bytes(), (downloads / "vemals-ears-member.zip").read_bytes())
+            self.assertEqual(
+                member.read_bytes(),
+                (downloads / "vemals-ears-member-0.5.8.zip").read_bytes(),
+            )
+            self.assertEqual(
+                installer.read_bytes(),
+                (downloads / "Vemals-Ears-Setup-0.5.8.exe").read_bytes(),
+            )
+            pointer = json.loads(
+                (downloads / publish_release.RELEASE_POINTER_NAME).read_text(
+                    encoding="ascii"
+                )
+            )
+            self.assertEqual("0.5.8", pointer["version"])
+            self.assertEqual(
+                "Vemals-Ears-Setup-0.5.8.exe",
+                pointer["installer"]["filename"],
+            )
+            self.assertEqual(
+                "vemals-ears-member-0.5.8.zip",
+                pointer["source"]["filename"],
+            )
+
+            # Republishing identical bytes is safe and leaves the immutable
+            # versioned source object unchanged.
+            versioned_before = (downloads / "vemals-ears-member-0.5.8.zip").read_bytes()
+            with mock.patch.object(publish_release, "DIST", dist), \
+                    mock.patch.object(publish_release, "INSTALLER", installer), \
+                    mock.patch.object(publish_release, "client_version", return_value="0.5.8"), \
+                    mock.patch.object(publish_release, "stamped_version", return_value="0.5.8"), \
+                    mock.patch.object(publish_release, "run"), \
+                    contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(0, publish_release.publish(
+                    "0.5.8", False, advertise=False, downloads=downloads
+                ))
+            self.assertEqual(
+                versioned_before,
+                (downloads / "vemals-ears-member-0.5.8.zip").read_bytes(),
+            )
+
+    def test_publication_refuses_different_immutable_source_before_replacing_rollups(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            dist = root / "dist"
+            downloads = root / "downloads"
+            dist.mkdir()
+            downloads.mkdir()
+            installer = dist / "Vemals-Ears-Setup.exe"
+            installer.write_bytes(b"MZ isolated installer")
+            member = dist / "vemals-ears-member.zip"
+            self.write_source_complete_member(member)
+            versioned = downloads / "vemals-ears-member-0.5.13.zip"
+            versioned.write_bytes(b"different immutable source")
+            rolling = downloads / "vemals-ears-member.zip"
+            rolling.write_bytes(b"old rolling source")
+            served_installer = downloads / installer.name
+            served_installer.write_bytes(b"MZ old installer")
+            with mock.patch.object(publish_release, "DIST", dist), \
+                    mock.patch.object(publish_release, "INSTALLER", installer), \
+                    mock.patch.object(publish_release, "client_version", return_value="0.5.13"), \
+                    mock.patch.object(publish_release, "stamped_version", return_value="0.5.13"), \
+                    mock.patch.object(publish_release, "run"), \
                     mock.patch.object(publish_release, "console") as console, \
                     contextlib.redirect_stdout(io.StringIO()):
-                self.assertEqual(0, publish_release.publish("0.5.8", False, advertise=False, downloads=downloads))
-            commands = [call.args[1] for call in run.call_args_list]
-            self.assertEqual([sys.executable, "build_release.py", "--member", "--require-runtime"], commands[1])
-            self.assertFalse(any("--companion" in command or "--hosted" in command for command in commands))
+                with self.assertRaisesRegex(SystemExit, "immutable release artifact"):
+                    publish_release.publish(
+                        "0.5.13", False, advertise=False, downloads=downloads
+                    )
             console.assert_not_called()
-            self.assertEqual(b"independent downtime release", existing.read_bytes())
-            self.assertEqual(installer.read_bytes(), (downloads / installer.name).read_bytes())
-            self.assertEqual(b"member archive", (downloads / "vemals-ears-member.zip").read_bytes())
+            self.assertEqual(b"different immutable source", versioned.read_bytes())
+            self.assertEqual(b"old rolling source", rolling.read_bytes())
+            self.assertEqual(b"MZ old installer", served_installer.read_bytes())
+
+    def test_publication_refuses_a_tampered_source_complete_member(self):
+        with tempfile.TemporaryDirectory() as folder:
+            member = Path(folder) / "vemals-ears-member.zip"
+            self.write_source_complete_member(member, include_runtime_archive=False)
+            with self.assertRaisesRegex(SystemExit, "incomplete or invalid"):
+                publish_release.validate_source_bundle(member)
+
+    def test_no_advertise_retains_immutables_without_switching_public_aliases(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            dist = root / "dist"
+            downloads = root / "downloads"
+            dist.mkdir()
+            installer = dist / "Vemals-Ears-Setup.exe"
+            installer.write_bytes(b"MZ isolated installer")
+            member = dist / "vemals-ears-member.zip"
+            self.write_source_complete_member(member)
+            with mock.patch.object(publish_release, "DIST", dist), \
+                    mock.patch.object(publish_release, "INSTALLER", installer), \
+                    mock.patch.object(publish_release, "client_version", return_value="0.5.13"), \
+                    mock.patch.object(publish_release, "stamped_version", return_value="0.5.13"), \
+                    mock.patch.object(publish_release, "run"), \
+                    mock.patch.object(publish_release, "console") as console, \
+                    contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(0, publish_release.publish(
+                    "0.5.13", False, advertise=False, downloads=downloads
+                ))
+            console.assert_not_called()
+            self.assertEqual(
+                member.read_bytes(),
+                (downloads / "vemals-ears-member-0.5.13.zip").read_bytes(),
+            )
+            self.assertEqual(
+                installer.read_bytes(),
+                (downloads / "Vemals-Ears-Setup-0.5.13.exe").read_bytes(),
+            )
+            self.assertFalse((downloads / publish_release.RELEASE_POINTER_NAME).exists())
+            self.assertFalse((downloads / "vemals-ears-member.zip").exists())
+            self.assertFalse((downloads / "Vemals-Ears-Setup.exe").exists())
+
+    def test_no_advertise_can_backfill_older_immutables_without_rewriting_pointer(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            downloads = root / "downloads"
+            downloads.mkdir()
+            installer = root / "Vemals-Ears-Setup.exe"
+            source = root / "vemals-ears-member.zip"
+            installer.write_bytes(b"MZ older installer")
+            self.write_source_complete_member(source)
+            active = publish_release.release_pointer_document(
+                "0.5.14", (10, "a" * 64), (20, "b" * 64)
+            )
+            pointer_path = downloads / publish_release.RELEASE_POINTER_NAME
+            pointer_bytes = (
+                json.dumps(active, ensure_ascii=True, sort_keys=True) + "\n"
+            ).encode("ascii")
+            pointer_path.write_bytes(pointer_bytes)
+
+            with contextlib.redirect_stdout(io.StringIO()):
+                publish_release.publish_artifacts(
+                    "0.5.13",
+                    downloads,
+                    installer,
+                    publish_release.file_identity(installer),
+                    source,
+                    publish_release.file_identity(source),
+                    advertise=False,
+                )
+
+            self.assertEqual(pointer_bytes, pointer_path.read_bytes())
+            self.assertTrue(
+                (downloads / "Vemals-Ears-Setup-0.5.13.exe").is_file()
+            )
+            self.assertTrue(
+                (downloads / "vemals-ears-member-0.5.13.zip").is_file()
+            )
+
+    def test_publish_lock_closes_the_concurrent_pointer_transition_window(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            downloads = root / "downloads"
+            installer = root / "Vemals-Ears-Setup.exe"
+            source = root / "vemals-ears-member.zip"
+            installer.write_bytes(b"MZ installer")
+            self.write_source_complete_member(source)
+            installer_identity = publish_release.file_identity(installer)
+            source_identity = publish_release.file_identity(source)
+            with publish_release.publication_lock(downloads):
+                owner = json.loads(
+                    (downloads / publish_release.PUBLISH_LOCK_NAME).read_text(
+                        encoding="ascii"
+                    )
+                )
+                self.assertEqual(os.getpid(), owner["pid"])
+                with self.assertRaisesRegex(SystemExit, "already locked"):
+                    publish_release.publish_artifacts(
+                        "0.5.13",
+                        downloads,
+                        installer,
+                        installer_identity,
+                        source,
+                        source_identity,
+                        advertise=False,
+                    )
+                self.assertFalse(
+                    (downloads / "Vemals-Ears-Setup-0.5.13.exe").exists()
+                )
+                self.assertFalse(
+                    (downloads / publish_release.RELEASE_POINTER_NAME).exists()
+                )
+            self.assertFalse(
+                (downloads / publish_release.PUBLISH_LOCK_NAME).exists()
+            )
+
+    def test_advertised_publication_switches_one_pointer_after_both_immutables(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            state = root / "VemalsEars"
+            downloads = state / "downloads"
+            state.mkdir()
+            (state / "relay.env").write_text(
+                "VEMALS_EARS_CLIENT_VERSION=0.5.13\n", encoding="ascii"
+            )
+            installer = root / "Vemals-Ears-Setup.exe"
+            source = root / "vemals-ears-member.zip"
+            installer.write_bytes(b"MZ installer")
+            self.write_source_complete_member(source)
+            installer_identity = publish_release.file_identity(installer)
+            source_identity = publish_release.file_identity(source)
+            events = []
+            real_retain = publish_release.retain_immutable_verified
+            real_commit = publish_release.commit_release_pointer
+            real_copy = publish_release.copy_atomic_verified
+
+            def retain(*arguments):
+                events.append("retain " + arguments[1].name)
+                return real_retain(*arguments)
+
+            def commit(*arguments):
+                events.append("pointer")
+                return real_commit(*arguments)
+
+            def copy(*arguments):
+                events.append("alias " + arguments[1].name)
+                return real_copy(*arguments)
+
+            def update_legacy(_path, _payload):
+                events.append("legacy env")
+                return {"restart": "ok"}
+
+            with mock.patch.object(publish_release, "retain_immutable_verified", side_effect=retain), \
+                    mock.patch.object(publish_release, "commit_release_pointer", side_effect=commit), \
+                    mock.patch.object(publish_release, "copy_atomic_verified", side_effect=copy), \
+                    mock.patch.object(publish_release, "console", side_effect=update_legacy), \
+                    mock.patch.dict(os.environ, {"PROGRAMDATA": str(root)}), \
+                    contextlib.redirect_stdout(io.StringIO()):
+                publish_release.publish_artifacts(
+                    "0.5.13",
+                    downloads,
+                    installer,
+                    installer_identity,
+                    source,
+                    source_identity,
+                    advertise=True,
+                )
+            self.assertEqual([
+                "retain vemals-ears-member-0.5.13.zip",
+                "retain Vemals-Ears-Setup-0.5.13.exe",
+                "pointer",
+                "alias vemals-ears-member.zip",
+                "alias Vemals-Ears-Setup.exe",
+                "legacy env",
+            ], events)
+
+    def test_release_size_and_version_contracts_fail_before_destination_mutation(self):
+        self.assertEqual(
+            200 * 1024 * 1024,
+            publish_release.MAX_LEGACY_COMPATIBLE_UPDATE_BYTES,
+        )
+        publish_release.validate_published_update_size(200 * 1024 * 1024)
+        with self.assertRaisesRegex(SystemExit, "200 MiB"):
+            publish_release.validate_published_update_size(200 * 1024 * 1024 + 1)
+        for version in ("0.5.13", "65535.0.1"):
+            with self.subTest(version=version):
+                self.assertTrue(publish_release.is_canonical_release_version(version))
+        for version in ("00.5.13", "0.05.13", "0.5.013", "65536.0.1", "0.5.13.0", "0.5.\u0661"):
+            with self.subTest(version=version):
+                self.assertFalse(publish_release.is_canonical_release_version(version))
+
+        digest_a = "a" * 64
+        digest_b = "b" * 64
+        current = publish_release.release_pointer_document(
+            "0.5.13", (100, digest_a), (200, digest_b)
+        )
+        self.assertTrue(publish_release.validate_release_pointer(current))
+        boundary = publish_release.release_pointer_document(
+            "0.5.13",
+            (100, digest_a),
+            (publish_release.MAX_UPDATE_BYTES, digest_b),
+        )
+        self.assertTrue(publish_release.validate_release_pointer(boundary))
+        with self.assertRaisesRegex(ValueError, "artifact identity"):
+            publish_release.release_pointer_document(
+                "0.5.13",
+                (100, digest_a),
+                (publish_release.MAX_UPDATE_BYTES + 1, digest_b),
+            )
+        unsafe = json.loads(json.dumps(current))
+        unsafe["installer"]["filename"] = "../Vemals-Ears-Setup.exe"
+        self.assertFalse(publish_release.validate_release_pointer(unsafe))
+        floating_schema = json.loads(json.dumps(current))
+        floating_schema["schema"] = 1.0
+        self.assertFalse(
+            publish_release.validate_release_pointer(floating_schema)
+        )
+        with tempfile.TemporaryDirectory() as pointer_folder:
+            pointer_path = Path(pointer_folder) / publish_release.RELEASE_POINTER_NAME
+            pointer_path.write_text(
+                json.dumps(floating_schema), encoding="ascii"
+            )
+            with self.assertRaisesRegex(SystemExit, "invalid schema"):
+                publish_release.read_release_pointer(pointer_path)
+            duplicate = json.dumps(current).replace(
+                '"schema": 1', '"schema": 1, "schema": 1', 1
+            )
+            pointer_path.write_text(duplicate, encoding="ascii")
+            with self.assertRaisesRegex(SystemExit, "duplicate JSON key"):
+                publish_release.read_release_pointer(pointer_path)
+            pointer_path.write_text(
+                json.dumps(current).replace('"bytes": 100', '"bytes": NaN', 1),
+                encoding="ascii",
+            )
+            with self.assertRaisesRegex(SystemExit, "non-finite"):
+                publish_release.read_release_pointer(pointer_path)
+        with self.assertRaisesRegex(SystemExit, "older version"):
+            publish_release.validate_pointer_transition(
+                current,
+                publish_release.release_pointer_document(
+                    "0.5.12", (100, digest_a), (200, digest_b)
+                ),
+            )
+        rewritten = json.loads(json.dumps(current))
+        rewritten["installer"]["sha256"] = digest_b
+        with self.assertRaisesRegex(SystemExit, "different artifact bytes"):
+            publish_release.validate_pointer_transition(current, rewritten)
+
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            dist = root / "dist"
+            downloads = root / "downloads"
+            dist.mkdir()
+            installer = dist / "Vemals-Ears-Setup.exe"
+            with installer.open("wb") as output:
+                output.write(b"MZ")
+                output.truncate(200 * 1024 * 1024 + 1)
+            self.write_source_complete_member(dist / "vemals-ears-member.zip")
+            with mock.patch.object(publish_release, "DIST", dist), \
+                    mock.patch.object(publish_release, "INSTALLER", installer), \
+                    mock.patch.object(publish_release, "client_version", return_value="0.5.13"), \
+                    mock.patch.object(publish_release, "run"), \
+                    contextlib.redirect_stdout(io.StringIO()):
+                with self.assertRaisesRegex(SystemExit, "200 MiB"):
+                    publish_release.publish(
+                        "0.5.13", False, advertise=False, downloads=downloads
+                    )
+            self.assertFalse(downloads.exists())
+
+    def test_dry_run_refuses_oversized_source_before_blessing_artifacts(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            dist = root / "dist"
+            dist.mkdir()
+            installer = dist / "Vemals-Ears-Setup.exe"
+            installer.write_bytes(b"MZ")
+            source = dist / "vemals-ears-member.zip"
+            self.write_source_complete_member(source)
+            identities = [
+                (2, "a" * 64),
+                (publish_release.MAX_UPDATE_BYTES + 1, "b" * 64),
+            ]
+            with mock.patch.object(publish_release, "DIST", dist), \
+                    mock.patch.object(publish_release, "INSTALLER", installer), \
+                    mock.patch.object(publish_release, "client_version", return_value="0.5.13"), \
+                    mock.patch.object(publish_release, "run"), \
+                    mock.patch.object(publish_release, "file_identity", side_effect=identities), \
+                    mock.patch.object(publish_release, "stamped_version") as stamped, \
+                    contextlib.redirect_stdout(io.StringIO()):
+                with self.assertRaisesRegex(SystemExit, "512 MiB"):
+                    publish_release.publish("0.5.13", True)
+            stamped.assert_not_called()
 
     def test_release_version_must_already_be_reviewed(self):
         with mock.patch.object(publish_release, "client_version", return_value="0.5.8"), \
@@ -605,7 +1027,7 @@ class RuntimeEmbedding(unittest.TestCase):
                     contextlib.redirect_stderr(io.StringIO()) as errors:
                 self.assertEqual(1, refresh_local_copy.refresh(target))
             self.assertIn('retained runtime does not match', errors.getvalue())
-            self.assertIn('rebuild the full ZIP', errors.getvalue())
+            self.assertIn('matching source-complete member ZIP', errors.getvalue())
             self.assertEqual(before, {path.relative_to(target): path.read_bytes()
                                      for path in target.rglob('*') if path.is_file()})
 
@@ -899,6 +1321,38 @@ class RefreshPreservesInstalledVersionTests(unittest.TestCase):
             for relative in refresh_local_copy.RETAINED_BINARY_INPUTS:
                 self.assertEqual(files[relative], source.read('VemalsEars-source/' + relative))
 
+    def test_native_refresh_accepts_the_slim_installers_exact_source_receipt(self):
+        app, version, _files = self.source_complete_native_install()
+        source = app.parent / 'runtime/Source'
+        for item in self.upstream_fixture['lock']['artifacts']:
+            (source / item['filename']).unlink()
+        before = version.read_bytes()
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(0, refresh_local_copy.refresh(app))
+        self.assertEqual(before, version.read_bytes())
+        self.assertEqual(
+            {'MANIFEST.json', 'README.txt'},
+            {path.name for path in source.iterdir()},
+        )
+
+    def test_native_refresh_refuses_an_altered_slim_source_receipt_before_writing(self):
+        app, _version, _files = self.source_complete_native_install()
+        source = app.parent / 'runtime/Source'
+        for item in self.upstream_fixture['lock']['artifacts']:
+            (source / item['filename']).unlink()
+        (source / 'MANIFEST.json').write_bytes(b'{}\n')
+        before = {
+            path.relative_to(app.parent): path.read_bytes()
+            for path in app.parent.rglob('*') if path.is_file()
+        }
+        with contextlib.redirect_stderr(io.StringIO()) as errors:
+            self.assertEqual(1, refresh_local_copy.refresh(app))
+        self.assertIn('retained runtime does not match', errors.getvalue())
+        self.assertEqual(before, {
+            path.relative_to(app.parent): path.read_bytes()
+            for path in app.parent.rglob('*') if path.is_file()
+        })
+
     def test_native_refresh_without_prior_source_refuses_before_any_write(self):
         app, _, _ = self.source_complete_native_install()
         (app / source_distribution.EMBEDDED_PATH).unlink()
@@ -906,7 +1360,7 @@ class RefreshPreservesInstalledVersionTests(unittest.TestCase):
                   for path in app.parent.rglob('*') if path.is_file()}
         with contextlib.redirect_stderr(io.StringIO()) as errors:
             self.assertEqual(1, refresh_local_copy.refresh(app))
-        self.assertIn('install a source-complete', errors.getvalue())
+        self.assertIn('install a current', errors.getvalue())
         self.assertEqual(before, {path.relative_to(app.parent): path.read_bytes()
                                  for path in app.parent.rglob('*') if path.is_file()})
 

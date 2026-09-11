@@ -47,6 +47,7 @@ from GuildHub.credentials import (
     validate_device_credentials,
 )
 from GuildHub.updater import write_session_state
+from GuildHub.update_contract import MAX_UPDATE_BYTES
 from GuildHub.pairing import (
     DEFAULT_PAIR_TIMEOUT_SECONDS,
     DEEP_LINK_SCHEME,
@@ -271,7 +272,6 @@ def _authenticated_response(payload: Any) -> tuple[str, int]:
     return stream_id, cursor
 
 
-MAX_UPDATE_BYTES = 200 * 1024 * 1024
 MAX_UPDATE_URL = 2048
 _SHA256_TEXT = re.compile(r"^[0-9a-f]{64}$")
 _VERSION_PART = re.compile(r"^[0-9]{1,6}$")

@@ -267,9 +267,56 @@ jobs:
             -Version $env:INSTALLER_VERSION `
             -IsccPath $env:INNO_ISCC `
             -OutputDirectory (Join-Path $PWD "dist") `
+            -SourceCompleteMember `
             -Signed `
             -SigningMetadataPath $env:SIGNING_METADATA_PATH `
             -ExpectedPublisher $env:EXPECTED_PUBLISHER
+
+      - name: Verify update size and source-complete member archive
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $installer = Get-Item -LiteralPath "dist/Vemals-Ears-Setup.exe"
+          $limit = [int64](python -c "from GuildHub.update_contract import MAX_LEGACY_COMPATIBLE_UPDATE_BYTES; print(MAX_LEGACY_COMPATIBLE_UPDATE_BYTES)")
+          if ($installer.Length -gt $limit) {
+            throw "The installer exceeds the legacy-client publication ceiling."
+          }
+          python packaging/verify_bundle.py
+          if ($LASTEXITCODE -ne 0) {
+            throw "The source-complete member ZIP failed verification."
+          }
+          $source = "dist/vemals-ears-member.zip"
+          $sourceArtifact = Get-Item -LiteralPath $source
+          $sourceLimit = [int64](python -c "from GuildHub.update_contract import MAX_UPDATE_BYTES; print(MAX_UPDATE_BYTES)")
+          if ($sourceArtifact.Length -gt $sourceLimit) {
+            throw "The source-complete member ZIP exceeds the release artifact ceiling."
+          }
+          $versioned = "dist/vemals-ears-member-$env:INSTALLER_VERSION.zip"
+          Copy-Item -LiteralPath $source -Destination $versioned
+          function Get-Sha256 {
+            param([Parameter(Mandatory = $true)] [string]$LiteralPath)
+            $stream = [System.IO.File]::OpenRead(
+              [System.IO.Path]::GetFullPath($LiteralPath)
+            )
+            try {
+              $algorithm = [System.Security.Cryptography.SHA256]::Create()
+              try {
+                $digest = $algorithm.ComputeHash($stream)
+              }
+              finally {
+                $algorithm.Dispose()
+              }
+            }
+            finally {
+              $stream.Dispose()
+            }
+            return [System.BitConverter]::ToString($digest).Replace("-", "").ToLowerInvariant()
+          }
+          $sourceHash = Get-Sha256 -LiteralPath $source
+          $versionedHash = Get-Sha256 -LiteralPath $versioned
+          if ($sourceHash -cne $versionedHash) {
+            throw "The versioned source bundle differs from the verified member ZIP."
+          }
 
       - name: Verify the post-sign checksum
         shell: pwsh
@@ -354,6 +401,7 @@ jobs:
             dist/Vemals-Ears-Setup.exe
             dist/Vemals-Ears-Setup.exe.sha256
             dist/vemals-ears-source.zip
+            dist/vemals-ears-member-${{ needs.validate.outputs.version }}.zip
           if-no-files-found: error
           compression-level: 0
           retention-days: 14
@@ -381,6 +429,7 @@ jobs:
           sha256sum --check Vemals-Ears-Setup.exe.sha256
           test -f Vemals-Ears-Setup.exe
           test -f vemals-ears-source.zip
+          test -f vemals-ears-member-${{ needs.validate.outputs.version }}.zip
 
       - name: Publish GitHub release
         uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
@@ -392,9 +441,15 @@ jobs:
             release/Vemals-Ears-Setup.exe
             release/Vemals-Ears-Setup.exe.sha256
             release/vemals-ears-source.zip
+            release/vemals-ears-member-${{ needs.validate.outputs.version }}.zip
           body: |
             Signed per-user Windows installer for Vemal's Ears.
 
             The installer includes its own private runtime. Windows may still
             show reputation prompts while the publisher and application build
             SmartScreen reputation.
+
+            Matching complete source, including upstream runtime source, is
+            attached as vemals-ears-member-${{ needs.validate.outputs.version }}.zip
+            and is also available from
+            https://ears.xenon.solutions/source/${{ needs.validate.outputs.version }}.
