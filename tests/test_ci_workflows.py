@@ -3,6 +3,8 @@ from pathlib import Path
 import unittest
 import yaml
 
+from GuildHub.update_contract import is_canonical_release_version
+
 ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -94,6 +96,23 @@ class WorkflowContracts(unittest.TestCase):
         self.assertEqual("windows-release", job["environment"])
         self.assertEqual("write", job["permissions"]["id-token"])
         self.assertNotIn("id-token", signing["jobs"]["validate"]["permissions"])
+
+    def test_release_workflow_uses_the_pointer_version_contract(self):
+        signing = workflow("vemals-ears-windows.yml")
+        steps = signing["jobs"]["validate"]["steps"]
+        version_step = next(step for step in steps if step.get("id") == "version")
+        command = version_step["run"]
+        self.assertIn("is_canonical_release_version", command)
+        self.assertIn("sys.argv[1]", command)
+        for version in (
+            "0.5.13.1",
+            "0.05.13",
+            "\N{FULLWIDTH DIGIT ZERO}.5.13",
+            "65536.0.0",
+        ):
+            with self.subTest(version=version):
+                self.assertFalse(is_canonical_release_version(version))
+        self.assertTrue(is_canonical_release_version("0.5.13"))
 
     def test_signed_release_publishes_verified_versioned_complete_source(self):
         signing = workflow("vemals-ears-windows.yml")
