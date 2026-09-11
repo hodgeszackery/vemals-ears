@@ -225,11 +225,13 @@ def fetch_update_offer(
         raise AutomaticUpdateError("The guild server returned an invalid update response.")
     if payload.get("update") is None:
         return None
-    from GuildHub.client import parse_update_offer
+    from GuildHub.client import is_newer_update_version, validate_update_offer
 
-    offer = parse_update_offer({"update": payload["update"]}, current_version)
+    offer = validate_update_offer({"update": payload["update"]})
     if offer is None:
         raise AutomaticUpdateError("The guild server returned an invalid update response.")
+    if not is_newer_update_version(offer["version"], current_version):
+        return None
     return offer
 
 

@@ -299,15 +299,8 @@ def _version_order(value: str):
     return (numbers[0], numbers[1], numbers[2], numbers[3])
 
 
-def parse_update_offer(payload: Any, current_version: str = CLIENT_VERSION):
-    """Read an update advertisement, or None if there is nothing usable.
-
-    Deliberately silent about malformed offers. This arrives on the
-    authenticated channel, so a bad one means the relay is confused or
-    someone is playing, and neither is worth interrupting a member mid
-    raid to report. The check that matters happens later, against the
-    bytes actually downloaded.
-    """
+def validate_update_offer(payload: Any):
+    """Normalize a structurally valid update advertisement, or return None."""
     offer = payload.get("update") if isinstance(payload, dict) else None
     if not isinstance(offer, dict):
         return None
@@ -346,9 +339,41 @@ def parse_update_offer(payload: Any, current_version: str = CLIENT_VERSION):
     ):
         return None
     offered = version.strip()
-    running = (current_version or "").strip()
-    if offered == running:
+    if _version_order(offered) is None:
         return None
+    return {
+        "version": offered,
+        "sha256": digest,
+        "bytes": size,
+        "url": url,
+    }
+
+
+def is_newer_update_version(offered: str, current: str) -> bool:
+    """Return whether two valid Windows versions describe a forward update."""
+    offered_order = _version_order(offered)
+    running_order = _version_order((current or "").strip())
+    return (
+        offered_order is not None
+        and running_order is not None
+        and offered_order > running_order
+    )
+
+
+def parse_update_offer(payload: Any, current_version: str = CLIENT_VERSION):
+    """Read a newer update advertisement, or None if none is usable.
+
+    Deliberately silent about malformed offers. This arrives on the
+    authenticated channel, so a bad one means the relay is confused or
+    someone is playing, and neither is worth interrupting a member mid
+    raid to report. The check that matters happens later, against the
+    bytes actually downloaded.
+    """
+    offer = validate_update_offer(payload)
+    if offer is None:
+        return None
+    offered = offer["version"]
+    running = (current_version or "").strip()
     # Updates only ever go forward.
     #
     # This used to be the equality check alone, which meant "different"
@@ -364,16 +389,9 @@ def parse_update_offer(payload: Any, current_version: str = CLIENT_VERSION):
     # The installer accepts numeric Windows versions only. Letting an
     # unorderable label through would make the relay, rather than the client,
     # decide whether a download is a forward update.
-    offered_order = _version_order(offered)
-    running_order = _version_order(running)
-    if offered_order is None or running_order is None or offered_order <= running_order:
+    if not is_newer_update_version(offered, running):
         return None
-    return {
-        "version": version.strip(),
-        "sha256": digest,
-        "bytes": size,
-        "url": url,
-    }
+    return offer
 
 
 UPDATE_NOTICE_NAME = "update-available.json"
