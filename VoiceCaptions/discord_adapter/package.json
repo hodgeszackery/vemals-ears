@@ -1,6 +1,6 @@
 {
   "name": "@downtime/voice-captions-discord-adapter",
-  "version": "0.5.12",
+  "version": "0.5.13",
   "license": "GPL-3.0-only",
   "private": true,
   "description": "Consent-gated Discord voice boundary for Vemal's Ears",

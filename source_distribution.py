@@ -136,7 +136,9 @@ def verify_payload(files: dict[str, bytes], read_payload, application_files: tup
         raise SourceError("payload corresponding-source archive differs from its source snapshot")
 
 
-def validate_runtime(runtime: Path, source_root: Path = ROOT) -> None:
+def validate_runtime(
+    runtime: Path, source_root: Path = ROOT, *, allow_source_receipt: bool = False,
+) -> None:
     """Every distribution gate verifies notices and matching upstream sources."""
     sys.path.insert(0, str(ROOT / "packaging"))
     from runtime_licenses import validate_runtime_licenses
@@ -144,8 +146,12 @@ def validate_runtime(runtime: Path, source_root: Path = ROOT) -> None:
     lock_path = source_root / "Installer/runtime-lock.json"
     lock = json.loads(lock_path.read_text(encoding="utf-8"))
     validate_runtime_licenses(runtime, lock)
-    validate_runtime_sources(runtime, source_lock=source_root / "Installer/runtime-sources.lock.json",
-                             runtime_lock=lock_path)
+    validate_runtime_sources(
+        runtime,
+        source_lock=source_root / "Installer/runtime-sources.lock.json",
+        runtime_lock=lock_path,
+        allow_receipt_only=allow_source_receipt,
+    )
 
 
 def build(root: Path, application_files: tuple[str, ...], target: Path) -> Path:

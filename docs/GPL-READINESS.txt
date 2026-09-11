@@ -37,17 +37,22 @@ MEMBER RELEASES
 - The runtime carries upstream legal texts, including CPython's incorporated
   notices formerly lost with its documentation and all wheel component notices.
 - Installer/runtime-sources.lock.json preserves 36 verified upstream source
-  artifacts (about 283 MiB) beside the runtime. It ties source versions and
-  checksums to the binary runtime lock. Upgrades require updating both locks.
+  artifacts (about 283 MiB) in the source-complete member ZIP. The slim
+  installer keeps its exact MANIFEST.json and README.txt receipt and names the
+  immutable public versioned bundle in docs/SOURCE.txt. The manifest ties
+  source versions and checksums to the binary runtime lock. Upgrades require
+  updating both locks.
 - CPython's source closure follows its official binary SPDX; Pillow's follows
   the exact wheel notices, release recipes and nested codec source pins.
   The source collection includes build recipes missing from Pillow's sdist.
 - The upstream interpreter and wheels were not independently recompiled.
   runtime/Source/README.txt records build procedures and reproducibility limits.
   General-purpose toolchains remain prerequisites. No byte-identical claim.
-- Cached runtimes without the matching source/notices fail distribution checks.
-  Managed development refresh updates source with app files and refuses to
-  mislabel retained native binaries when their build inputs have changed.
+- Cached runtimes without the matching full source fail distribution checks.
+  Managed development refresh accepts either the full source or the slim
+  installer's exact two-file receipt, and refuses partial or altered receipts.
+  It updates source with app files and refuses to mislabel retained native
+  binaries when their build inputs have changed.
 - Official publisher and installer builds reconstruct the runtime from
   hash-verified upstream binaries. Source checks do not authenticate arbitrary
   manually replaced cached DLLs; regenerate the runtime before distribution.
@@ -92,8 +97,9 @@ RELEASE BOUNDARY
 These packaging changes apply to future builds. They do not retroactively
 change existing 0.5.8 downloads or installations. Keep source available for
 each distributed version; later unrelated source is not a substitute.
-The development repository stays private. Recipients obtain source with
-their release and do not need a GitHub account.
+The development repository stays private. Recipients obtain source from the
+immutable versioned public member bundle named by their release and do not
+need a GitHub account.
 
 VALIDATION
 

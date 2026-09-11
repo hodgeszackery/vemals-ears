@@ -40,6 +40,7 @@ VEMALS_EARS_CLIENT_FILES = (
     "GuildHub/protocol.py",
     "GuildHub/requirements-client.txt",
     "GuildHub/setup.py",
+    "GuildHub/update_contract.py",
     "GuildHub/updater.py",
     "GuildHub/verify_update.ps1",
     # The version the Preferences panel shows and the member client imports.
@@ -118,7 +119,12 @@ def member_launcher() -> str:
                         "Start-Vemals-Ears.cmd", "Vemals-Ears.pyw")
 
 
-def build_member_companion(require_runtime: bool = False) -> tuple[Path, list[str]]:
+def build_member_companion(
+    require_runtime: bool = False,
+    *,
+    runtime_root: Path | None = None,
+    output_directory: Path | None = None,
+) -> tuple[Path, list[str]]:
     """Build the generic Vemal's Ears member application for the relay.
 
     This is the artifact the relay serves, so it is the one that has to
@@ -128,11 +134,12 @@ def build_member_companion(require_runtime: bool = False) -> tuple[Path, list[st
     credential tool, no Discord capture, no speech model - so carrying a
     runtime widens what members can RUN, never what they are HANDED.
     """
-    DIST.mkdir(exist_ok=True)
-    target = DIST / "vemals-ears-member.zip"
+    output = output_directory or DIST
+    output.mkdir(parents=True, exist_ok=True)
+    target = output / "vemals-ears-member.zip"
     missing = []
 
-    runtime = DIST / "runtime"
+    runtime = runtime_root or (output / "runtime")
     bundled = (runtime / "pythonw.exe").is_file()
     if require_runtime and not bundled:
         raise SystemExit(
@@ -174,7 +181,7 @@ def build_member_companion(require_runtime: bool = False) -> tuple[Path, list[st
     with zipfile.ZipFile(target) as archive:
         source_distribution.verify_payload(source_files, lambda relative: archive.read(MEMBER_PREFIX + relative),
                                            VEMALS_EARS_MEMBER_APP_FILES)
-    (DIST / source_distribution.ARCHIVE_NAME).write_bytes(source_archive)
+    (output / source_distribution.ARCHIVE_NAME).write_bytes(source_archive)
     return target, missing
 
 
@@ -277,8 +284,14 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--member', action='store_true', help='Build the member bundle (default).')
     parser.add_argument('--require-runtime', action='store_true', help='Require the staged private runtime.')
+    parser.add_argument('--runtime', type=Path, help='Use this already verified private runtime.')
+    parser.add_argument('--output-directory', type=Path, help='Write release files here.')
     args = parser.parse_args(argv)
-    target, missing = build_member_companion(require_runtime=args.require_runtime)
+    target, missing = build_member_companion(
+        require_runtime=args.require_runtime,
+        runtime_root=args.runtime,
+        output_directory=args.output_directory,
+    )
     print(target)
     if missing:
         print('MISSING member files: ' + ', '.join(missing), file=sys.stderr)

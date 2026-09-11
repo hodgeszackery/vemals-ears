@@ -26,6 +26,8 @@ ROOT = Path(__file__).resolve().parent.parent
 
 # file -> pattern whose one capture group is the version it declares
 CARRIERS = {
+    "README.txt": r'^versioned public member bundle at https://ears\.xenon\.solutions/source/([^\s]+)\.$',
+    "docs/SOURCE.txt": r'^Exact source-complete bundle: https://ears\.xenon\.solutions/source/([^\s]+)$',
     "VoiceCaptions/__init__.py": r'^__version__ = "([^"]+)"$',
     "VoiceCaptions/discord_adapter/package.json": r'^  "version": "([^"]+)",$',
 }

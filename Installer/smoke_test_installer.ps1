@@ -167,13 +167,23 @@ try {
     $license = Join-Path $testRoot "app\LICENSE"
     $sourceInstructions = Join-Path $testRoot "app\docs\SOURCE.txt"
     $sourceArchive = Join-Path $testRoot "app\Source\vemals-ears-source.zip"
+    $runtimeSourceManifest = Join-Path $testRoot "runtime\Source\MANIFEST.json"
+    $runtimeSourceReadme = Join-Path $testRoot "runtime\Source\README.txt"
     $dependencyNotices = Join-Path $testRoot "app\Installer\THIRD-PARTY-NOTICES.txt"
     $innoLicense = Join-Path $testRoot "app\Installer\INNO-SETUP-LICENSE.txt"
     foreach ($required in @($privatePython, $launcher, $companion, $memberEdition, $manifestPath,
-                             $license, $sourceInstructions, $sourceArchive, $dependencyNotices, $innoLicense)) {
+                             $license, $sourceInstructions, $sourceArchive, $runtimeSourceManifest,
+                             $runtimeSourceReadme, $dependencyNotices, $innoLicense)) {
         if (-not (Test-Path -LiteralPath $required -PathType Leaf)) {
             throw "The isolated install is missing $required."
         }
+    }
+    $unexpectedRuntimeSource = @(
+        Get-ChildItem -LiteralPath (Join-Path $testRoot "runtime\Source") -File |
+            Where-Object { $_.Name -notin @("MANIFEST.json", "README.txt") }
+    )
+    if ($unexpectedRuntimeSource.Count -ne 0) {
+        throw "The slim installer contains runtime source archives."
     }
 
     & $privatePython -I -c "import tkinter, websockets, PIL, win32api, win32gui; tkinter.Tcl()"

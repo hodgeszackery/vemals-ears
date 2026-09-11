@@ -36,10 +36,13 @@ and publisher authorization; those settings do not move with copied source files
 Installer/README.md describes the signing checks and release artifacts.
 
 Every member ZIP and installer carries Source/vemals-ears-source.zip matching
-its application and native build inputs, plus runtime/Source for the bundled
-dependencies. A standalone vemals-ears-source.zip is also produced. Keep these
-embedded files when mirroring or repackaging a release; a private repository
-link does not provide source access to recipients. See docs/SOURCE.txt.
+its application and native build inputs. The source-complete member ZIP also
+carries all of runtime/Source. To stay below the 200 MiB ceiling enforced by
+older clients, the installer carries only runtime/Source/MANIFEST.json and
+README.txt as an exact receipt and pointer. A standalone vemals-ears-source.zip
+is also produced. Keep these source files when mirroring or repackaging a
+release; a private repository link does not provide source access to
+recipients. See docs/SOURCE.txt.
 Installer/runtime-sources.lock.json pins upstream source archives to the
 runtime lock. Update both locks when changing dependencies. Distribution
 validation rejects missing notices, missing source or mismatched source pins.
@@ -49,11 +52,21 @@ without advertising an update:
 
     python packaging/publish_release.py --version VERSION --no-advertise
 
-The default destination is PROGRAMDATA/VemalsEars/downloads. Use --downloads PATH
-for another destination. Only Vemals-Ears-Setup.exe and vemals-ears-member.zip are
-copied, atomically per file. Existing Downtime ZIPs are preserved. Omit
---no-advertise only when the operator intends to update the shared relay's
-VEMALS_EARS_CLIENT_VERSION. The relay remains independently deployed.
+The default destination is PROGRAMDATA/VemalsEars/downloads. Use --downloads
+PATH for another destination. The publisher first retains immutable
+vemals-ears-member-VERSION.zip and Vemals-Ears-Setup-VERSION.exe files. For an
+advertised release it then atomically replaces vemals-ears-release.json, which
+switches /download, /source, the landing page and update offers to the matching
+pair at once. Only after that cutover does it refresh the non-authoritative
+vemals-ears-member.zip and Vemals-Ears-Setup.exe compatibility aliases. It
+never deletes or replaces older versioned artifacts. Existing Downtime ZIPs
+are preserved. --no-advertise retains only the immutable files; it leaves the
+pointer and both public aliases unchanged.
+The installer must remain at or below 200 MiB so clients on 0.5.11 or 0.5.12
+can skip directly to it. Raising that publication ceiling requires a
+minimum-client-aware migration even though 0.5.13 and later accept up to 512
+MiB. Omit --no-advertise only when the operator intends to update the shared
+relay's VEMALS_EARS_CLIENT_VERSION. The relay remains independently deployed.
 
 For a build rehearsal, add --dry-run. It builds and verifies locally but does
 not publish or advertise. Version mismatches fail before any build action.
@@ -68,10 +81,13 @@ keeps an installer-managed copy's reported version unchanged so its update path
 remains valid. Restart the app separately to load refreshed source.
 
 Managed copies also need their existing corresponding-source archive and
-unchanged native/build/runtime inputs. A pre-source-archive installation or
-one needing new compiled inputs must receive an installer update first.
+unchanged native/build/runtime inputs. A bundled runtime may retain either its
+complete source inventory or the exact MANIFEST.json and README.txt receipt
+installed by the slim release. A pre-source-archive installation or one
+needing new compiled inputs must receive an installer update first.
 Successful refreshes preserve the installed version in both payload and
 regenerated source archive. Unmanaged development copies remain supported.
 Any retained runtime, including one in an extracted member ZIP, must pass
 matching source/notice validation before refresh writes application files.
-An outdated runtime needs an updated runtime-bearing ZIP or installer.
+Partial or changed source receipts fail closed. An outdated runtime needs an
+updated runtime-bearing member ZIP or installer.

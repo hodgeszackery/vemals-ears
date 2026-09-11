@@ -442,6 +442,42 @@ class RuntimeSourcesTests(unittest.TestCase):
         with self.assertRaisesRegex(SystemExit, "manifest or build notes differ"):
             self.check()
 
+    def test_slim_install_accepts_only_the_exact_two_file_source_receipt(self):
+        self.stage(offline=True)
+        source = self.fixture["runtime"] / "Source"
+        for item in self.fixture["lock"]["artifacts"]:
+            (source / item["filename"]).unlink()
+
+        receipt = runtime_sources.validate_runtime_sources(
+            self.fixture["runtime"],
+            source_lock=self.fixture["source_lock"],
+            runtime_lock=self.fixture["runtime_lock"],
+            allow_receipt_only=True,
+        )
+        self.assertEqual(self.fixture["lock"]["runtime_components"], receipt["runtime_components"])
+        with self.assertRaisesRegex(SystemExit, "inventory mismatch"):
+            self.check()
+
+        readme = source / "README.txt"
+        original = readme.read_bytes()
+        readme.write_bytes(original + b"changed\n")
+        with self.assertRaisesRegex(SystemExit, "receipt differs"):
+            runtime_sources.validate_runtime_sources(
+                self.fixture["runtime"],
+                source_lock=self.fixture["source_lock"],
+                runtime_lock=self.fixture["runtime_lock"],
+                allow_receipt_only=True,
+            )
+        readme.write_bytes(original)
+        (source / "partial.zip").write_bytes(b"partial")
+        with self.assertRaisesRegex(SystemExit, "inventory mismatch"):
+            runtime_sources.validate_runtime_sources(
+                self.fixture["runtime"],
+                source_lock=self.fixture["source_lock"],
+                runtime_lock=self.fixture["runtime_lock"],
+                allow_receipt_only=True,
+            )
+
     def test_cli_works_from_extracted_editable_locks_without_git_and_reports_missing_source(self):
         fixture = self.fixture
         command = [

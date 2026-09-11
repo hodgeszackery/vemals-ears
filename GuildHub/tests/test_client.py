@@ -1885,6 +1885,30 @@ class UpdateOfferTests(unittest.TestCase):
         self.assertIsNotNone(parsed)
         self.assertEqual("0.2.0", parsed["version"])
 
+    def test_update_size_contract_accepts_the_previous_real_installer(self):
+        previous_installer_bytes = 307_985_107
+        self.assertEqual(512 * 1024 * 1024, client_module.MAX_UPDATE_BYTES)
+        self.assertIsNotNone(
+            client_module.parse_update_offer(
+                self.offer(version="0.5.13", bytes=previous_installer_bytes),
+                "0.5.12",
+            )
+        )
+        self.assertIsNotNone(
+            client_module.parse_update_offer(
+                self.offer(version="0.5.13", bytes=client_module.MAX_UPDATE_BYTES),
+                "0.5.12",
+            )
+        )
+        self.assertIsNone(
+            client_module.parse_update_offer(
+                self.offer(
+                    version="0.5.13", bytes=client_module.MAX_UPDATE_BYTES + 1
+                ),
+                "0.5.12",
+            )
+        )
+
     def test_the_version_already_running_is_not_offered(self):
         self.assertIsNone(client_module.parse_update_offer(self.offer(), "0.2.0"))
         self.assertIsNone(

@@ -6,8 +6,9 @@ here, an installer published without bumping the advertised version
 offers nobody anything, and a half-copied download is served to whoever
 asks during the copy.
 
-Refuses rather than half-publishes. Every check that can be made before
-anything member-facing changes is made first.
+Every check that can be made before activation runs first. One atomic release
+pointer switches the matching installer and source pair; compatibility aliases
+are refreshed afterward and can be safely retried.
 
     python packaging/publish_release.py --version 0.2.0
     python packaging/publish_release.py --version 0.2.0 --dry-run
@@ -16,9 +17,12 @@ anything member-facing changes is made first.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import hashlib
+import io
 import json
 import os
+import secrets
 import shutil
 import subprocess
 import sys
@@ -31,6 +35,295 @@ DIST = ROOT / "dist"
 INSTALLER = DIST / "Vemals-Ears-Setup.exe"
 CONSOLE = "http://127.0.0.1:8771"
 CSRF_HEADER = "X-Vemals-Ears-Console"
+PUBLISH_LOCK_NAME = ".vemals-ears-publish.lock"
+
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from GuildHub.update_contract import (
+    MAX_LEGACY_COMPATIBLE_UPDATE_BYTES,
+    MAX_UPDATE_BYTES,
+    RELEASE_POINTER_NAME,
+    SOURCE_BUNDLE_NAME,
+    is_canonical_release_version,
+    release_pointer_document,
+    release_version_order,
+    validate_release_pointer,
+    versioned_installer_name,
+    versioned_source_bundle_name,
+)
+
+
+def file_identity(path: Path) -> tuple[int, str]:
+    size = path.stat().st_size
+    digest = hashlib.sha256()
+    with path.open("rb") as source:
+        while block := source.read(1024 * 1024):
+            digest.update(block)
+    return size, digest.hexdigest()
+
+
+def validate_published_update_size(size: int) -> None:
+    if isinstance(size, bool) or not isinstance(size, int) or size <= 0:
+        raise SystemExit("the installer size is invalid")
+    if size > MAX_UPDATE_BYTES:
+        raise SystemExit(
+            "the installer exceeds the 512 MiB client acceptance ceiling"
+        )
+    if size > MAX_LEGACY_COMPATIBLE_UPDATE_BYTES:
+        raise SystemExit(
+            "the installer exceeds the 200 MiB legacy-client publication ceiling; "
+            "publishing it would strand clients that skip the bridge release"
+        )
+
+
+def validate_source_bundle(path: Path) -> None:
+    """Require the public member ZIP to contain its complete runtime source."""
+    prefix = "VemalsEars/runtime/Source/"
+    app_source = "VemalsEars/Source/vemals-ears-source.zip"
+    try:
+        with zipfile.ZipFile(path) as archive:
+            names = archive.namelist()
+            if len(names) != len(set(names)):
+                raise ValueError("duplicate archive paths")
+            name_set = set(names)
+            manifest = json.loads(archive.read(prefix + "MANIFEST.json"))
+            if not isinstance(manifest, dict) or set(manifest) != {
+                "schema",
+                "runtime_lock_sha256",
+                "runtime_lock_hash_mode",
+                "source_lock_sha256",
+                "runtime_components",
+                "artifacts",
+                "build_notes",
+                "coverage_notes",
+            }:
+                raise ValueError("invalid runtime source manifest")
+            if (
+                type(manifest.get("schema")) is not int
+                or manifest.get("schema") != 1
+                or manifest.get("runtime_lock_hash_mode") != "sha256-lf"
+                or not isinstance(manifest.get("runtime_components"), dict)
+                or not manifest["runtime_components"]
+                or not isinstance(manifest.get("artifacts"), list)
+                or not manifest["artifacts"]
+            ):
+                raise ValueError("invalid runtime source manifest")
+            expected_sources = {prefix + "MANIFEST.json", prefix + "README.txt"}
+            artifact_names = set()
+            for item in manifest["artifacts"]:
+                filename = item.get("filename") if isinstance(item, dict) else None
+                digest = item.get("sha256") if isinstance(item, dict) else None
+                if (
+                    not isinstance(filename, str)
+                    or not filename
+                    or Path(filename).name != filename
+                    or not isinstance(digest, str)
+                    or len(digest) != 64
+                    or any(character not in "0123456789abcdef" for character in digest)
+                ):
+                    raise ValueError("invalid runtime source receipt")
+                if filename in artifact_names:
+                    raise ValueError("duplicate runtime source receipt")
+                artifact_names.add(filename)
+                member = prefix + filename
+                expected_sources.add(member)
+                actual = hashlib.sha256()
+                with archive.open(member) as source:
+                    while block := source.read(1024 * 1024):
+                        actual.update(block)
+                if actual.hexdigest() != digest:
+                    raise ValueError("runtime source digest mismatch")
+            actual_sources = {name for name in name_set if name.startswith(prefix)}
+            if actual_sources != expected_sources:
+                raise ValueError("runtime source inventory mismatch")
+            with zipfile.ZipFile(io.BytesIO(archive.read(app_source))) as source:
+                if "VemalsEars-source/SOURCE-MANIFEST.json" not in source.namelist():
+                    raise ValueError("application source manifest is missing")
+    except (KeyError, OSError, TypeError, ValueError, zipfile.BadZipFile) as error:
+        raise SystemExit(
+            "the public source bundle is incomplete or invalid: " + str(error)
+        ) from error
+
+
+def copy_atomic_verified(
+    source: Path, destination: Path, expected: tuple[int, str]
+) -> None:
+    temporary = destination.with_name(
+        destination.name + "." + str(os.getpid()) + ".publishing"
+    )
+    try:
+        shutil.copy2(source, temporary)
+        if file_identity(temporary) != expected:
+            raise SystemExit("copied release artifact differs from " + str(source))
+        os.replace(temporary, destination)
+    finally:
+        if temporary.exists():
+            temporary.unlink()
+    if file_identity(destination) != expected:
+        raise SystemExit("published release artifact differs from " + str(source))
+
+
+def retain_immutable_verified(
+    source: Path, destination: Path, expected: tuple[int, str]
+) -> None:
+    """Atomically create one immutable versioned artifact name."""
+    if immutable_target_exists(destination, expected):
+        print("==> exact release artifact already retained at " + str(destination))
+        return
+    temporary = destination.with_name(
+        destination.name + "." + str(os.getpid()) + ".publishing"
+    )
+    try:
+        shutil.copy2(source, temporary)
+        if file_identity(temporary) != expected:
+            raise SystemExit("copied source bundle differs from " + str(source))
+        try:
+            os.link(temporary, destination)
+        except FileExistsError:
+            if destination.is_symlink() or file_identity(destination) != expected:
+                raise SystemExit(
+                    "refusing to overwrite different immutable release artifact: "
+                    + str(destination)
+                )
+    finally:
+        if temporary.exists():
+            temporary.unlink()
+    if file_identity(destination) != expected:
+        raise SystemExit("retained release artifact differs from " + str(source))
+    print("==> retained exact release artifact at " + str(destination))
+
+
+def immutable_target_exists(path: Path, expected: tuple[int, str]) -> bool:
+    if not path.exists() and not path.is_symlink():
+        return False
+    if path.is_symlink() or not path.is_file() or file_identity(path) != expected:
+        raise SystemExit(
+            "refusing to overwrite different immutable release artifact: "
+            + str(path)
+        )
+    return True
+
+
+def read_release_pointer(path: Path) -> dict | None:
+    if not path.exists() and not path.is_symlink():
+        return None
+    if path.is_symlink() or not path.is_file():
+        raise SystemExit("release pointer is not a regular file: " + str(path))
+    try:
+        payload = path.read_bytes()
+        if len(payload) > 16 * 1024:
+            raise ValueError("document is oversized")
+        def unique_object(pairs):
+            document = {}
+            for key, value in pairs:
+                if key in document:
+                    raise ValueError("duplicate JSON key")
+                document[key] = value
+            return document
+
+        def reject_constant(value):
+            raise ValueError("non-finite JSON constant: " + value)
+
+        document = json.loads(
+            payload.decode("ascii"),
+            object_pairs_hook=unique_object,
+            parse_constant=reject_constant,
+        )
+    except (OSError, UnicodeError, ValueError) as error:
+        raise SystemExit("release pointer is invalid: " + str(error)) from error
+    if not validate_release_pointer(document):
+        raise SystemExit("release pointer has an invalid schema or artifact name")
+    return document
+
+
+def validate_pointer_transition(existing: dict | None, proposed: dict) -> None:
+    if not validate_release_pointer(proposed):
+        raise SystemExit("proposed release pointer is invalid")
+    if existing is None:
+        return
+    if not validate_release_pointer(existing):
+        raise SystemExit("existing release pointer is invalid")
+    current_order = release_version_order(existing["version"])
+    proposed_order = release_version_order(proposed["version"])
+    if proposed_order < current_order:
+        raise SystemExit("refusing to rewrite the release pointer to an older version")
+    if proposed_order == current_order and proposed != existing:
+        raise SystemExit(
+            "refusing to rewrite one release version with different artifact bytes"
+        )
+
+
+def commit_release_pointer(path: Path, document: dict) -> None:
+    existing = read_release_pointer(path)
+    validate_pointer_transition(existing, document)
+    if existing == document:
+        print("==> release pointer already names these exact artifacts")
+        return
+    payload = (json.dumps(document, ensure_ascii=True, indent=2, sort_keys=True) + "\n").encode("ascii")
+    temporary = path.with_name(path.name + "." + str(os.getpid()) + ".publishing")
+    try:
+        temporary.write_bytes(payload)
+        if temporary.read_bytes() != payload:
+            raise SystemExit("release pointer changed while being written")
+        os.replace(temporary, path)
+    finally:
+        if temporary.exists():
+            temporary.unlink()
+    if read_release_pointer(path) != document:
+        raise SystemExit("committed release pointer differs from the verified release")
+    print("==> committed release pointer at " + str(path))
+
+
+@contextlib.contextmanager
+def publication_lock(destination: Path):
+    """Serialize pointer transitions; only this invocation removes its lock."""
+    destination.mkdir(parents=True, exist_ok=True)
+    path = destination / PUBLISH_LOCK_NAME
+    token = secrets.token_hex(16)
+    document = {
+        "schema": 1,
+        "pid": os.getpid(),
+        "token": token,
+    }
+    payload = (json.dumps(document, ensure_ascii=True, sort_keys=True) + "\n").encode("ascii")
+    flags = os.O_CREAT | os.O_EXCL | os.O_WRONLY
+    if hasattr(os, "O_BINARY"):
+        flags |= os.O_BINARY
+    try:
+        descriptor = os.open(path, flags, 0o600)
+    except FileExistsError:
+        owner = "unknown"
+        try:
+            existing = path.read_bytes()
+            if len(existing) <= 1024:
+                recorded = json.loads(existing.decode("ascii"))
+                if (
+                    isinstance(recorded, dict)
+                    and recorded.get("schema") == 1
+                    and isinstance(recorded.get("pid"), int)
+                    and not isinstance(recorded.get("pid"), bool)
+                    and recorded["pid"] > 0
+                ):
+                    owner = str(recorded["pid"])
+        except (OSError, UnicodeError, ValueError):
+            pass
+        raise SystemExit(
+            "release publication is already locked by process " + owner + ". "
+            "If that publisher is no longer running, remove " + str(path)
+        )
+    try:
+        with os.fdopen(descriptor, "wb") as output:
+            output.write(payload)
+            output.flush()
+            os.fsync(output.fileno())
+        yield
+    finally:
+        try:
+            if path.read_bytes() == payload:
+                path.unlink()
+        except OSError:
+            pass
 
 
 def run(label: str, command: list[str], **kwargs) -> None:
@@ -89,6 +382,94 @@ def stamped_version(path: Path) -> str:
     return (finished.stdout or "").strip()
 
 
+def publish_artifacts(
+    version: str,
+    destination: Path,
+    installer: Path,
+    installer_identity: tuple[int, str],
+    source_bundle: Path,
+    source_identity: tuple[int, str],
+    *,
+    advertise: bool,
+) -> None:
+    versioned_source = destination / versioned_source_bundle_name(version)
+    versioned_installer = destination / versioned_installer_name(version)
+    pointer_path = destination / RELEASE_POINTER_NAME
+    pointer = release_pointer_document(version, installer_identity, source_identity)
+
+    # Fail known conflicts before even creating a destination directory. The
+    # same checks run again under the lock to close the concurrent-publisher
+    # gap between validation and the pointer replace.
+    if advertise:
+        existing_pointer = read_release_pointer(pointer_path)
+        validate_pointer_transition(existing_pointer, pointer)
+    immutable_target_exists(versioned_source, source_identity)
+    immutable_target_exists(versioned_installer, installer_identity)
+
+    with publication_lock(destination):
+        if advertise:
+            existing_pointer = read_release_pointer(pointer_path)
+            validate_pointer_transition(existing_pointer, pointer)
+        immutable_target_exists(versioned_source, source_identity)
+        immutable_target_exists(versioned_installer, installer_identity)
+
+        # Old versioned release artifacts are never removed or replaced.
+        retain_immutable_verified(source_bundle, versioned_source, source_identity)
+        retain_immutable_verified(installer, versioned_installer, installer_identity)
+
+        if not advertise:
+            print()
+            print("retained immutable release artifacts WITHOUT activating them.")
+            print("The release pointer and rolling download aliases are unchanged,")
+            print("so /download, /source and automatic updates still serve the")
+            print("previous release.")
+            return
+
+        # This one atomic replace activates the matching installer, source and
+        # version together. Rolling names are compatibility aliases only and
+        # are updated afterward.
+        commit_release_pointer(pointer_path, pointer)
+        rolling_source = destination / SOURCE_BUNDLE_NAME
+        copy_atomic_verified(source_bundle, rolling_source, source_identity)
+        print("==> published compatibility alias " + str(rolling_source))
+        served_installer = destination / installer.name
+        copy_atomic_verified(installer, served_installer, installer_identity)
+        print("==> published compatibility alias " + str(served_installer))
+
+        # The pointer is authoritative. Keep the legacy environment version in
+        # sync after activation for older relay code and operator visibility.
+        settings = console("/api/config", {"VEMALS_EARS_CLIENT_VERSION": version})
+        applied = ""
+        env_file = (Path(os.environ.get("PROGRAMDATA", r"C:\ProgramData"))
+                    / "VemalsEars" / "relay.env")
+        try:
+            for line in env_file.read_text(encoding="ascii").splitlines():
+                key, _, value = line.partition("=")
+                if key.strip() == "VEMALS_EARS_CLIENT_VERSION":
+                    applied = value.strip()
+        except OSError as error:
+            raise SystemExit(
+                "The release pointer is active, but the legacy advertised version "
+                "could not be confirmed (" + str(error) + "). Check the console "
+                "and relay status."
+            )
+        if applied != version:
+            raise SystemExit(
+                "The release pointer is active, but the relay did NOT accept the "
+                "legacy version setting (it reports " + repr(applied) + ").\n"
+                "Most likely the console service is running older code than "
+                "this checkout: restart DowntimeConsole from an elevated "
+                "prompt, then run this command again - republishing the same "
+                "version is safe."
+            )
+        print("==> relay compatibility setting now says " + version + ". " +
+              str(settings.get("restart", "")))
+
+    print()
+    print("Members are offered the update the next time their client")
+    print("connects. Nothing is installed for them without a click.")
+
+
 def publish(
     version: str,
     dry_run: bool,
@@ -98,20 +479,13 @@ def publish(
     timestamp_url: str = "",
     downloads: Path | None = None,
 ) -> int:
-    if not version.replace(".", "").isdigit() or version.count(".") != 2:
+    if not is_canonical_release_version(version):
         raise SystemExit("version must look like 0.2.0")
 
     # Version changes travel through review before a release is built.
     if client_version() != version:
         raise SystemExit("GuildHub/version.py must already match the requested VE release version.")
 
-    run("staging the runtime", [sys.executable, "packaging/build_runtime.py"])
-    run("building the bundles", [
-        sys.executable, "build_release.py",
-        "--member", "--require-runtime",
-    ])
-    run("running the bundles as a member would",
-        [sys.executable, "packaging/verify_bundle.py"])
     # The executable stamp must match this product's independent version.
     # Unsigned remains the default until a certificate exists. When one
     # does, it is a certificate in the current user's Windows store -
@@ -120,6 +494,7 @@ def publish(
     build = [
         "powershell", "-NoProfile", "-ExecutionPolicy", "Bypass",
         "-File", "Installer/build_installer.ps1", "-Version", version,
+        "-SourceCompleteMember",
     ]
     if sign_thumbprint:
         if not expected_publisher:
@@ -136,16 +511,40 @@ def publish(
             build += ["-SigningTimestampUrl", timestamp_url]
     else:
         build.append("-AllowUnsigned")
-    run("building the installer", build)
+    run("building the installer and exact source bundle", build)
+    run("running the source-complete bundle as a member would",
+        [sys.executable, "packaging/verify_bundle.py"])
 
-    if not INSTALLER.is_file():
-        raise SystemExit("no installer at " + str(INSTALLER))
-    payload = INSTALLER.read_bytes()
-    if payload[:2] != b"MZ":
+    source_bundle = DIST / SOURCE_BUNDLE_NAME
+    for artifact in (INSTALLER, source_bundle):
+        if not artifact.is_file():
+            raise SystemExit("missing VE release artifact: " + str(artifact))
+    installer_size = INSTALLER.stat().st_size
+    validate_published_update_size(installer_size)
+    with INSTALLER.open("rb") as installer:
+        magic = installer.read(2)
+    if magic != b"MZ":
         raise SystemExit("that is not a Windows executable")
-    digest = hashlib.sha256(payload).hexdigest()
+    validate_source_bundle(source_bundle)
+    installer_identity = file_identity(INSTALLER)
+    source_identity = file_identity(source_bundle)
+    if source_identity[0] > MAX_UPDATE_BYTES:
+        raise SystemExit(
+            "the source-complete member ZIP exceeds the 512 MiB release "
+            "artifact ceiling"
+        )
+    try:
+        release_pointer_document(version, installer_identity, source_identity)
+    except ValueError as error:
+        raise SystemExit(
+            "the release artifact identities cannot form a valid release pointer: "
+            + str(error)
+        ) from error
+    digest = installer_identity[1]
     print("==> installer is %.1f MB, sha256 %s"
-          % (len(payload) / (1024 * 1024), digest[:16] + "..."))
+          % (installer_size / (1024 * 1024), digest[:16] + "..."))
+    print("==> exact source bundle is %.1f MB, sha256 %s"
+          % (source_identity[0] / (1024 * 1024), source_identity[1][:16] + "..."))
 
     # Check the BINARY, not the label. Verifying the advertised version
     # against relay.env compares the label with the file that stores the
@@ -175,73 +574,18 @@ def publish(
         print("dry run: nothing was published and no member was told.")
         return 0
 
-    # Atomic, because /download is public and unauthenticated: a plain
-    # copy serves a truncated executable to anyone who asks mid-write.
     destination = downloads if downloads is not None else (
         Path(os.environ.get("PROGRAMDATA", r"C:\ProgramData")) / "VemalsEars" / "downloads"
     )
-    sources = (INSTALLER, DIST / "vemals-ears-member.zip")
-    for source in sources:
-        if not source.is_file():
-            raise SystemExit("Missing VE release artifact: " + str(source))
-    destination.mkdir(parents=True, exist_ok=True)
-    for source in sources:
-        served = destination / source.name
-        temporary = served.with_name(served.name + ".publishing")
-        shutil.copy2(source, temporary)
-        os.replace(temporary, served)
-        print("==> published to " + str(served))
-
-    if not advertise:
-        print()
-        print("published the download WITHOUT advertising it.")
-        print("The relay still offers nothing, so no client is told to")
-        print("update and no client older than 0.2.0 is disturbed. Members")
-        print("can install it by hand from the download link. Advertise it")
-        print("only once every active device reports 0.2.0 or newer:")
-        print("    python GuildHub/server.py list")
-        return 0
-
-    # Told last: until this is set the relay advertises nothing, so a
-    # failure above leaves members on the build that still works.
-    settings = console("/api/config", {"VEMALS_EARS_CLIENT_VERSION": version})
-
-    # Read back the file the relay actually loads, not the console's
-    # answer. The console only writes keys it RECOGNISES, so one running
-    # older code drops an unknown key without error and still returns
-    # 200 - which is exactly what happened on the first real publish: the
-    # installer went out, the version did not, and every member stayed on
-    # the old build while this script reported success. Checking the end
-    # state rather than the acknowledgement is the whole point.
-    applied = ""
-    env_file = (Path(os.environ.get("PROGRAMDATA", r"C:\ProgramData"))
-                / "VemalsEars" / "relay.env")
-    try:
-        for line in env_file.read_text(encoding="ascii").splitlines():
-            key, _, value = line.partition("=")
-            if key.strip() == "VEMALS_EARS_CLIENT_VERSION":
-                applied = value.strip()
-    except OSError as error:
-        raise SystemExit(
-            "The installer is published but the advertised version could "
-            "not be confirmed (" + str(error) + "). Members may not be "
-            "offered the update; check the console before assuming they were."
-        )
-    if applied != version:
-        raise SystemExit(
-            "The installer is published, but the relay did NOT accept the "
-            "version (it reports " + repr(applied) + ").\n"
-            "Nobody will be offered the update until this is fixed.\n"
-            "Most likely the console service is running older code than "
-            "this checkout: restart DowntimeConsole from an elevated "
-            "prompt, then run this command again - republishing the same "
-            "version is safe."
-        )
-    print("==> relay now advertises " + version + ". " +
-          str(settings.get("restart", "")))
-    print()
-    print("Members are offered the update the next time their client")
-    print("connects. Nothing is installed for them without a click.")
+    publish_artifacts(
+        version,
+        destination,
+        INSTALLER,
+        installer_identity,
+        source_bundle,
+        source_identity,
+        advertise=advertise,
+    )
     return 0
 
 
@@ -256,10 +600,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--no-advertise",
         action="store_true",
-        help="publish the download but do NOT tell clients about it. The "
-             "update advert adds a key to the authenticated frame that "
-             "clients older than 0.2.0 reject outright, so while any are "
-             "still enrolled this ships the file without breaking them.",
+        help="retain immutable versioned artifacts but do not switch the "
+             "release pointer or rolling public aliases",
     )
     parser.add_argument(
         "--sign-thumbprint", default="",

@@ -95,6 +95,39 @@ class WorkflowContracts(unittest.TestCase):
         self.assertEqual("write", job["permissions"]["id-token"])
         self.assertNotIn("id-token", signing["jobs"]["validate"]["permissions"])
 
+    def test_signed_release_publishes_verified_versioned_complete_source(self):
+        signing = workflow("vemals-ears-windows.yml")
+        build = signing["jobs"]["build_sign"]
+        commands = "\n".join(step.get("run", "") for step in build["steps"])
+        self.assertIn("-SourceCompleteMember", commands)
+        self.assertIn("MAX_LEGACY_COMPATIBLE_UPDATE_BYTES", commands)
+        self.assertIn(
+            "from GuildHub.update_contract import MAX_UPDATE_BYTES", commands
+        )
+        self.assertIn("python packaging/verify_bundle.py", commands)
+        self.assertIn("[System.IO.File]::OpenRead", commands)
+        self.assertIn("$algorithm.Dispose()", commands)
+        self.assertIn("$stream.Dispose()", commands)
+        self.assertNotIn(
+            "$sourceHash = (Get-FileHash", commands
+        )
+        versioned = "vemals-ears-member-${{ needs.validate.outputs.version }}.zip"
+        upload = next(
+            step for step in build["steps"]
+            if step.get("uses", "").startswith("actions/upload-artifact@")
+        )
+        self.assertIn(versioned, upload["with"]["path"])
+        published = signing["jobs"]["publish"]
+        release = next(
+            step for step in published["steps"]
+            if step.get("uses", "").startswith("softprops/action-gh-release@")
+        )
+        self.assertIn(versioned, release["with"]["files"])
+        self.assertIn(
+            "https://ears.xenon.solutions/source/${{ needs.validate.outputs.version }}",
+            release["with"]["body"],
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

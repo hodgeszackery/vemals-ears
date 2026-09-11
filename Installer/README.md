@@ -59,7 +59,9 @@ The default unsigned build is labeled for development:
 The result is `dist/Vemals-Ears-Setup-UNSIGNED.exe`. The build downloads the
 exact Python runtime and wheels recorded in `runtime-lock.json`, verifies every
 SHA-256 digest, stages only the explicit application allowlist, compiles the
-native launcher, and uses the locked Inno Setup version.
+native launcher, and uses the locked Inno Setup version. The installer omits
+the large archives under `runtime/Source` so existing clients can download it,
+but retains their exact `MANIFEST.json` and `README.txt` receipt.
 
 Unsigned builds deliberately contain no automatic-execution trust metadata.
 They can still be installed manually, but the app will not silently run a
@@ -73,6 +75,10 @@ signed release. Matching client source and instructions are included in
 `app/Source/vemals-ears-source.zip` and `app/docs/SOURCE.txt` after installation.
 Recipients do not need the private GitHub repository or publisher's signing
 credentials to rebuild; see `docs/SOURCE.txt`.
+
+The exact source-complete member ZIP, including every upstream runtime source
+archive, is public at the versioned URL in `docs/SOURCE.txt`. Keep that ZIP
+available for as long as the matching installer is distributed.
 
 Inno Setup 7.1.0 and the Visual Studio x64 C++ Build Tools must be installed for
 a local build. The release workflow downloads and verifies the locked Inno
@@ -112,7 +118,9 @@ workflow does the following in order:
 7. Writes that exact publisher subject into the installed manifest as a list,
    allowing a signed transition release to carry both publisher identities
    when a certificate identity must rotate.
-8. Passes only `Vemals-Ears-Setup.exe` and its `.sha256` file to a separate
+8. Builds and verifies the source-complete member ZIP, gives it an immutable
+   versioned filename, and passes it with `Vemals-Ears-Setup.exe`, its
+   `.sha256` file, and the application source ZIP to a separate
    `contents: write` job. The unsigned proof build is never published.
 
 A manual dispatch leaves the signed files as a protected workflow artifact. A
@@ -167,7 +175,8 @@ runner directory and never adds it to the repository or release.
 2. Push a matching tag, for example `vemals-ears-v0.2.0`.
 3. Approve the `windows-release` environment deployment.
 4. Confirm the workflow's signature and post-sign checksum checks passed.
-5. Distribute or mirror the two files attached to the GitHub release.
+5. Distribute or mirror the installer, checksum, and matching versioned source
+   files attached to the GitHub release.
 
 Code signing proves publisher identity and detects changed installer bytes. It
 does not guarantee that Microsoft SmartScreen reputation appears immediately;

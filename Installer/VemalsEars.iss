@@ -129,7 +129,12 @@ Source: "{#StageRoot}\VemalsEars.exe"; DestDir: "{app}"; Flags: ignoreversion si
 #else
 Source: "{#StageRoot}\VemalsEars.exe"; DestDir: "{app}"; Flags: ignoreversion
 #endif
-Source: "{#StageRoot}\runtime\*"; DestDir: "{app}\runtime"; Flags: ignoreversion recursesubdirs createallsubdirs
+; Keep the installed updater below the 200 MiB limit in older VE clients. The
+; exact source-complete member ZIP stays public at /source/<version>. Retain
+; the runtime source manifest and guide here as the receipt for that bundle.
+Source: "{#StageRoot}\runtime\*"; DestDir: "{app}\runtime"; Excludes: "Source\*"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "{#StageRoot}\runtime\Source\MANIFEST.json"; DestDir: "{app}\runtime\Source"; Flags: ignoreversion
+Source: "{#StageRoot}\runtime\Source\README.txt"; DestDir: "{app}\runtime\Source"; Flags: ignoreversion
 Source: "{#StageRoot}\app\*"; DestDir: "{app}\app"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "{#StageRoot}\payload-manifest.json"; DestDir: "{app}"; Flags: ignoreversion
 
