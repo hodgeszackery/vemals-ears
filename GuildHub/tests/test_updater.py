@@ -96,9 +96,59 @@ class DiscoveryTests(unittest.TestCase):
             )
         )
 
+    def test_valid_current_and_older_manifests_are_not_errors(self):
+        for advertised, current in (
+            ("0.5.12", "0.5.12"),
+            ("0.5.12.0", "0.5.12"),
+            ("0.5.11", "0.5.12"),
+        ):
+            with self.subTest(advertised=advertised, current=current):
+                offer = self.offer()
+                offer["version"] = advertised
+                body = json.dumps({
+                    "type": "update_manifest",
+                    "update": offer,
+                }).encode()
+                self.assertIsNone(
+                    updater.fetch_update_offer(
+                        MemoryStore(credentials()),
+                        current_version=current,
+                        opener=lambda _request, timeout, body=body: Response(body),
+                    )
+                )
+
+    def test_malformed_non_null_manifest_body_fails_closed(self):
+        malformed = (
+            [],
+            "not-an-object",
+            {"version": "0.5.13"},
+            {**self.offer(), "version": "not-a-version"},
+            {**self.offer(), "version": "0.5.12", "sha256": "not-a-digest"},
+            {**self.offer(), "version": "0.5.11", "bytes": 0},
+            {**self.offer(), "url": "http://ears.example.invalid/update.exe"},
+        )
+        for offer in malformed:
+            with self.subTest(offer=offer):
+                body = json.dumps({
+                    "type": "update_manifest",
+                    "update": offer,
+                }).encode()
+                with self.assertRaises(updater.AutomaticUpdateError):
+                    updater.fetch_update_offer(
+                        MemoryStore(credentials()),
+                        current_version="0.5.12",
+                        opener=lambda _request, timeout, body=body: Response(body),
+                    )
+
     def test_invalid_or_oversized_response_fails_closed(self):
         invalid = (
             b"not json",
+            json.dumps({"type": "update_manifest"}).encode(),
+            json.dumps({
+                "type": "update_manifest",
+                "update": None,
+                "extra": True,
+            }).encode(),
             json.dumps({"type": "wrong", "update": None}).encode(),
             b"x" * (updater.MAX_MANIFEST_BYTES + 1),
         )
