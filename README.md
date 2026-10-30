@@ -2,7 +2,7 @@
 
 Live captions and guild chat for World of Warcraft voice channels, on Windows.
 
-Made for a friend named Vemal, who was deaf, so he could follow the raid
+Made for a friend named Vemal, who is deaf, so he could follow the raid
 voice chat everyone else took for granted. It is named after him.
 
 ## What it does
