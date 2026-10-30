@@ -2,7 +2,7 @@ Vemal's Ears (By Downtime)
 =========================
 
 Standalone Windows captions and guild chat project.
-Canonical source: https://github.com/hodgeszackery/vemals-ears (private).
+Canonical source: https://github.com/hodgeszackery/vemals-ears
 Local checkout: E:/Projects/vemals-ears
 License: GPL-3.0-only; see LICENSE.
 
