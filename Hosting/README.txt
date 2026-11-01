@@ -1,6 +1,18 @@
 Vemal's Ears - Windows NVIDIA Host
 =================================
 
+WINDOWS INSTALLER
+
+For setup without commands, run Vemals-Ears-Host-Setup.exe and follow the
+graphical wizard. Read Hosting/QUICKSTART.txt for the short operator guide.
+The installer includes private Python, Node and Windows service tools. The
+wizard prepares NVIDIA speech recognition and optional Cloudflare Tunnel.
+
+To build the installer from this source package:
+  python packaging/build_host_installer.py
+
+The instructions below are the alternative source/ZIP setup for developers.
+
 Host your own guild's captions and typed chat with the same speech model,
 NVIDIA acceleration and privacy behavior as the original host. This package
 includes the relay, one-use pairing pages, Discord worker and setup tools.

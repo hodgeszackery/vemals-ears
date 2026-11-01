@@ -137,40 +137,70 @@ foreach ($service in $services) {
         }
     }
 }
-$logs = Join-Path $StateDirectory 'logs'
-New-Item -ItemType Directory -Force -Path $logs | Out-Null
-foreach ($service in @($services[1], $services[0])) {
-    $existing = Get-Service -Name $service.Name -ErrorAction SilentlyContinue
-    if ($existing -and $existing.Status -ne 'Stopped') {
-        Stop-Service -Name $service.Name -ErrorAction Stop
-        (Get-Service -Name $service.Name).WaitForStatus('Stopped', [TimeSpan]::FromSeconds(30))
+function Install-RegisteredHostServices {
+    param([array]$Services, [string]$PythonPath, [string]$RepoRoot,
+          [string]$StateDirectory, [string]$NodePath)
+    $created = [Collections.Generic.List[string]]::new()
+    foreach ($service in $Services) {
+        if ($service.Name -notin @('VemalsEarsHostRelay', 'VemalsEarsHostWorker')) {
+            throw 'Unknown host service name; no services changed.'
+        }
+    }
+    try {
+        $logs = Join-Path $StateDirectory 'logs'
+        New-Item -ItemType Directory -Force -Path $logs | Out-Null
+        foreach ($service in @($Services[1], $Services[0])) {
+            $existing = Get-Service -Name $service.Name -ErrorAction SilentlyContinue
+            if ($existing -and $existing.Status -ne 'Stopped') {
+                Stop-Service -Name $service.Name -ErrorAction Stop
+                (Get-Service -Name $service.Name).WaitForStatus('Stopped', [TimeSpan]::FromSeconds(30))
+            }
+        }
+        foreach ($service in $Services) {
+            $existing = Get-Service -Name $service.Name -ErrorAction SilentlyContinue
+            if (-not $existing) {
+                Invoke-Nssm install $service.Name $PythonPath
+                $created.Add($service.Name)
+            }
+            Invoke-Nssm set $service.Name Application $PythonPath
+            Invoke-Nssm set $service.Name AppParameters $service.Parameters
+            Invoke-Nssm set $service.Name AppDirectory $RepoRoot
+            Invoke-Nssm set $service.Name AppStdout (Join-Path $logs ($service.Role + '.log'))
+            Invoke-Nssm set $service.Name AppStderr (Join-Path $logs ($service.Role + '.log'))
+            Invoke-Nssm set $service.Name AppRotateFiles 1
+            Invoke-Nssm set $service.Name AppRotateBytes 1048576
+            Invoke-Nssm set $service.Name AppExit Default Restart
+            Invoke-Nssm set $service.Name AppExit 3 Exit
+            Invoke-Nssm set $service.Name AppRestartDelay 30000
+            Invoke-Nssm set $service.Name AppStopMethodConsole 15000
+            Invoke-Nssm set $service.Name Start SERVICE_DELAYED_AUTO_START
+            Invoke-Nssm set $service.Name DisplayName $service.Title
+            Invoke-Nssm set $service.Name AppEnvironmentExtra ('PATH=' + (Split-Path $NodePath) + ';' + $env:PATH)
+            $actualDirectory = Get-NssmValue $service.Name AppDirectory
+            if ([IO.Path]::GetFullPath($actualDirectory) -ne $RepoRoot) {
+                throw "Service $($service.Name) has the wrong source directory; services remain stopped."
+            }
+        }
+        Invoke-Nssm set VemalsEarsHostWorker DependOnService VemalsEarsHostRelay
+        foreach ($service in $Services) {
+            Start-Service -Name $service.Name -ErrorAction Stop
+            (Get-Service -Name $service.Name).WaitForStatus('Running', [TimeSpan]::FromSeconds(30))
+        }
+    } catch {
+        $originalError = $_
+        $cleanupFailed = $false
+        # Only registrations created successfully in this invocation belong to
+        # rollback. Existing services and every other installation stay intact.
+        for ($index = $created.Count - 1; $index -ge 0; $index--) {
+            $name = $created[$index]
+            try { Invoke-Nssm stop $name } catch { }
+            try { Invoke-Nssm remove $name confirm } catch { $cleanupFailed = $true }
+        }
+        if ($cleanupFailed) {
+            throw 'Setup failed and Windows could not remove a new service registration. Check host status before retrying.'
+        }
+        throw $originalError
     }
 }
-foreach ($service in $services) {
-    $existing = Get-Service -Name $service.Name -ErrorAction SilentlyContinue
-    if (-not $existing) { Invoke-Nssm install $service.Name $PythonPath }
-    Invoke-Nssm set $service.Name Application $PythonPath
-    Invoke-Nssm set $service.Name AppParameters $service.Parameters
-    Invoke-Nssm set $service.Name AppDirectory $repoRoot
-    Invoke-Nssm set $service.Name AppStdout (Join-Path $logs ($service.Role + '.log'))
-    Invoke-Nssm set $service.Name AppStderr (Join-Path $logs ($service.Role + '.log'))
-    Invoke-Nssm set $service.Name AppRotateFiles 1
-    Invoke-Nssm set $service.Name AppRotateBytes 1048576
-    Invoke-Nssm set $service.Name AppExit Default Restart
-    Invoke-Nssm set $service.Name AppExit 3 Exit
-    Invoke-Nssm set $service.Name AppRestartDelay 30000
-    Invoke-Nssm set $service.Name AppStopMethodConsole 15000
-    Invoke-Nssm set $service.Name Start SERVICE_DELAYED_AUTO_START
-    Invoke-Nssm set $service.Name DisplayName $service.Title
-    Invoke-Nssm set $service.Name AppEnvironmentExtra ('PATH=' + (Split-Path $nodePath) + ';' + $env:PATH)
-    $actualDirectory = Get-NssmValue $service.Name AppDirectory
-    if ([IO.Path]::GetFullPath($actualDirectory) -ne $repoRoot) {
-        throw "Service $($service.Name) has the wrong source directory; services remain stopped."
-    }
-}
-Invoke-Nssm set VemalsEarsHostWorker DependOnService VemalsEarsHostRelay
-foreach ($service in $services) {
-    Start-Service -Name $service.Name -ErrorAction Stop
-    (Get-Service -Name $service.Name).WaitForStatus('Running', [TimeSpan]::FromSeconds(30))
-}
+Install-RegisteredHostServices -Services $services -PythonPath $PythonPath -RepoRoot $repoRoot -StateDirectory $StateDirectory -NodePath $nodePath
 Write-Host 'Host services started. Verify /healthz, Discord pairing, and captions with the guide.'

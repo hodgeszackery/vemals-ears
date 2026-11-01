@@ -24,7 +24,9 @@ class HostSetupTests(unittest.TestCase):
     def test_configuration_uses_only_new_host_identity_and_separate_secret_files(self):
         with mock.patch.object(setup, "protect_directory") as protect:
             values = self.configure()
-        protect.assert_called_once_with(self.state.resolve())
+        protect.assert_called_once()
+        self.assertEqual(self.state.parent, protect.call_args.args[0].parent)
+        self.assertTrue(protect.call_args.args[0].name.startswith(".VemalsEarsHost-"))
         config = (self.state / "relay.env").read_text(encoding="ascii")
         self.assertNotIn(self.options["bot_token"], config)
         self.assertNotIn("xenon.solutions", config)
@@ -64,6 +66,7 @@ class HostSetupTests(unittest.TestCase):
             {"public_hostname": "https://ears.example.org"},
             {"public_hostname": "127.0.0.1"},
             {"guild_id": "123"}, {"guild_name": "Guild\nEXTRA=value"},
+            {"guild_name": "G" * 81},
             {"bot_token": "XENO_fixture_token_with_\u00e9"}, {"port": 0},
             {"client_download_url": "https://user:password@example.org/client.exe"},
         )
@@ -77,7 +80,19 @@ class HostSetupTests(unittest.TestCase):
         with mock.patch.object(setup, "protect_directory", side_effect=setup.SetupError("ACL failed")):
             with self.assertRaises(setup.SetupError):
                 self.configure()
-        self.assertEqual([], list(self.state.iterdir()))
+        self.assertFalse(self.state.exists())
+        self.assertEqual([], list(self.state.parent.iterdir()))
+
+    def test_interrupted_configuration_can_retry_without_manual_cleanup(self):
+        with mock.patch.object(setup, "protect_directory"), \
+             mock.patch.object(setup.relay_env, "save", side_effect=OSError("Synthetic disk failure")):
+            with self.assertRaises(OSError):
+                self.configure()
+        self.assertFalse(self.state.exists())
+        self.assertEqual([], list(self.state.parent.iterdir()))
+        with mock.patch.object(setup, "protect_directory"):
+            self.configure()
+        self.assertTrue((self.state / "relay.env").is_file())
 
     def test_state_cannot_live_inside_shareable_package(self):
         with self.assertRaises(setup.SetupError):

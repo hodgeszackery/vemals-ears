@@ -10,6 +10,7 @@ from pathlib import Path
 import re
 import secrets
 import subprocess
+import tempfile
 from urllib.parse import urlsplit
 
 from GuildHub import relay_env
@@ -95,9 +96,9 @@ def create_configuration(
     domain = hostname(public_hostname)
     if not _SNOWFLAKE.fullmatch(guild_id):
         raise SetupError("The Discord server ID must contain 17 to 20 digits.")
-    if (not guild_name.strip() or len(guild_name) > 96
+    if (not guild_name.strip() or len(guild_name) > 80
             or any(ord(char) < 32 or ord(char) > 126 for char in guild_name)):
-        raise SetupError("The guild name must contain 1 to 96 printable ASCII characters.")
+        raise SetupError("The guild name must contain 1 to 80 printable ASCII characters.")
     if not 1 <= port <= 65535:
         raise SetupError("The relay port must be between 1 and 65535.")
     try:
@@ -109,25 +110,14 @@ def create_configuration(
     client_url = download_url(client_download_url or "https://" + domain + "/download")
     # A new directory avoids accidentally replacing an existing host's database,
     # secrets or inherited permissions. Reruns use prepare, never configure.
-    try:
-        state.mkdir(parents=True, exist_ok=False)
-    except FileExistsError:
-        raise SetupError("State directory already exists. Choose a new directory; existing hosts are never overwritten.") from None
-    protect_directory(state)
-    for relative in ("secrets", "relay", "downloads", "logs", "consent", "profile/WoWVoiceCaptions"):
-        (state / relative).mkdir(parents=True, exist_ok=True)
+    if state.exists():
+        raise SetupError("State directory already exists. Choose a new directory; existing hosts are never overwritten.")
     private = {
         "pepper": secrets.token_urlsafe(48),
         "publisher-token": secrets.token_urlsafe(48),
         "discord-application-id": credentials.application_id,
         "discord-bot-token": credentials.bot_token,
     }
-    for name, value in private.items():
-        target = state / "secrets" / name
-        with target.open("x", encoding="ascii", newline="\n") as stream:
-            stream.write(value + "\n")
-        if os.name != "nt":
-            target.chmod(0o600)
     values = {
         "VEMALS_EARS_BIND": "127.0.0.1",
         "VEMALS_EARS_PORT": str(port),
@@ -150,12 +140,30 @@ def create_configuration(
         "VEMALS_EARS_IDLE_DEVICE_SECONDS": "2592000",
         "VEMALS_EARS_REVOKED_RETENTION_SECONDS": "2592000",
     }
-    relay_env.save(values, state / "relay.env")
-    (state / "Caddyfile").write_text(
-        "# Run on this Windows host. Point public DNS here and allow TCP 80/443.\n"
-        + domain + " {\n    reverse_proxy 127.0.0.1:" + str(port) + "\n}\n",
-        encoding="ascii",
-    )
+    state.parent.mkdir(parents=True, exist_ok=True)
+    # Build private state beside its final location, then publish it with one
+    # rename. A failed write/ACL check never strands a half-configured host at
+    # the fixed path, and a retry never needs to remove existing credentials.
+    with tempfile.TemporaryDirectory(prefix=".VemalsEarsHost-", dir=state.parent) as folder:
+        staging = Path(folder)
+        protect_directory(staging)
+        for relative in ("secrets", "relay", "downloads", "logs", "consent", "profile/WoWVoiceCaptions"):
+            (staging / relative).mkdir(parents=True, exist_ok=True)
+        for name, value in private.items():
+            target = staging / "secrets" / name
+            with target.open("x", encoding="ascii", newline="\n") as stream:
+                stream.write(value + "\n")
+            if os.name != "nt":
+                target.chmod(0o600)
+        relay_env.save(values, staging / "relay.env")
+        (staging / "Caddyfile").write_text(
+            "# Run on this Windows host. Point public DNS here and allow TCP 80/443.\n"
+            + domain + " {\n    reverse_proxy 127.0.0.1:" + str(port) + "\n}\n",
+            encoding="ascii",
+        )
+        if state.exists():
+            raise SetupError("Another setup created this host state. Reopen the Host app.")
+        staging.rename(state)
     return values
 
 

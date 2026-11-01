@@ -39,6 +39,13 @@ See `docs/SOURCE.txt` to modify and rebuild without signing keys.
 
 ## Host your own guild
 
+For setup without commands, run `Vemals-Ears-Host-Setup.exe` and follow the
+graphical wizard. It includes private Python, Node and service tools, prepares
+NVIDIA speech recognition, and can install your Cloudflare Tunnel connector.
+See [the host quick start](Hosting/QUICKSTART.txt).
+
+Build the Windows installer with `python packaging/build_host_installer.py`.
+
 Build a shareable Windows NVIDIA host package:
 
     python packaging/build_host.py

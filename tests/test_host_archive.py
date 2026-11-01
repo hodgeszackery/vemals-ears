@@ -218,8 +218,11 @@ class HostArchiveTests(unittest.TestCase):
                 acl = json.loads(inspected.stdout)
                 self.assertTrue(acl["protected"], inspected.stdout + inspected.stderr)
                 expected_sids = {acl["currentSid"], "S-1-5-18", "S-1-5-32-544"}
-                self.assertEqual(expected_sids, set(acl["stateSids"]))
-                self.assertEqual(expected_sids, set(acl["secretSids"]))
+                # Windows may retain an OWNER RIGHTS ACE on Python-created
+                # temporary directories. It denotes the same owning account.
+                for actual_sids in (set(acl["stateSids"]), set(acl["secretSids"])):
+                    self.assertTrue(expected_sids.issubset(actual_sids))
+                    self.assertTrue(actual_sids.issubset(expected_sids | {"S-1-3-4"}))
             else:
                 self.assertEqual(0o700, stat.S_IMODE(state.stat().st_mode))
                 self.assertEqual(0o600, stat.S_IMODE((state / "secrets/discord-bot-token").stat().st_mode))
