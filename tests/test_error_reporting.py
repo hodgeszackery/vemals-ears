@@ -24,6 +24,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 
 SKIP_PARTS = {".git", "__pycache__", "dist", "node_modules", "runtime"}
+GENERATED_ROOTS = (ROOT / "Installer/build", ROOT / "Installer/cache")
 
 # Reporting calls whose literal text reaches a person.
 REPORTING = {"print", "info", "warning", "error", "exception", "critical"}
@@ -67,6 +68,8 @@ def source_files() -> list[Path]:
     for pattern in ("*.py", "*.pyw"):
         for path in ROOT.rglob(pattern):
             if any(part in SKIP_PARTS for part in path.parts):
+                continue
+            if any(path.is_relative_to(folder) for folder in GENERATED_ROOTS):
                 continue
             if "tests" in path.parts:
                 continue

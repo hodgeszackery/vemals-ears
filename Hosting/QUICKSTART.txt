@@ -1,0 +1,54 @@
+Vemal's Ears Host - Setup
+========================
+
+1. Run Vemals-Ears-Host-Setup.exe and allow Windows administrator access.
+   Finish installation and open Vemal's Ears Host. You can reopen it later
+   from the Start menu or desktop shortcut.
+
+2. Enter your Discord server ID, your bot's Application ID and token, and
+   the public hostname your members will use. The wizard links to Discord's
+   Developer Portal. Keep the token private; the entry is masked.
+
+3. Choose a public connection. With Cloudflare Tunnel, use your own account
+   to create a tunnel and route your hostname to the local address shown in
+   the wizard. Paste only the tunnel token. The wizard installs the connector
+   for you. Or select an existing HTTPS/WebSocket forwarding setup.
+
+4. Choose the Vemal's Ears MEMBER installer file, or enter its HTTPS download
+   link. This is the app your members install; it is separate from Host Setup.
+
+5. Click Set up host. Setup downloads about 1.2 GB of verified speech assets,
+   prepares the Discord helper, and starts the host services. A compatible
+   NVIDIA GPU and driver are required. Python, Node and service tools are
+   included in Host Setup; no terminal commands are needed.
+
+6. Use Install Discord bot to add your bot to your server. Open the join page
+   to check the public connection and member download. In Discord, use
+   /vem setup to pair a member, join voice, and use /vem start. Each speaker
+   must consent. Check captions with another paired member in the channel.
+
+The dashboard shows local service readiness. A healthy local relay does not
+prove your public hostname or Discord permissions are correct. Test the join
+page and actual captions before inviting everyone.
+
+If preparation fails, correct the problem and click Retry setup. Edit settings
+lets you correct a hostname, token, connection or member download without
+replacing your relay keys. Blank token fields preserve saved credentials.
+Start host and Stop host control this installation's services.
+
+Keep the computer awake while hosting. The human host can leave voice while
+captions continue for the paired, consenting members who remain. The bot must
+stay connected. Members outside the active voice channel receive no captions.
+
+Private configuration, keys, consent and mappings live in
+C:/ProgramData/VemalsEarsHost. Uninstall removes this host's services and
+application but keeps that private state so it can be restored. Back it up
+privately while the host is stopped. Never share it with another guild.
+
+Each new operator needs their own Discord bot, hostname and optional Cloudflare
+account. Setup does not copy another host's account or register a domain.
+The installer does not change an existing VemalsEars or Downtime host.
+
+Application source and build inputs are installed under app/Source. Third-party
+notices and source are included beside the private runtime and tools.
+Developer/source-package instructions are in Hosting/README.txt.

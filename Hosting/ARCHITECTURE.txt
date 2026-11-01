@@ -1,0 +1,33 @@
+Standalone hosting boundary
+===========================
+
+The Windows host slice adds a VE-owned copy of the relay, credential store
+and release-pointer validator. It does not move or remove the shared relay
+from Downtime, and does not change production service registrations.
+Hosting/RELAY-IMPORT.json records the original source revision and hashes.
+
+Hosting/setup.py creates a new operator configuration and fresh relay keys.
+Hosting/service.py requires that explicit configuration and never falls back
+to the original host's URLs or interactive Windows profile. The relay stays
+on loopback behind an operator-configured HTTPS edge. The worker connects
+over local WebSocket and runs the existing consent-gated Discord/STT path.
+
+Both service roles use a dedicated state directory. Speech assets live under
+its profile/WoWVoiceCaptions/runtime, so LocalSystem and an interactive trial
+see the same verified installation. Consent, mappings, session state and
+device associations stay private and outside the source package.
+
+The shareable archive is an explicit allowlist of application/build source,
+locked dependency metadata and notices. It contains neither operator state
+nor downloaded NVIDIA binaries. It can be rebuilt without Git. Members still
+use the existing VE desktop application, obtained separately.
+
+The copied relay keeps the existing wire contract and hardcoded active-voice
+authorization. Future fixes to server.py, store.py, release_pointer.py or the
+shared protocol require checking the corresponding copy in Downtime. The
+credential-store schema retains legacy hosted-job fields for compatibility;
+the VE host does not expose hosted jobs or their administrative CLI.
+
+This extends ADR-001's source ownership decision for optional standalone VE
+hosting. It does not authorize a live migration, a public repository switch,
+or a change to the privacy audience.

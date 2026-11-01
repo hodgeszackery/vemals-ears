@@ -8,19 +8,21 @@ voice chat everyone else took for granted. It is named after him.
 ## What it does
 
 - Captures a Discord voice channel through a small adapter, sends the audio
-  to a self-hosted whisper worker (CPU container, source included), and shows
+  to a self-hosted whisper worker, and shows
   the captions as an overlay in the game.
 - Captions go only to paired devices inside the active voice channel. That
   consent gate is a hard rule of the design, not a setting.
-- Guild chat and member pairing ride on the same relay the Downtime addons
-  use; the relay, operator console and addons live in a separate project.
+- Guild chat and member pairing use the guild relay. A standalone VE relay
+  is included for self-hosting; Downtime's shared relay and operator tools
+  remain in their separate project.
 - Ships as an Authenticode-signed Windows installer with an automatic update
   path, and every release carries its matching source (GPL-3.0).
 
 ## Layout
 
 - `VoiceCaptions/` - Discord capture adapter (Node), speech runtime, overlay
-- `GuildHub/` - member wire client, pairing helpers, voice worker
+- `GuildHub/` - member wire client, pairing helpers, voice worker, standalone relay
+- `Hosting/` - Windows NVIDIA host setup, service installer and guide
 - `Installer/`, `packaging/`, `Windows/` - installer and native launcher
 - `tests/` - 70 test modules; `ci/` - the release checks
 - `docs/` - development, CI, source-distribution and migration notes
@@ -34,6 +36,29 @@ voice chat everyone else took for granted. It is named after him.
 
 `dev.py` runs local validation; `build_release.py` builds the member ZIP.
 See `docs/SOURCE.txt` to modify and rebuild without signing keys.
+
+## Host your own guild
+
+For setup without commands, run `Vemals-Ears-Host-Setup.exe` and follow the
+graphical wizard. It includes private Python, Node and service tools, prepares
+NVIDIA speech recognition, and can install your Cloudflare Tunnel connector.
+See [the host quick start](Hosting/QUICKSTART.txt).
+
+Build the Windows installer with `python packaging/build_host_installer.py`.
+
+Build a shareable Windows NVIDIA host package:
+
+    python packaging/build_host.py
+
+Extract `dist/VemalsEars-Host.zip` and follow [the hosting guide](Hosting/README.txt).
+It includes the relay, pairing pages and Discord speech worker. Setup preserves
+the speech and privacy defaults while creating fresh credentials for each host.
+The host supplies their own Discord bot, HTTPS address and member installer.
+No Downtime checkout or private repository access is needed.
+
+The human host can leave the voice channel while captions continue for members
+who remain. The host computer and bot must stay running; recipients still need
+to be in the active voice channel.
 
 ## License
 
