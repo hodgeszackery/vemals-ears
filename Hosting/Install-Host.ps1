@@ -31,14 +31,21 @@ $PythonPath = (Resolve-Path -LiteralPath $PythonPath).Path
 $nodePath = (Get-Command node -ErrorAction SilentlyContinue).Source
 if (-not $nodePath) { throw 'Install Node.js 22.12 or newer first.' }
 
-& $PythonPath -I -B -c "import sys; sys.path.insert(0, sys.argv[1]); from GuildHub import server, host; from Hosting.service import main; sys.exit(main(['--state-directory', sys.argv[2], '--check-only', 'relay']))" $repoRoot $StateDirectory
-if ($LASTEXITCODE -ne 0) { throw 'Host source, Python dependencies, or configuration preflight failed.' }
-& $PythonPath -I -B -c "import sys; sys.path.insert(0, sys.argv[1]); from Hosting.service import main; sys.exit(main(['--state-directory', sys.argv[2], '--check-only', 'worker']))" $repoRoot $StateDirectory
+$activation = if ($CheckOnly) { 'check' } else { 'install' }
+$modeOutput = & $PythonPath -I -B -c "import sys; sys.path.insert(0, sys.argv[1]); from GuildHub import host; from Hosting.service import load_configuration, validate_activation; values=load_configuration(sys.argv[2]); validate_activation(values) if sys.argv[3] == 'install' else None; print(values['VEMALS_EARS_HOST_MODE'])" $repoRoot $StateDirectory $activation
+if ($LASTEXITCODE -ne 0) { throw 'Host source, configuration, or takeover confirmation preflight failed.' }
+$hostMode = ($modeOutput | Out-String).Trim()
+if ($hostMode -notin @('standalone', 'remote-worker')) { throw 'Unknown host mode; no services changed.' }
+& $PythonPath -I -B -c "import sys; sys.path.insert(0, sys.argv[1]); from Hosting.service import main; sys.exit(main(['--state-directory', sys.argv[2], '--host-mode', sys.argv[3], '--check-only', 'worker']))" $repoRoot $StateDirectory $hostMode
 if ($LASTEXITCODE -ne 0) { throw 'NVIDIA speech runtime preflight failed. Run host setup prepare first.' }
-$runningRelay = Get-Service -Name VemalsEarsHostRelay -ErrorAction SilentlyContinue
-if (-not $runningRelay -or $runningRelay.Status -ne 'Running') {
-    & $PythonPath -I -B -c "import sys; sys.path.insert(0, sys.argv[1]); from Hosting.service import main; sys.exit(main(['--state-directory', sys.argv[2], '--check-only', '--check-port', 'relay']))" $repoRoot $StateDirectory
-    if ($LASTEXITCODE -ne 0) { throw 'The relay port is unavailable. No services changed.' }
+if ($hostMode -eq 'standalone') {
+    & $PythonPath -I -B -c "import sys; sys.path.insert(0, sys.argv[1]); from GuildHub import server; from Hosting.service import main; sys.exit(main(['--state-directory', sys.argv[2], '--check-only', 'relay']))" $repoRoot $StateDirectory
+    if ($LASTEXITCODE -ne 0) { throw 'Relay source or configuration preflight failed.' }
+    $runningRelay = Get-Service -Name VemalsEarsHostRelay -ErrorAction SilentlyContinue
+    if (-not $runningRelay -or $runningRelay.Status -ne 'Running') {
+        & $PythonPath -I -B -c "import sys; sys.path.insert(0, sys.argv[1]); from Hosting.service import main; sys.exit(main(['--state-directory', sys.argv[2], '--check-only', '--check-port', 'relay']))" $repoRoot $StateDirectory
+        if ($LASTEXITCODE -ne 0) { throw 'The relay port is unavailable. No services changed.' }
+    }
 }
 Push-Location -LiteralPath (Join-Path $repoRoot 'VoiceCaptions/discord_adapter')
 try {
@@ -121,25 +128,46 @@ function Get-NssmValue {
     if ($result.ExitCode -ne 0) { throw "Could not read $ServiceName service configuration." }
     return $result.StandardOutput.Trim()
 }
-$services = @(
-    @{ Name = 'VemalsEarsHostRelay'; Role = 'relay'; Title = "Vemal's Ears Host Relay" },
-    @{ Name = 'VemalsEarsHostWorker'; Role = 'worker'; Title = "Vemal's Ears Host Captions" }
-)
-# A service name belonging to a different state directory is not an upgrade.
-# Validate both registrations before stopping either process.
-foreach ($service in $services) {
-    $service.Parameters = '-B -m Hosting.service --state-directory "' + $StateDirectory + '" ' + $service.Role
-    $existing = Get-Service -Name $service.Name -ErrorAction SilentlyContinue
-    if ($existing) {
-        $parameters = Get-NssmValue $service.Name AppParameters
-        if ($parameters -ne $service.Parameters) {
-            throw "Service $($service.Name) belongs to another configuration; no services changed."
+function Get-HostServiceDefinitions {
+    param([string]$HostMode, [string]$StateDirectory)
+    if ($HostMode -notin @('standalone', 'remote-worker')) { throw 'Unknown host mode.' }
+    $selected = @()
+    if ($HostMode -eq 'standalone') {
+        $selected += @{ Name = 'VemalsEarsHostRelay'; Role = 'relay'; Title = "Vemal's Ears Host Relay" }
+    }
+    $selected += @{ Name = 'VemalsEarsHostWorker'; Role = 'worker'; Title = "Vemal's Ears Host Captions" }
+    foreach ($service in $selected) {
+        $service.Parameters = '-B -m Hosting.service --state-directory "' + $StateDirectory + '" '
+        if ($HostMode -eq 'remote-worker') { $service.Parameters += '--host-mode remote-worker ' }
+        $service.Parameters += $service.Role
+    }
+    return $selected
+}
+function Assert-HostServiceOwnership {
+    param([array]$Services, [string]$PythonPath, [string]$RepoRoot)
+    # Validate all selected registrations before stopping any process.
+    foreach ($service in $Services) {
+        $existing = Get-Service -Name $service.Name -ErrorAction SilentlyContinue
+        if ($existing) {
+            $parameters = Get-NssmValue $service.Name AppParameters
+            $application = Get-NssmValue $service.Name Application
+            $directory = Get-NssmValue $service.Name AppDirectory
+            if ($parameters -ne $service.Parameters -or
+                [IO.Path]::GetFullPath($application) -ne $PythonPath -or
+                [IO.Path]::GetFullPath($directory) -ne $RepoRoot) {
+                throw "Service $($service.Name) belongs to another configuration; no services changed."
+            }
         }
     }
 }
 function Install-RegisteredHostServices {
     param([array]$Services, [string]$PythonPath, [string]$RepoRoot,
-          [string]$StateDirectory, [string]$NodePath)
+          [string]$StateDirectory, [string]$NodePath, [string]$HostMode = 'standalone')
+    if ($HostMode -notin @('standalone', 'remote-worker')) { throw 'Unknown host mode.' }
+    if ($HostMode -eq 'remote-worker' -and
+        ($Services.Count -ne 1 -or $Services[0].Name -ne 'VemalsEarsHostWorker')) {
+        throw 'Remote-worker installation can manage only its caption worker.'
+    }
     $created = [Collections.Generic.List[string]]::new()
     foreach ($service in $Services) {
         if ($service.Name -notin @('VemalsEarsHostRelay', 'VemalsEarsHostWorker')) {
@@ -149,7 +177,8 @@ function Install-RegisteredHostServices {
     try {
         $logs = Join-Path $StateDirectory 'logs'
         New-Item -ItemType Directory -Force -Path $logs | Out-Null
-        foreach ($service in @($Services[1], $Services[0])) {
+        for ($index = $Services.Count - 1; $index -ge 0; $index--) {
+            $service = $Services[$index]
             $existing = Get-Service -Name $service.Name -ErrorAction SilentlyContinue
             if ($existing -and $existing.Status -ne 'Stopped') {
                 Stop-Service -Name $service.Name -ErrorAction Stop
@@ -181,7 +210,11 @@ function Install-RegisteredHostServices {
                 throw "Service $($service.Name) has the wrong source directory; services remain stopped."
             }
         }
-        Invoke-Nssm set VemalsEarsHostWorker DependOnService VemalsEarsHostRelay
+        if ($HostMode -eq 'remote-worker') {
+            Invoke-Nssm reset VemalsEarsHostWorker DependOnService
+        } else {
+            Invoke-Nssm set VemalsEarsHostWorker DependOnService VemalsEarsHostRelay
+        }
         foreach ($service in $Services) {
             Start-Service -Name $service.Name -ErrorAction Stop
             (Get-Service -Name $service.Name).WaitForStatus('Running', [TimeSpan]::FromSeconds(30))
@@ -202,5 +235,7 @@ function Install-RegisteredHostServices {
         throw $originalError
     }
 }
-Install-RegisteredHostServices -Services $services -PythonPath $PythonPath -RepoRoot $repoRoot -StateDirectory $StateDirectory -NodePath $nodePath
+$services = @(Get-HostServiceDefinitions -HostMode $hostMode -StateDirectory $StateDirectory)
+Assert-HostServiceOwnership -Services $services -PythonPath $PythonPath -RepoRoot $repoRoot
+Install-RegisteredHostServices -Services $services -PythonPath $PythonPath -RepoRoot $repoRoot -StateDirectory $StateDirectory -NodePath $nodePath -HostMode $hostMode
 Write-Host 'Host services started. Verify /healthz, Discord pairing, and captions with the guide.'

@@ -1,9 +1,21 @@
 Vemal's Ears Host - Setup
 ========================
 
+Illustrated guide: https://ears.xenon.solutions/hosting
+Host installer: https://ears.xenon.solutions/download/vemals-ears-host
+Host source: https://ears.xenon.solutions/download/vemals-ears-host/source
+SHA256: https://ears.xenon.solutions/download/vemals-ears-host/sha256
+Member installer: https://ears.xenon.solutions/download
+
+The opening screen offers Set up a new host, Export from the current host,
+and Import on the replacement PC. For a new guild, follow the first section.
+For an existing guild, use the worker takeover section below.
+
+SET UP A NEW HOST
+
 1. Run Vemals-Ears-Host-Setup.exe and allow Windows administrator access.
    Finish installation and open Vemal's Ears Host. You can reopen it later
-   from the Start menu or desktop shortcut.
+   from the Start menu or desktop shortcut. Choose Set up a new host.
 
 2. Enter your Discord server ID, your bot's Application ID and token, and
    the public hostname your members will use. The wizard links to Discord's
@@ -22,7 +34,7 @@ Vemal's Ears Host - Setup
    NVIDIA GPU and driver are required. Python, Node and service tools are
    included in Host Setup; no terminal commands are needed.
 
-6. Use Install Discord bot to add your bot to your server. Open the join page
+6. Use Add bot to Discord to add your bot to your server. Open the join page
    to check the public connection and member download. In Discord, use
    /vem setup to pair a member, join voice, and use /vem start. Each speaker
    must consent. Check captions with another paired member in the channel.
@@ -34,10 +46,66 @@ page and actual captions before inviting everyone.
 If preparation fails, correct the problem and click Retry setup. Edit settings
 lets you correct a hostname, token, connection or member download without
 replacing your relay keys. Blank token fields preserve saved credentials.
-Start host and Stop host control this installation's services.
+Start and Stop control this installation's services.
+
+TAKE OVER THE ORIGINAL HOST'S CAPTION WORKER
+
+This path recognizes the original Windows VemalsEarsWorker installation.
+It does not export arbitrary standalone Host Setup installations. Use the
+latest Host Setup on both PCs. The replacement needs Windows x64, NVIDIA
+graphics, a current CUDA 12.4-capable driver and administrator access.
+
+The original PC MUST remain online. Its relay, pairing, member downloads,
+public hostname/tunnel and Downtime stay there. Only the Discord bot worker
+and NVIDIA speech recognition move to the replacement PC.
+
+1. On the original PC, choose Export from the current host. Check the guild
+   and public address. Select Choose save location for a new .vehost file
+   outside public downloads. Enter a passphrase of at least 12 characters
+   twice. Keep this file and passphrase private.
+
+2. Confirm that you are ready to stop the caption worker. Select Stop worker
+   and export. Only the original caption worker is stopped and disabled, so
+   rebooting cannot start two copies. Other services keep running. Send the
+   encrypted file privately; give the replacement operator its passphrase
+   separately. Never publish it with the installer or source package.
+
+3. On the replacement PC, choose Import on the replacement PC, then Choose
+   handoff file. Enter the passphrase and select Open handoff. Verify the
+   guild name, existing public URL, Discord server ID and Application ID.
+   Existing destination host state is never overwritten.
+
+4. Confirm that the original caption worker is stopped and disabled and
+   that this will be the only replacement worker. Select Import and start
+   captions. Setup imports protected state, downloads about 1.2 GB of speech
+   assets and starts only the replacement caption worker.
+
+5. Keep both PCs online and check the replacement dashboard. Members keep
+   their existing app connections; do not create a new bot or pair again.
+   A member in the voice channel runs /vem start to begin a new session.
+   Test captions and typed chat with another paired member in that channel.
+
+The encrypted handoff carries bot/publisher credentials, existing guild and
+public addresses, consent choices and character mappings. It carries no relay
+database, relay pepper, tunnel credentials, audio, transcripts or session-
+resume state. It is not a backup of the entire original host.
+
+Cancel unused handoff is only for a replacement that has NEVER started.
+Discard the exported file and do not start its imported replacement before
+resuming the original worker. After the replacement has run, its consent and
+mapping state may be newer. Returning then requires a fresh transfer of that
+current state and a coordinated worker switch; this cancel button cannot
+perform that return. Never run both workers at the same time.
+
+The replacement's Start, Stop and Retry setup controls affect only its
+worker. Imported identity stays fixed. Prepare and start captions asks for
+confirmation that the original worker is stopped before activation.
+
+FOR BOTH SETUP PATHS
 
 Keep the computer awake while hosting. The human host can leave voice while
-captions continue for the paired, consenting members who remain. The bot must
+captions continue for paired members who remain. Only consenting speakers
+are captured; declining capture does not itself block reading. The bot must
 stay connected. Members outside the active voice channel receive no captions.
 
 Private configuration, keys, consent and mappings live in
@@ -45,9 +113,11 @@ C:/ProgramData/VemalsEarsHost. Uninstall removes this host's services and
 application but keeps that private state so it can be restored. Back it up
 privately while the host is stopped. Never share it with another guild.
 
-Each new operator needs their own Discord bot, hostname and optional Cloudflare
-account. Setup does not copy another host's account or register a domain.
-The installer does not change an existing VemalsEars or Downtime host.
+Each NEW host needs its own bot, hostname and optional Cloudflare account.
+New-host setup does not copy another operator's state or register a domain.
+Takeover preserves the existing identity through the explicit encrypted
+handoff workflow. It changes only the original caption worker; Downtime and
+the original public relay/tunnel stay running.
 
 Application source and build inputs are installed under app/Source. Third-party
 notices and source are included beside the private runtime and tools.

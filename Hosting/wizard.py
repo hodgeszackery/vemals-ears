@@ -94,7 +94,7 @@ def prepare_host(backend, settings: dict, progress, configured, *, configure_exi
 
 
 class HostWizard:
-    def __init__(self, root: tk.Tk, backend, *, open_url=webbrowser.open):
+    def __init__(self, root: tk.Tk, backend, *, open_url=webbrowser.open, takeover_backend=None):
         self.root = root
         self.backend = backend
         self.open_url = open_url
@@ -120,6 +120,9 @@ class HostWizard:
                 ("tunnel_mode", "cloudflare"),
             )
         }
+        from Hosting.takeover_ui import TakeoverUi
+        self.takeover_ui = TakeoverUi(self, takeover_backend)
+        self.error_back = self.show_connection
         self.notice = tk.StringVar(root)
         self.progress_text = tk.StringVar(root, value="Reading your host settings...")
         self.root.title("Vemal's Ears - Host")
@@ -228,6 +231,11 @@ class HostWizard:
         return frame, entry
 
     def _clear(self, page, step):
+        if hasattr(self, "progress_bar"):
+            try:
+                self.progress_bar.stop()
+            except tk.TclError:
+                pass
         self.page = page
         self.notice.set("")
         for child in self.body.winfo_children():
@@ -247,7 +255,7 @@ class HostWizard:
             self.show_dashboard({"detail": "Checking your host..."})
             self.refresh_status()
         else:
-            self.show_server()
+            self.takeover_ui.show_choices()
 
     def _load_again(self):
         self._show_progress("Opening your host", "Reading your saved settings...")
@@ -271,6 +279,7 @@ class HostWizard:
             self.values["tunnel_token"].set("")
 
     def show_server(self):
+        self.error_back = self.show_connection
         self._clear("server", "1  YOUR SERVER     /     2  CONNECTIONS     /     3  HOST")
         self._heading("Bring captions to your server", "Use your own Discord bot and a public address for your host.")
         fields = tk.Frame(self.body, bg=PANEL)
@@ -316,10 +325,13 @@ class HostWizard:
         self._button(self.navigation, "Continue", self.next_page, primary=True).pack(side="right")
         if self.editing:
             self._button(self.navigation, "Cancel", self.cancel_edit).pack(side="left")
+        elif not self.configured:
+            self._button(self.navigation, "Back", self.takeover_ui.show_choices).pack(side="left")
 
     def collect_settings(self):
         values = {key: variable.get().strip() for key, variable in self.values.items()
-                  if key not in {"installer_mode", "tunnel_mode"}}
+                  if key not in {"installer_mode", "tunnel_mode"}
+                  and not key.startswith("handoff_")}
         values["tunnel_enabled"] = self.values["tunnel_mode"].get() == "cloudflare"
         if self.values["installer_mode"].get() == "file":
             values["client_download_url"] = ""
@@ -411,6 +423,9 @@ class HostWizard:
             self.values["client_installer"].set(filename)
 
     def begin_setup(self):
+        if self.settings.get("mode") == "remote-worker" and not self.settings.get("takeover_confirmed"):
+            self.takeover_ui.show_activation()
+            return
         if self.busy:
             return
         settings = self.collect_settings()
@@ -434,9 +449,9 @@ class HostWizard:
         self._start_job(work, self._setup_complete, retry=self.begin_setup)
 
     def _show_progress(self, title, detail):
-        self._clear("progress", "1  YOUR SERVER     /     2  CONNECTIONS     /     3  HOST")
+        self._clear("progress", "HOST SETUP")
         self._heading(title, detail)
-        self._label(self.body, "NVIDIA speech recognition", size=14, bold=True).pack(anchor="w", pady=(36, 12))
+        self._label(self.body, "Progress", size=14, bold=True).pack(anchor="w", pady=(36, 12))
         self.progress_bar = ttk.Progressbar(self.body, mode="indeterminate", style="Host.Horizontal.TProgressbar")
         self.progress_bar.pack(fill="x", pady=(0, 18))
         self.progress_bar.start(18)
@@ -474,16 +489,23 @@ class HostWizard:
                      disabled=not self.settings.get("bot_install_url")).pack(side="left", padx=(0, 12))
         self._button(actions, "Open join page", lambda: self._open(self.settings.get("join_url", "")),
                      primary=True, disabled=not self.settings.get("join_url")).pack(side="left")
-        self._label(self.body, "In Discord: use /vem setup to pair, then /vem start in a voice channel.\nTest with a consenting member. A healthy relay alone does not verify captions.",
+        remote = self.settings.get("mode") == "remote-worker"
+        instruction = ("Existing members keep their connections. Start a new /vem start session and test captions and typed chat.\nKeep the original PC online for the shared relay, pairing and Downtime." if remote else
+                       "In Discord: use /vem setup to pair, then /vem start in a voice channel.\nTest with a consenting member. A healthy relay alone does not verify captions.")
+        self._label(self.body, instruction,
                     color=MUTED, size=9).pack(anchor="w", pady=(4, 0))
         self._button(self.navigation, "Retry setup", self.begin_setup).pack(side="left", padx=(0, 10))
-        self._button(self.navigation, "Edit settings", self.edit_settings).pack(side="left", padx=(0, 10))
+        if not remote:
+            self._button(self.navigation, "Edit settings", self.edit_settings).pack(side="left", padx=(0, 10))
         self._button(self.navigation, "Stop", lambda: self.control_services("stop")).pack(side="left")
         self._button(self.navigation, "Check", self.refresh_status).pack(side="right", padx=(10, 0))
         self._button(self.navigation, "Start", lambda: self.control_services("start"), primary=True).pack(side="right")
 
     def edit_settings(self):
         if not self.busy:
+            if self.settings.get("mode") == "remote-worker":
+                self.notice.set("This replacement preserves the existing host identity and connection.")
+                return
             self.editing = True
             self.show_server()
 
@@ -499,6 +521,9 @@ class HostWizard:
 
     def control_services(self, action):
         if self.busy:
+            return
+        if action == "start" and self.settings.get("mode") == "remote-worker" and not self.settings.get("takeover_confirmed"):
+            self.takeover_ui.show_activation()
             return
         self.notice.set("Starting host services..." if action == "start" else "Stopping host services...")
 
@@ -554,7 +579,7 @@ class HostWizard:
                         for child in self.navigation.winfo_children():
                             child.destroy()
                         if not self.configured:
-                            self._button(self.navigation, "Back", self.show_connection).pack(side="left")
+                            self._button(self.navigation, "Back", self.error_back).pack(side="left")
                         self._button(self.navigation, "Retry", self.retry_action, primary=True).pack(side="right")
                 elif kind == "complete":
                     self.busy = False
