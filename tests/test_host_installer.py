@@ -4,7 +4,9 @@ import importlib.util
 import json
 from pathlib import Path
 import subprocess
+import sys
 import tempfile
+from types import ModuleType, SimpleNamespace
 import unittest
 from unittest import mock
 
@@ -143,6 +145,128 @@ class HostInstallerTests(unittest.TestCase):
                 with self.assertRaisesRegex(installer.HostInstallerError, "TestBuild"):
                     installer.smoke_installer(executable)
                 run.assert_not_called()
+
+    def execute_preview_script(self, states):
+        """Drive the actual generated launcher with a deterministic event loop."""
+        witness = SimpleNamespace(now=0.0, events=[], callbacks=[], destroyed=False,
+                                  visible=False, app=None)
+        case = self
+
+        class Root:
+            def withdraw(self):
+                witness.events.append("hidden")
+
+            def after_idle(self, callback):
+                witness.callbacks.append(callback)
+
+            def after(self, delay, callback):
+                case.assertGreater(delay, 0, "Readiness retries must yield to the event loop")
+                witness.callbacks.append(callback)
+
+            def deiconify(self):
+                witness.visible = True
+                witness.events.append(("visible", witness.app.busy, witness.app.page, witness.now))
+
+            def destroy(self):
+                witness.destroyed = True
+                witness.events.append("destroyed")
+
+            def mainloop(self):
+                for now, busy, page in states:
+                    case.assertTrue(witness.callbacks, "Readiness observation stopped too early")
+                    witness.now = now
+                    witness.app.busy, witness.app.page = busy, page
+                    witness.callbacks.pop(0)()
+                    if witness.visible or witness.destroyed:
+                        return
+                case.fail("Preview neither became ready nor reached its bounded timeout")
+
+        root = Root()
+        preview_controller = object()
+
+        def create_wizard(actual_root, controller, *, open_url):
+            self.assertIs(root, actual_root)
+            self.assertIs(preview_controller, controller)
+            self.assertEqual(["hidden"], witness.events, "Hide before constructing the asynchronous wizard")
+            self.assertIsNone(open_url("https://example.org/preview-only"))
+            witness.app = SimpleNamespace(busy=True, page="progress")
+            return witness.app
+
+        package = ModuleType("Hosting")
+        package.wizard = SimpleNamespace(tk=SimpleNamespace(Tk=lambda: root),
+            HostWizard=create_wizard, PreviewController=lambda: preview_controller)
+        clock = ModuleType("time")
+        clock.monotonic = lambda: witness.now
+        with mock.patch.dict(sys.modules, {"Hosting": package, "time": clock}):
+            try:
+                exec(installer.smoke_preview_script(), {})
+            except SystemExit as error:
+                witness.exit_code = error.code
+            else:
+                witness.exit_code = 0
+        return witness
+
+    def test_smoke_preview_remains_hidden_until_initial_job_and_choice_page_are_ready(self):
+        witness = self.execute_preview_script((
+            (0.1, True, "progress"),
+            (0.8, True, "choose-host"),
+            (1.1, False, "progress"),
+            (1.2, False, "choose-host"),
+        ))
+        self.assertEqual(["hidden", ("visible", False, "choose-host", 1.2)], witness.events)
+        self.assertFalse(witness.destroyed)
+        self.assertEqual(0, witness.exit_code)
+
+    def test_smoke_preview_timeout_never_exposes_or_claims_a_ready_window(self):
+        for busy, page in ((True, "choose-host"), (False, "progress")):
+            with self.subTest(busy=busy, page=page):
+                witness = self.execute_preview_script(((0.1, busy, page), (19.9, busy, page), (20.0, busy, page)))
+                self.assertEqual(["hidden", "destroyed"], witness.events)
+                self.assertFalse(witness.visible)
+                self.assertTrue(witness.destroyed)
+                self.assertEqual(3, witness.exit_code)
+
+    def test_external_close_runs_only_after_the_exact_preview_reports_readiness(self):
+        with tempfile.TemporaryDirectory() as folder:
+            destination = Path(folder).resolve()
+            helper = destination / "app/Hosting/Close-Host.ps1"
+            helper.parent.mkdir(parents=True)
+            helper.write_text("# synthetic close helper", encoding="ascii")
+            for ready_code in (0, 3):
+                with self.subTest(ready_code=ready_code):
+                    process = mock.Mock(pid=4321)
+                    process.wait.return_value = 0
+                    process.poll.return_value = 0 if ready_code == 0 else None
+                    events = []
+
+                    def run(arguments, **options):
+                        if "-Command" in arguments:
+                            events.append("readiness")
+                            self.assertEqual("4321", options["env"]["XENO_HOST_SMOKE_PID"])
+                            return subprocess.CompletedProcess(arguments, ready_code, "", "")
+                        self.assertEqual(["readiness"], events)
+                        self.assertEqual(0, ready_code, "A failed readiness probe must not send a close request")
+                        self.assertIn(str(helper), arguments)
+                        self.assertIn(str(destination / "runtime/pythonw.exe"), arguments)
+                        events.append("close")
+                        return subprocess.CompletedProcess(arguments, 0, "", "")
+
+                    with mock.patch.object(installer.subprocess, "Popen", return_value=process) as launch, \
+                         mock.patch.object(installer.subprocess, "run", side_effect=run):
+                        if ready_code:
+                            with self.assertRaisesRegex(installer.HostInstallerError, "did not open"):
+                                installer.smoke_wizard(destination)
+                        else:
+                            installer.smoke_wizard(destination)
+                    command = launch.call_args.args[0]
+                    self.assertEqual(str(destination / "runtime/pythonw.exe"), command[0])
+                    self.assertEqual(installer.smoke_preview_script(), command[-1])
+                    self.assertIn("-c", command)
+                    self.assertEqual(["readiness", "close"] if ready_code == 0 else ["readiness"], events)
+                    if ready_code:
+                        process.terminate.assert_called_once_with()
+                    else:
+                        process.terminate.assert_not_called()
 
 
 if __name__ == "__main__":

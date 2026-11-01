@@ -239,10 +239,33 @@ class WizardUiTests(unittest.TestCase):
         self.root.update()
         self.assertLessEqual(self.app.navigation.winfo_y() + self.app.navigation.winfo_height(),
                              self.root.winfo_height())
-        self.assertGreater(self.app.body.winfo_reqheight() + 40, self.app.canvas.winfo_height())
+        self.assertTrue(self.app.scroll_needed)
+        self.assertTrue(self.app.scrollbar.winfo_ismapped())
+        self.root.event_generate("<MouseWheel>", delta=-120)
+        self.root.update()
+        self.assertGreater(self.app.canvas.canvasy(0), 0)
         self.app.canvas.yview_moveto(1)
         self.root.update_idletasks()
         self.assertGreater(self.app.canvas.yview()[0], 0)
+
+        def fields(parent):
+            for child in parent.winfo_children():
+                if isinstance(child, tk.Entry) and child.winfo_ismapped():
+                    yield child
+                yield from fields(child)
+
+        entries = list(fields(self.app.body))
+        self.assertTrue(entries, "The overflowing form must contain a real input")
+        final_entry = max(entries, key=lambda entry: entry.winfo_rooty())
+        self.app.canvas.yview_moveto(0)
+        self.root.update()
+        final_entry.focus_force()
+        self.root.update()
+        canvas_top = self.app.canvas.winfo_rooty()
+        self.assertIs(final_entry, self.root.focus_get())
+        self.assertGreaterEqual(final_entry.winfo_rooty(), canvas_top)
+        self.assertLessEqual(final_entry.winfo_rooty() + final_entry.winfo_height(),
+                             canvas_top + self.app.canvas.winfo_height())
         for child in self.app.navigation.winfo_children():
             self.assertGreater(child.winfo_width(), 1)
             self.assertLessEqual(child.winfo_x() + child.winfo_width(), self.app.navigation.winfo_width())
@@ -251,6 +274,41 @@ class WizardUiTests(unittest.TestCase):
         for child in self.app.navigation.winfo_children():
             self.assertGreater(child.winfo_width(), 1)
             self.assertLessEqual(child.winfo_x() + child.winfo_width(), self.app.navigation.winfo_width())
+
+    def test_fitting_page_has_no_scrollbar_or_wheel_movement(self):
+        self.create(FakeController())
+        self.root.deiconify()
+        self.root.geometry("820x700")
+        self.root.update()
+        self.assertFalse(self.app.scroll_needed)
+        self.assertFalse(self.app.scrollbar.winfo_ismapped())
+        self.assertEqual(0, self.app.canvas.canvasy(0))
+        for delta in (-120, -360, 120):
+            self.root.event_generate("<MouseWheel>", delta=delta)
+            self.root.update()
+            self.assertEqual(0, self.app.canvas.canvasy(0))
+            self.assertEqual((0.0, 1.0), self.app.canvas.yview())
+
+    def test_enlarging_overflowing_page_resets_to_top_and_hides_scrollbar(self):
+        self.create(FakeController(configured=True))
+        self.root.deiconify()
+        self.root.geometry("680x560")
+        self.app.edit_settings()
+        self.app.show_connection()
+        self.root.update()
+        self.assertTrue(self.app.scroll_needed)
+        self.app.canvas.yview_moveto(1)
+        self.root.update()
+        self.assertGreater(self.app.canvas.canvasy(0), 0)
+        self.root.geometry("1100x1000")
+        self.root.update()
+        self.assertFalse(self.app.scroll_needed)
+        self.assertFalse(self.app.scrollbar.winfo_ismapped())
+        self.assertEqual(0, self.app.canvas.canvasy(0))
+        self.assertEqual((0.0, 1.0), self.app.canvas.yview())
+        self.root.event_generate("<MouseWheel>", delta=-120)
+        self.root.update()
+        self.assertEqual(0, self.app.canvas.canvasy(0))
 
 
 if __name__ == "__main__":

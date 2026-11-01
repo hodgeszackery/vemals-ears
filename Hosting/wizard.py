@@ -18,9 +18,9 @@ import webbrowser
 
 ROOT = Path(__file__).resolve().parents[1]
 BG = "#0b0b0d"
-PANEL = "#171719"
-FIELD = "#222124"
-BORDER = "#494039"
+PANEL = BG
+FIELD = "#19191d"
+BORDER = "#343035"
 TEXT = "#f5eee2"
 MUTED = "#c0b4a1"
 GOLD = "#e4bd6b"
@@ -109,6 +109,9 @@ class HostWizard:
         self.retry_action = None
         self.completion = None
         self.current_status = {}
+        self.window_chrome = None
+        self.header_icons = {}
+        self.scroll_needed = False
         self.values = {
             key: tk.StringVar(root, value=default)
             for key, default in (
@@ -127,8 +130,8 @@ class HostWizard:
         self.progress_text = tk.StringVar(root, value="Reading your host settings...")
         self.root.title("Vemal's Ears - Host")
         self.root.configure(bg=BG)
-        self.root.geometry(str(min(840, self.root.winfo_screenwidth() - 80)) + "x"
-                           + str(min(760, max(560, self.root.winfo_screenheight() - 120))))
+        self.root.geometry(str(min(820, self.root.winfo_screenwidth() - 80)) + "x"
+                           + str(min(700, max(560, self.root.winfo_screenheight() - 120))))
         self.root.minsize(680, 560)
         self.root.option_add("*Font", "{Segoe UI} 10")
         self.root.protocol("WM_DELETE_WINDOW", self.close)
@@ -139,37 +142,26 @@ class HostWizard:
             except tk.TclError:
                 pass
         self._style()
-        header = tk.Frame(root, bg=BG)
-        header.pack(fill="x", padx=30, pady=(24, 14))
-        mark = tk.Label(header, text="VE", font=("Segoe UI", 19, "bold"),
-                        bg=GOLD, fg=BG, width=3, pady=6)
-        mark.pack(side="left", padx=(0, 14))
-        titles = tk.Frame(header, bg=BG)
-        titles.pack(side="left")
-        self._label(titles, "Vemal's Ears", size=22, bold=True).pack(anchor="w")
-        self._label(titles, "HOST  /  BY DOWNTIME", size=9, color=MUTED).pack(anchor="w", pady=(2, 0))
+        self._build_header(icon)
         self.step_label = self._label(root, "", size=10, color=GOLD)
-        self.step_label.pack(anchor="w", padx=30, pady=(0, 12))
-        self.content = tk.Frame(root, bg=PANEL, highlightbackground=BORDER, highlightthickness=1)
+        self.step_label.pack(anchor="w", padx=30, pady=(0, 6))
+        self.content = tk.Frame(root, bg=PANEL)
         self.content.pack(fill="both", expand=True, padx=30)
         self.canvas = tk.Canvas(self.content, bg=PANEL, bd=0, highlightthickness=0,
                                 yscrollincrement=24)
         self.scrollbar = ttk.Scrollbar(self.content, orient="vertical", command=self.canvas.yview,
                                         style="Host.Vertical.TScrollbar")
-        self.scrollbar.pack(side="right", fill="y")
         self.canvas.pack(side="left", fill="both", expand=True)
         self.canvas.configure(yscrollcommand=self.scrollbar.set)
         self.body = tk.Frame(self.canvas, bg=PANEL)
-        self.body_window = self.canvas.create_window(24, 20, window=self.body, anchor="nw")
+        self.body_window = self.canvas.create_window(0, 8, window=self.body, anchor="nw")
         self.body.bind("<Configure>", self._body_resized)
         self.canvas.bind("<Configure>", self._canvas_resized)
         self.notice_label = tk.Label(root, textvariable=self.notice, bg=BG, fg=RED,
                                      anchor="w", justify="left", wraplength=760)
         self.notice_label.pack(fill="x", padx=30, pady=(12, 0))
         self.navigation = tk.Frame(root, bg=BG)
-        self.navigation.pack(fill="x", padx=30, pady=(12, 16))
-        self._label(root, "Your computer stays online. You do not need to stay in voice.",
-                    size=9, color=MUTED).pack(pady=(0, 16))
+        self.navigation.pack(fill="x", padx=30, pady=(8, 16))
         self.root.bind("<Configure>", self._resize_notice, add="+")
         self.root.bind("<MouseWheel>", self._mousewheel, add="+")
         self.root.bind("<FocusIn>", self._reveal_focus, add="+")
@@ -177,6 +169,97 @@ class HostWizard:
         self._start_job(lambda progress: self.backend.read_settings(), self._loaded,
                         retry=lambda: self._load_again())
         self.poll_id = self.root.after(60, self._drain_events)
+        self.chrome_id = self.root.after_idle(self._attach_chrome)
+
+    def _build_header(self, icon):
+        self.header = tk.Frame(self.root, bg=BG)
+        self.header.pack(fill="x", pady=(0, 20))
+        self.header_controls = tk.Frame(self.header, bg=BG)
+        self.header_controls.pack(side="right", anchor="n", padx=(0, 1), pady=(1, 0))
+        self.minimize_button = self._window_button(
+            self.header_controls, "Minimize", "minimize", lambda: self.window_chrome.minimize())
+        self.maximize_button = self._window_button(
+            self.header_controls, "Maximize", "maximize", lambda: self.window_chrome.toggle_maximize())
+        self.close_button = self._window_button(self.header_controls, "Close", "close", self.close)
+        # Keep the native controls until custom framing has attached successfully.
+        self.header_controls.pack_forget()
+        identity = tk.Frame(self.header, bg=BG)
+        identity.pack(side="left", padx=(28, 16), pady=(19, 0))
+        mark = tk.Label(identity, bg=BG, fg=GOLD, font=("Segoe UI", 15, "bold"), text="VE")
+        try:
+            from PIL import Image, ImageTk
+            with Image.open(icon) as source:
+                self.header_mark = ImageTk.PhotoImage(source.convert("RGBA").resize((34, 34), Image.Resampling.LANCZOS), master=self.root)
+            mark.configure(image=self.header_mark, text="")
+        except (ImportError, OSError, tk.TclError):
+            pass
+        mark.pack(side="left", padx=(0, 12))
+        titles = tk.Frame(identity, bg=BG)
+        titles.pack(side="left")
+        title = self._label(titles, "Vemal's Ears", size=17, bold=True)
+        title.pack(anchor="w")
+        subtitle = self._label(titles, "Host setup", size=9, color=MUTED)
+        subtitle.pack(anchor="w", pady=(1, 0))
+        self.header_drag_widgets = (self.header, identity, mark, titles, title, subtitle)
+
+    def _header_icon(self, kind):
+        if kind in self.header_icons:
+            return self.header_icons[kind]
+        icon = tk.PhotoImage(master=self.root, width=16, height=16)
+        def line(x1, y1, x2, y2):
+            if x1 == x2 or y1 == y2:
+                icon.put(TEXT, to=(x1, y1, x2 + 1, y2 + 1))
+            else:
+                for step in range(abs(x2 - x1) + 1):
+                    icon.put(TEXT, (x1 + step, y1 + (step if y2 > y1 else -step)))
+        def rectangle(left, top, right, bottom):
+            line(left, top, right, top)
+            line(left, bottom, right, bottom)
+            line(left, top, left, bottom)
+            line(right, top, right, bottom)
+        if kind == "minimize":
+            line(3, 8, 12, 8)
+        elif kind == "maximize":
+            rectangle(3, 3, 12, 12)
+        elif kind == "restore":
+            line(6, 3, 12, 3)
+            line(12, 3, 12, 9)
+            line(10, 9, 12, 9)
+            line(6, 3, 6, 5)
+            rectangle(3, 6, 9, 12)
+        else:
+            line(3, 3, 12, 12)
+            line(3, 12, 12, 3)
+        self.header_icons[kind] = icon
+        return icon
+
+    def _window_button(self, parent, label, kind, command):
+        hover = "#b73542" if kind == "close" else FIELD
+        button = tk.Button(parent, text=label, image=self._header_icon(kind), command=command,
+                           compound="none", width=44, height=32, relief="flat", bd=0,
+                           bg=BG, activebackground=hover, highlightthickness=1,
+                           highlightbackground=BG, highlightcolor=GOLD, takefocus=True)
+        button.pack(side="left")
+        button.bind("<Enter>", lambda event: button.configure(bg=hover))
+        button.bind("<Leave>", lambda event: button.configure(bg=BG))
+        button.bind("<Return>", lambda event: button.invoke())
+        return button
+
+    def _attach_chrome(self):
+        self.chrome_id = None
+        if self.closed:
+            return
+        from Hosting.window_chrome import NativeWindowChrome
+        self.window_chrome = NativeWindowChrome(
+            self.root, drag_widgets=self.header_drag_widgets,
+            on_close=self.close, on_state_change=self._window_state_changed)
+        if self.window_chrome.attach():
+            self.header_controls.pack(side="right", anchor="n", padx=(0, 1), pady=(1, 0))
+
+    def _window_state_changed(self, maximized):
+        if not self.closed:
+            self.maximize_button.configure(text="Restore" if maximized else "Maximize",
+                                           image=self._header_icon("restore" if maximized else "maximize"))
 
     def _style(self):
         style = ttk.Style(self.root)
@@ -242,12 +325,21 @@ class HostWizard:
             child.destroy()
         for child in self.navigation.winfo_children():
             child.destroy()
-        self.step_label.configure(text=step)
+        steps = {"server": "New host / Server details", "connection": "New host / Connection",
+                 "takeover-export": "Transfer host / Original PC",
+                 "takeover-import": "Transfer host / Replacement PC",
+                 "takeover-confirm": "Transfer host / Confirm",
+                 "takeover-activate": "Transfer host / Start"}
+        self.step_label.configure(text=steps.get(page, ""))
+        if page in steps:
+            self.step_label.pack(anchor="w", padx=self._content_margin(), pady=(0, 6), before=self.content)
+        else:
+            self.step_label.pack_forget()
         self.canvas.yview_moveto(0)
 
     def _heading(self, title, description):
-        self._label(self.body, title, size=19, bold=True).pack(anchor="w")
-        self._label(self.body, description, color=MUTED).pack(anchor="w", pady=(8, 20))
+        self._label(self.body, title, size=21, bold=True).pack(anchor="w")
+        self._label(self.body, description, color=MUTED).pack(anchor="w", pady=(8, 24))
 
     def _loaded(self, settings):
         self._accept_settings(settings)
@@ -593,31 +685,55 @@ class HostWizard:
 
     def _resize_notice(self, event):
         if event.widget is self.root:
-            self.notice_label.configure(wraplength=max(300, event.width - 60))
+            margin = self._content_margin()
+            self.notice_label.configure(wraplength=max(300, min(900, event.width - 60)))
+            self.notice_label.pack_configure(padx=margin)
+            self.navigation.pack_configure(padx=margin)
+            if self.step_label.winfo_manager():
+                self.step_label.pack_configure(padx=margin)
+
+    def _content_margin(self):
+        return max(30, (self.root.winfo_width() - 900) // 2)
 
     def _body_resized(self, _event):
-        self.canvas.configure(scrollregion=(0, 0, self.canvas.winfo_width(), self.body.winfo_reqheight() + 40))
+        self._sync_scroll()
+
+    def _sync_scroll(self):
+        height = max(1, self.canvas.winfo_height())
+        required = self.body.winfo_reqheight() + 16
+        self.scroll_needed = required > height
+        if self.scroll_needed and not self.scrollbar.winfo_manager():
+            self.scrollbar.pack(side="right", fill="y", before=self.canvas, padx=(12, 0))
+        elif not self.scroll_needed and self.scrollbar.winfo_manager():
+            self.scrollbar.pack_forget()
+        self.canvas.configure(scrollregion=(0, 0, self.canvas.winfo_width(), max(height, required)))
+        if not self.scroll_needed:
+            self.canvas.yview_moveto(0)
 
     def _canvas_resized(self, event):
-        self.canvas.itemconfigure(self.body_window, width=max(100, event.width - 48))
+        width = max(100, min(900, event.width))
+        self.canvas.itemconfigure(self.body_window, width=width)
+        self.canvas.coords(self.body_window, max(0, (event.width - width) // 2), 8)
         self._body_resized(event)
 
     def _mousewheel(self, event):
-        if self.body.winfo_reqheight() + 40 > self.canvas.winfo_height():
+        if self.scroll_needed:
             self.canvas.yview_scroll(-int(event.delta / 120), "units")
 
     def _reveal_focus(self, event):
+        if not self.scroll_needed:
+            return
         widget = event.widget
         current = widget
         while current is not self.body:
             if current is self.root or current.master is None:
                 return
             current = current.master
-        top = widget.winfo_rooty() - self.body.winfo_rooty() + 20
+        top = widget.winfo_rooty() - self.body.winfo_rooty() + 8
         bottom = top + widget.winfo_height()
         visible_top = self.canvas.canvasy(0)
         visible_bottom = visible_top + self.canvas.winfo_height()
-        total = self.body.winfo_reqheight() + 40
+        total = self.body.winfo_reqheight() + 16
         if top < visible_top:
             self.canvas.yview_moveto(max(0, top - 12) / total)
         elif bottom > visible_bottom:
@@ -634,6 +750,10 @@ class HostWizard:
             if not messagebox.askyesno("Close host setup?", "Setup is still working. Closing now interrupts it.\nYou can reopen the app and retry with the same saved settings.", parent=self.root):
                 return
         self.closed = True
+        if self.chrome_id is not None:
+            self.root.after_cancel(self.chrome_id)
+        if self.window_chrome is not None:
+            self.window_chrome.detach()
         self.root.after_cancel(self.poll_id)
         self.root.destroy()
 

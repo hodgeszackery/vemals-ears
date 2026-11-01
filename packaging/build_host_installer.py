@@ -255,6 +255,33 @@ def smoke_installer(target: Path) -> None:
     print("Isolated host install, private-runtime imports, wizard close and uninstall passed.", flush=True)
 
 
+def smoke_preview_script() -> str:
+    """Expose only a ready preview, so the external close tests an idle UI."""
+    return "\n".join((
+        "import time",
+        "from Hosting import wizard",
+        "root = wizard.tk.Tk()",
+        "root.withdraw()",
+        "app = wizard.HostWizard(root, wizard.PreviewController(), open_url=lambda url: None)",
+        "deadline = time.monotonic() + 20",
+        "preview_ready = False",
+        "def expose_ready_preview():",
+        "    global preview_ready",
+        "    if not app.busy and app.page == 'choose-host':",
+        "        preview_ready = True",
+        "        root.deiconify()",
+        "        return",
+        "    if time.monotonic() >= deadline:",
+        "        root.destroy()",
+        "        return",
+        "    root.after(20, expose_ready_preview)",
+        "root.after_idle(expose_ready_preview)",
+        "root.mainloop()",
+        "if not preview_ready:",
+        "    raise SystemExit(3)",
+    ))
+
+
 def smoke_wizard(destination: Path) -> None:
     """Open an in-memory preview and close only its exact private runtime."""
     pythonw = destination / "runtime/pythonw.exe"
@@ -262,13 +289,13 @@ def smoke_wizard(destination: Path) -> None:
     if not close_script.is_file():
         raise HostInstallerError("The installed host is missing its graceful window-close helper.")
     process = subprocess.Popen(
-        [str(pythonw), "-E", "-s", "-B", "-m", "Hosting.wizard", "--smoke-test"],
+        [str(pythonw), "-E", "-s", "-B", "-c", smoke_preview_script()],
         cwd=destination / "app", stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
         creationflags=NO_WINDOW,
     )
     try:
-        # Observe only the newly created preview process. No arbitrary process
-        # name is used as evidence that this particular window opened.
+        # The child keeps the window hidden until its initial job has completed.
+        # Observe only that exact preview process, never another Python window.
         ready_script = "\n".join((
             "$deadline = (Get-Date).AddSeconds(20)",
             "do {",
