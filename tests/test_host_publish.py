@@ -137,7 +137,7 @@ class HostPublishTests(unittest.TestCase):
         # the real transaction. Only files under TemporaryDirectory are touched.
         for had_service in (False, True):
             with self.subTest(had_service=had_service), tempfile.TemporaryDirectory() as folder:
-                directory = Path(folder)
+                directory = Path(folder).resolve()
                 artifacts = directory / "artifacts"
                 downloads = directory / "state/downloads"
                 artifacts.mkdir()

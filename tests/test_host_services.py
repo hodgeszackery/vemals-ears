@@ -51,7 +51,7 @@ def write_configuration(state, values=None):
 class HostServiceTests(unittest.TestCase):
     def test_no_legacy_defaults_or_inherited_host_state_are_used(self):
         with tempfile.TemporaryDirectory() as folder:
-            state = Path(folder)
+            state = Path(folder).resolve()
             write_configuration(state)
             with patch.dict(os.environ, {
                 "VEMALS_EARS_PEPPER": "XENO_inherited_secret",
@@ -162,7 +162,7 @@ class HostServiceTests(unittest.TestCase):
         from VoiceCaptions import runtime_installer
 
         with tempfile.TemporaryDirectory() as folder:
-            state = Path(folder)
+            state = Path(folder).resolve()
             write_configuration(state)
             args = ["--state-directory", str(state), "--check-only", "worker"]
             for acceleration, driver_ready, expected in (

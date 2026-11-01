@@ -36,7 +36,7 @@ class HostArchiveTests(unittest.TestCase):
 
     def test_only_allowlisted_sources_are_read_even_beside_live_state(self):
         with tempfile.TemporaryDirectory() as folder:
-            root = Path(folder)
+            root = Path(folder).resolve()
             self.fixture(root)
             private_files = (
                 "Hosting/relay.env", "Hosting/state/relay.env",

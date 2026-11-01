@@ -12,7 +12,7 @@ from Hosting import setup
 class HostSetupTests(unittest.TestCase):
     def setUp(self):
         self.temporary = self.enterContext(tempfile.TemporaryDirectory())
-        self.state = Path(self.temporary) / "new-host"
+        self.state = Path(self.temporary).resolve() / "new-host"
         self.options = dict(
             public_hostname="ears.example.org", guild_id="123456789012345678",
             application_id="234567890123456789", bot_token="XENO_test_discord_token_fixture",
