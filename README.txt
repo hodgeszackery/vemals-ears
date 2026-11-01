@@ -34,6 +34,12 @@ The host slice includes its own relay and pairing pages. Setup generates
 fresh private credentials and retains the caption/privacy defaults; it does
 not copy an existing operator's state or require a Downtime checkout.
 
+The graphical Host Setup also has an encrypted takeover workflow for the
+original Windows caption worker. It preserves existing member connections;
+the original PC stays online for the shared relay, public access and Downtime.
+Only the worker moves. Read Hosting/QUICKSTART.txt or the illustrated guide:
+https://ears.xenon.solutions/hosting
+
 The shared Downtime guild relay, operator console, hosted jobs and addons
 remain in https://github.com/hodgeszackery/downtime-addons. VE also carries
 a standalone relay source copy for its own host package. The projects

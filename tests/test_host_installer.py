@@ -21,6 +21,17 @@ FIXTURE_FILES = (
 
 
 class HostInstallerTests(unittest.TestCase):
+    def test_host_version_is_independent_of_member_release(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            (root / "Hosting").mkdir()
+            (root / "GuildHub").mkdir()
+            (root / "GuildHub/version.py").write_text('CLIENT_VERSION = "9.9.9"\n', encoding="ascii")
+            with self.assertRaises(installer.HostInstallerError):
+                installer.source_version(root)
+            (root / "Hosting/version.py").write_text('HOST_VERSION = "0.5.14"\n', encoding="ascii")
+            self.assertEqual("0.5.14", installer.source_version(root))
+
     def source(self, root):
         for relative in FIXTURE_FILES:
             target = root / relative

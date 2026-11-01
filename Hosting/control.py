@@ -32,6 +32,11 @@ class HostError(RuntimeError):
     """A user-readable host setup or operation failure."""
 
 
+class _NoHealthRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, request, response, code, message, headers, new_url):
+        return None
+
+
 def default_state_directory() -> Path:
     return Path(os.environ.get("ProgramData", "C:/ProgramData")) / "VemalsEarsHost"
 
@@ -105,8 +110,24 @@ class HostController:
     def _get(self, name: str, setting: str) -> str:
         return self._nssm("get", name, setting).stdout.strip()
 
+    def _host_mode(self) -> str:
+        if not (self.state / "relay.env").is_file():
+            return service.STANDALONE
+        return service.load_configuration(self.state)["VEMALS_EARS_HOST_MODE"]
+
+    def _service_names(self) -> tuple[str, ...]:
+        return (WORKER,) if self._host_mode() == service.REMOTE_WORKER else SERVICES
+
+    def _validate_activation(self) -> None:
+        try:
+            service.validate_activation(service.load_configuration(self.state))
+        except service.ConfigurationError as error:
+            raise HostError(str(error)) from None
+
     def _owned_services(self) -> dict[str, str]:
-        statuses = {name: self._service_status(name) for name in SERVICES}
+        mode = self._host_mode()
+        selected = (WORKER,) if mode == service.REMOTE_WORKER else SERVICES
+        statuses = {name: self._service_status(name) for name in selected}
         for name, status in statuses.items():
             if status == "Not installed":
                 continue
@@ -122,7 +143,10 @@ class HostController:
                 ])
             else:
                 role = "relay" if name == RELAY else "worker"
-                expected = '-B -m Hosting.service --state-directory "' + str(self.state) + '" ' + role
+                expected = '-B -m Hosting.service --state-directory "' + str(self.state) + '" '
+                if mode == service.REMOTE_WORKER:
+                    expected += '--host-mode remote-worker '
+                expected += role
             if parameters != expected:
                 raise HostError("A host service uses another state folder. No services were changed.")
         return statuses
@@ -132,8 +156,10 @@ class HostController:
             return {"configured": False, "hostname": "", "guild_id": "", "application_id": "",
                     "guild_name": "Vemal's Ears", "port": 8770, "client_installer": "",
                     "client_download_url": "", "tunnel_enabled": True,
-                    "bot_install_url": "", "join_url": "", "identity_locked": False}
+                    "bot_install_url": "", "join_url": "", "identity_locked": False,
+                    "mode": service.STANDALONE, "takeover_confirmed": False}
         values = service.load_configuration(self.state)
+        remote = values["VEMALS_EARS_HOST_MODE"] == service.REMOTE_WORKER
         metadata = _read_json(self.state / "host-settings.json")
         try:
             application_id = Path(values["VEMALS_EARS_DISCORD_APPLICATION_ID_FILE"]).read_text(encoding="ascii").strip()
@@ -142,14 +168,21 @@ class HostController:
             raise HostError("The Discord application ID could not be read. Restore your private state backup.") from None
         return {
             "configured": True,
-            "identity_locked": self._identity_locked(values),
+            "mode": values["VEMALS_EARS_HOST_MODE"],
+            "takeover_confirmed": (remote and metadata.get("schema") == 1
+                                   and metadata.get("mode") == service.REMOTE_WORKER
+                                   and metadata.get("takeover_confirmed") is True),
+            "identity_locked": remote or self._identity_locked(values),
             "hostname": urlsplit(values["VEMALS_EARS_PUBLIC_HTTP_URL"]).hostname,
             "guild_id": values["VEMALS_EARS_GUILD_ID"], "application_id": application_id,
-            "guild_name": values["VEMALS_EARS_GUILD_NAME"], "port": int(values["VEMALS_EARS_PORT"]),
-            "client_installer": metadata.get("client_installer", ""),
+            "guild_name": values["VEMALS_EARS_GUILD_NAME"],
+            "port": None if remote else int(values["VEMALS_EARS_PORT"]),
+            "client_installer": "" if remote else metadata.get("client_installer", ""),
             "client_download_url": values["VEMALS_EARS_CLIENT_DOWNLOAD_URL"],
-            "tunnel_enabled": metadata.get("tunnel_enabled", False) is True,
-            "bot_install_url": install_url, "join_url": values["VEMALS_EARS_PUBLIC_HTTP_URL"] + "/join",
+            "tunnel_enabled": not remote and metadata.get("tunnel_enabled", False) is True,
+            "public_server_url": values["VEMALS_EARS_PUBLIC_SERVER_URL"],
+            "public_http_url": values["VEMALS_EARS_PUBLIC_HTTP_URL"],
+            "bot_install_url": install_url, "join_url": values["VEMALS_EARS_PUBLIC_HTTP_URL"].rstrip("/") + "/join",
         }
 
     def _identity_locked(self, values: dict) -> bool:
@@ -173,6 +206,8 @@ class HostController:
 
     def configure(self, settings: dict) -> None:
         current = self.read_settings()
+        if current["mode"] == service.REMOTE_WORKER or settings.get("mode", service.STANDALONE) != service.STANDALONE:
+            raise HostError("Imported worker settings preserve the existing host identity. Use the takeover controls instead of fresh-host setup.")
         domain = setup.hostname(str(settings.get("hostname", "")))
         guild_id = str(settings.get("guild_id", "")).strip()
         application_id = str(settings.get("application_id", "")).strip()
@@ -258,7 +293,10 @@ class HostController:
         settings = self.read_settings()
         if not settings["configured"]:
             raise HostError("Complete the host settings first.")
-        for path in (self.node, self.npm, self.nssm, self.cloudflared, self.python):
+        required_tools = (self.node, self.npm, self.nssm, self.python)
+        if settings["mode"] != service.REMOTE_WORKER:
+            required_tools += (self.cloudflared,)
+        for path in required_tools:
             if not path.is_file():
                 raise HostError("The host installation is incomplete. Run the Windows installer again.")
         if not runtime_installer.cuda_12_4_available():
@@ -288,6 +326,7 @@ class HostController:
         progress("Speech engine and Discord helper are ready.")
 
     def install_services(self) -> None:
+        self._validate_activation()
         self._owned_services()  # Validate every existing registration first.
         result = self._run([
             "powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
@@ -296,10 +335,15 @@ class HostController:
             "-NssmPath", str(self.nssm),
         ], timeout=180, check=False)
         if result.returncode:
+            if self._host_mode() == service.REMOTE_WORKER:
+                raise HostError("The imported caption worker could not start. Check NVIDIA readiness and administrator access, then retry.")
             raise HostError("Host services could not start. Check NVIDIA readiness, administrator access, and whether the relay port is already used.")
-        self._install_tunnel()
+        if self._host_mode() != service.REMOTE_WORKER:
+            self._install_tunnel()
 
     def _install_tunnel(self) -> None:
+        if self._host_mode() == service.REMOTE_WORKER:
+            return
         statuses = self._owned_services()
         if not self.read_settings()["tunnel_enabled"]:
             if statuses[TUNNEL] != "Not installed":
@@ -336,8 +380,11 @@ class HostController:
             raise
 
     def start_services(self) -> None:
+        self._validate_activation()
         statuses = self._owned_services()
-        selected = (RELAY, WORKER, TUNNEL) if self.read_settings()["tunnel_enabled"] else (RELAY, WORKER)
+        settings = self.read_settings()
+        selected = ((WORKER,) if settings["mode"] == service.REMOTE_WORKER else
+                    ((RELAY, WORKER, TUNNEL) if settings["tunnel_enabled"] else (RELAY, WORKER)))
         if any(statuses[name] == "Not installed" for name in selected):
             raise HostError("Finish setup before starting the host.")
         for name in selected:
@@ -347,14 +394,14 @@ class HostController:
     def stop_services(self) -> None:
         statuses = self._owned_services()
         for name in (WORKER, TUNNEL, RELAY):
-            if statuses[name] not in {"Not installed", "Stopped"}:
+            if name in statuses and statuses[name] not in {"Not installed", "Stopped"}:
                 self._nssm("stop", name)
 
     def remove_services(self) -> None:
         statuses = self._owned_services()
         self.stop_services()
         for name in (WORKER, TUNNEL, RELAY):
-            if statuses[name] != "Not installed":
+            if name in statuses and statuses[name] != "Not installed":
                 self._nssm("remove", name, "confirm")
 
     def status(self) -> dict:
@@ -363,11 +410,14 @@ class HostController:
             return {"configured": False, "relay": "Not installed", "worker": "Not installed",
                     "tunnel": "Not installed", "health": False, "detail": "Complete setup to start your host."}
         statuses = self._owned_services()
+        remote = settings["mode"] == service.REMOTE_WORKER
         healthy = False
-        if statuses[RELAY] == "Running":
-            opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+        if remote or statuses[RELAY] == "Running":
+            opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), _NoHealthRedirect())
+            url = (settings["public_http_url"].rstrip("/") if remote else
+                   "http://127.0.0.1:" + str(settings["port"])) + "/healthz"
             try:
-                with opener.open("http://127.0.0.1:" + str(settings["port"]) + "/healthz", timeout=2) as response:
+                with opener.open(url, timeout=2) as response:
                     healthy = json.loads(response.read(4096)) == {"status": "ok", "service": "vemals-ears"}
             except (OSError, ValueError):
                 pass
@@ -377,9 +427,15 @@ class HostController:
         elif healthy:
             detail = "Relay is ready. The caption worker is starting or needs attention; check Discord credentials and NVIDIA setup."
         else:
-            detail = "The relay is not ready. Start the host or retry setup."
-        return {"configured": True, "relay": statuses[RELAY], "worker": statuses[WORKER],
-                "tunnel": statuses[TUNNEL] if settings["tunnel_enabled"] else "External HTTPS",
+            detail = ("The shared relay is not reachable. Check the existing public host and internet connection."
+                      if remote else "The relay is not ready. Start the host or retry setup.")
+        if remote and not settings["takeover_confirmed"]:
+            detail = "Prepared for takeover. Confirm the previous caption worker is stopped before starting this worker."
+        return {"configured": True, "mode": settings["mode"],
+                "relay": ("Shared relay ready" if healthy else "Shared relay unavailable") if remote else statuses[RELAY],
+                "worker": statuses[WORKER],
+                "tunnel": ("Shared host" if remote else
+                           (statuses[TUNNEL] if settings["tunnel_enabled"] else "External HTTPS")),
                 "health": healthy and worker_ready, "detail": detail}
 
 
@@ -391,16 +447,21 @@ def installer_lifecycle(install_root: Path, state_directory: Path, *, remove: bo
     if marker.get("test_build") is True:
         return
     controller = HostController(install_root / "app", state_directory)
+    mode = controller._host_mode()
+    selected = controller._service_names()
     receipt_path = install_root / "host-resume.json"
     if resume:
         receipt = _read_json(receipt_path)
         if not receipt:
             return
         running = receipt.get("running")
-        if receipt.get("schema") != 1 or not isinstance(running, list) or any(name not in SERVICES for name in running):
+        if (receipt.get("schema") != 1 or receipt.get("mode", service.STANDALONE) != mode
+                or not isinstance(running, list) or any(name not in selected for name in running)):
             raise HostError("The host upgrade service receipt is invalid.")
+        if mode == service.REMOTE_WORKER:
+            controller._validate_activation()
         statuses = controller._owned_services()
-        for name in (RELAY, WORKER, TUNNEL):
+        for name in selected:
             if name in running and statuses[name] != "Running":
                 if statuses[name] == "Not installed":
                     raise HostError("An installed host service disappeared during the upgrade.")
@@ -417,9 +478,14 @@ def installer_lifecycle(install_root: Path, state_directory: Path, *, remove: bo
         controller.remove_services()
     else:
         previous = _read_json(receipt_path)
-        running = {name for name in previous.get("running", []) if name in SERVICES}
+        if previous and (previous.get("mode", service.STANDALONE) != mode
+                         or previous.get("schema") != 1
+                         or not isinstance(previous.get("running"), list)
+                         or any(name not in selected for name in previous["running"])):
+            raise HostError("The host upgrade service receipt is invalid.")
+        running = set(previous.get("running", []))
         running.update(name for name, status in statuses.items() if status == "Running")
-        _write_json(receipt_path, {"schema": 1, "running": sorted(running)})
+        _write_json(receipt_path, {"schema": 1, "mode": mode, "running": sorted(running)})
         controller.stop_services()
 
 

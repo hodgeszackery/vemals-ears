@@ -1,9 +1,10 @@
-Standalone hosting boundary
-===========================
+Hosting boundaries
+==================
 
 The Windows host slice adds a VE-owned copy of the relay, credential store
 and release-pointer validator. It does not move or remove the shared relay
-from Downtime, and does not change production service registrations.
+from Downtime. New-host setup does not change existing service registrations;
+the separate takeover flow controls only the recognized original worker.
 Hosting/RELAY-IMPORT.json records the original source revision and hashes.
 
 Hosting/setup.py creates a new operator configuration and fresh relay keys.
@@ -12,6 +13,48 @@ to the original host's URLs or interactive Windows profile. The relay stays
 on loopback behind an operator-configured HTTPS edge. The worker connects
 over local WebSocket and runs the existing consent-gated Discord/STT path.
 
+Existing-worker takeover
+-----------------------
+
+Hosting/takeover.py recognizes only the original VemalsEarsWorker service.
+Export stops and disables it, records its prior state in a protected local
+receipt, and writes an encrypted .vehost file. The original PC must stay
+online for its relay, pairing, member downloads, public tunnel and Downtime.
+The exporter does not support arbitrary standalone Host Setup registrations.
+
+Hosting/handoff.py authenticates and validates the bounded encrypted payload
+before import. It carries the guild identity, existing public WSS/HTTPS and
+member download URLs, bot Application ID/token, publisher token, consent
+ledger and character mappings. Relay database, pepper, tunnel credentials,
+audio, transcripts and session-resume state are excluded. An in-channel
+member starts a new caption session with /vem start after takeover.
+
+Import creates fresh protected destination state and refuses existing state.
+relay.env sets VEMALS_EARS_HOST_MODE=remote-worker. The worker uses the existing
+WSS origin; no local relay, database, pepper, port listener or tunnel is
+required. Only VemalsEarsHostWorker is installed, started, stopped, removed
+or resumed after upgrade. Its exact service arguments include --host-mode
+remote-worker, so standalone registrations cannot be adopted accidentally.
+The worker has no local relay service dependency. Health uses the shared
+HTTPS /healthz endpoint without credentials, queries or redirects, plus the
+local worker readiness marker.
+
+The GUI shows the imported IDs/public URL and requires confirmation that the
+old worker is stopped and disabled. A protected host-settings.json activation
+flag is enforced by the controller, installer and runtime. Preparation may
+install NVIDIA assets before confirmation without starting services.
+Imported identity is locked against fresh-host edits. Members keep their
+existing connections because the original relay and publisher identity stay.
+
+Cancel unused handoff restores the old worker only after explicit confirmation
+that the replacement has never started. Once the replacement has run, its
+consent/mapping state can be newer than the export. Returning requires that
+current state and a coordinated worker switch; the unused-handoff cancel
+path cannot perform it. Only one worker may run with the identity at a time.
+
+Runtime and privacy
+-------------------
+
 Both service roles use a dedicated state directory. Speech assets live under
 its profile/WoWVoiceCaptions/runtime, so LocalSystem and an interactive trial
 see the same verified installation. Consent, mappings, session state and
@@ -19,7 +62,7 @@ device associations stay private and outside the source package.
 
 The shareable archive is an explicit allowlist of application/build source,
 locked dependency metadata and notices. It contains neither operator state
-nor downloaded NVIDIA binaries. It can be rebuilt without Git. Members still
+nor handoff files or downloaded NVIDIA binaries. It can be rebuilt without Git. Members still
 use the existing VE desktop application, obtained separately.
 
 The copied relay keeps the existing wire contract and hardcoded active-voice
@@ -29,5 +72,5 @@ credential-store schema retains legacy hosted-job fields for compatibility;
 the VE host does not expose hosted jobs or their administrative CLI.
 
 This extends ADR-001's source ownership decision for optional standalone VE
-hosting. It does not authorize a live migration, a public repository switch,
-or a change to the privacy audience.
+hosting and worker takeover. Building the package does not perform a live
+migration, switch the public repository or change the privacy audience.

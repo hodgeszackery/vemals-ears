@@ -43,12 +43,12 @@ def checked_version(value: str) -> str:
 
 
 def source_version(root: Path) -> str:
-    path = root / "GuildHub/version.py"
+    path = root / "Hosting/version.py"
     if path.is_file():
-        match = re.search(r'^CLIENT_VERSION = "([0-9.]+)"$', path.read_text(encoding="ascii"), re.M)
+        match = re.search(r'^HOST_VERSION = "([0-9.]+)"$', path.read_text(encoding="ascii"), re.M)
         if match:
             return checked_version(match[1])
-    return "0.5.13"
+    raise HostInstallerError("Hosting/version.py must declare the host installer version.")
 
 
 def runtime_lock(root: Path) -> dict:

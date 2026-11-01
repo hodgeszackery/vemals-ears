@@ -8,10 +8,37 @@ graphical wizard. Read Hosting/QUICKSTART.txt for the short operator guide.
 The installer includes private Python, Node and Windows service tools. The
 wizard prepares NVIDIA speech recognition and optional Cloudflare Tunnel.
 
+Choose Set up a new host for a new bot, hostname and member pairing. To move
+the original Windows caption worker, choose Export from the current host on
+the original PC, then Import on the replacement PC. The encrypted .vehost
+handoff uses a passphrase of at least 12 characters and preserves the bot,
+publisher identity, public addresses, consent choices and character mappings.
+Members keep their existing connections; they do not pair again.
+
+The original PC must stay online for its shared relay, pairing, downloads,
+public hostname/tunnel and Downtime. Export stops and disables only the
+original VemalsEarsWorker. After the operator checks the imported IDs/URL and
+confirms the old worker is stopped, the replacement starts only its caption
+worker. This export supports the original VemalsEarsWorker registration, not
+arbitrary standalone Host Setup installations. Import never replaces an
+existing destination state directory.
+
+The encrypted handoff contains no relay database, pepper, tunnel credentials,
+audio, transcripts or session-resume state. Transfer the file privately and
+give its passphrase separately. Never publish it with the installer. Cancel
+unused handoff is only for a replacement that has never started. After it has
+run, returning needs its current consent/mapping state and a coordinated
+worker switch. Never run two workers with the same bot identity.
+
+Illustrated guide: https://ears.xenon.solutions/hosting
+Host download: https://ears.xenon.solutions/download/vemals-ears-host
+Member download: https://ears.xenon.solutions/download
+
 To build the installer from this source package:
   python packaging/build_host_installer.py
 
-The instructions below are the alternative source/ZIP setup for developers.
+The instructions below are the alternative source/ZIP setup for a NEW
+standalone host. Existing-host takeover uses the graphical workflow above.
 
 Host your own guild's captions and typed chat with the same speech model,
 NVIDIA acceleration and privacy behavior as the original host. This package
@@ -156,6 +183,16 @@ identity needed by the voice-channel gate. Admin enroll can create a one-use
 code, but the member must still associate their Discord account.
 
 OPERATING AND SHARING
+
+The encrypted import workflow writes VEMALS_EARS_HOST_MODE=remote-worker.
+This uses the existing public WSS relay and matching HTTPS origin without
+local relay/DB/pepper/port/tunnel settings. Service arguments include
+--host-mode remote-worker so an existing standalone service cannot be adopted.
+Protected host-settings.json confirmation is required before activation.
+Preparation does not start services. Upgrade, stop and uninstall manage only
+the exact owned worker service; they never operate the original shared host.
+
+The following backup and source-update instructions apply to standalone hosts.
 
 Back up the complete state directory privately while both host services are
 stopped. It contains device credentials, relay keys, consent and mappings.

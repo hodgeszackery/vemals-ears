@@ -44,6 +44,12 @@ graphical wizard. It includes private Python, Node and service tools, prepares
 NVIDIA speech recognition, and can install your Cloudflare Tunnel connector.
 See [the host quick start](Hosting/QUICKSTART.txt).
 
+The wizard also supports an encrypted handoff from the original Windows
+caption worker to a replacement PC. Existing bot identity and member
+connections are preserved. The original PC must remain online for the shared
+relay, public connection and Downtime; only the caption worker moves.
+See the [illustrated hosting guide](https://ears.xenon.solutions/hosting).
+
 Build the Windows installer with `python packaging/build_host_installer.py`.
 
 Build a shareable Windows NVIDIA host package:
@@ -52,7 +58,7 @@ Build a shareable Windows NVIDIA host package:
 
 Extract `dist/VemalsEars-Host.zip` and follow [the hosting guide](Hosting/README.txt).
 It includes the relay, pairing pages and Discord speech worker. Setup preserves
-the speech and privacy defaults while creating fresh credentials for each host.
+the speech and privacy defaults while creating fresh credentials for new hosts.
 The host supplies their own Discord bot, HTTPS address and member installer.
 No Downtime checkout or private repository access is needed.
 
