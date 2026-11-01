@@ -1,9 +1,9 @@
 """A Tk header inside a normal Windows window, with native move/resize behavior.
 
-Only the non-client calculation and hit test are replaced. The existing Tk
-window procedure still handles system commands, focus, close and sizing. No
-window styles or Tk decoration modes are changed. Unsupported hosts retain
-their ordinary caption.
+The wrapper owns the non-client calculation and hit test. Tk child windows
+pass caption/resize hit tests through to it, so real pointer input reaches the
+native move/resize loop. Existing procedures retain controls, focus and close.
+No styles or Tk decoration modes change; unsupported hosts keep their caption.
 """
 
 import ctypes
@@ -21,6 +21,7 @@ SC_RESTORE = 0xF120
 SC_CLOSE = 0xF060
 HTCLIENT = 1
 HTCAPTION = 2
+HTTRANSPARENT = -1
 WS_OVERLAPPEDWINDOW = 0x00CF0000
 
 # Windows does not retain a Python reference to a subclass callback. Keep the
@@ -66,7 +67,10 @@ class _Win32:
         self.callback_type = ctypes.WINFUNCTYPE(
             ctypes.c_ssize_t, wintypes.HWND, wintypes.UINT,
             ctypes.c_size_t, ctypes.c_ssize_t, ctypes.c_size_t, ctypes.c_size_t)
+        self.enumerator_type = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, ctypes.c_ssize_t)
         self._declare(self.user, "GetAncestor", [wintypes.HWND, wintypes.UINT], wintypes.HWND)
+        self._declare(self.user, "EnumChildWindows",
+                      [wintypes.HWND, self.enumerator_type, ctypes.c_ssize_t], wintypes.BOOL)
         self._declare(self.user, "IsWindow", [wintypes.HWND], wintypes.BOOL)
         self._declare(self.user, "IsZoomed", [wintypes.HWND], wintypes.BOOL)
         self._declare(self.user, "GetWindowThreadProcessId",
@@ -110,6 +114,17 @@ class _Win32:
 
     def window(self, inner):
         return self.user.GetAncestor(inner, 2)  # GA_ROOT: the Tk wrapper HWND.
+
+    def children(self, hwnd):
+        children = []
+
+        @self.enumerator_type
+        def collect(child, _data):
+            children.append(child)
+            return True
+
+        self.user.EnumChildWindows(hwnd, collect, 0)
+        return children
 
     def suitable(self, hwnd):
         style = self.get_style(hwnd, -16)
@@ -209,6 +224,7 @@ class NativeWindowChrome:
         self._identity = id(self)
         self._active = False
         self._installed = False
+        self._hooked = set()
         self._bindings = []
         self._refresh_id = None
         self._drag_rects = ()
@@ -238,7 +254,11 @@ class NativeWindowChrome:
             if not self.native.install(self.hwnd, self._callback, self._identity):
                 return False
             self._installed = self._active = True
+            self._hooked.add(self.hwnd)
             _ACTIVE[(self.hwnd, self._identity)] = self
+            # A real pointer usually hits a Tk child, not the wrapper. Install
+            # its forwarding path before removing the native caption.
+            self._sync_children()
             self._bindings = [
                 ("<Configure>", self.root.bind("<Configure>", self._queue_refresh, add="+")),
                 ("<Destroy>", self.root.bind("<Destroy>", self._destroy, add="+")),
@@ -255,26 +275,44 @@ class NativeWindowChrome:
     def _dispatch(self, hwnd, message, wparam, lparam, _identity, _data):
         try:
             if message == WM_NCDESTROY:
-                self._active = False
+                if hwnd == self.hwnd:
+                    self._active = False
                 self.native.remove(hwnd, self._callback, self._identity)
-                self._installed = False
+                self._hooked.discard(hwnd)
+                self._installed = bool(self._hooked)
                 _ACTIVE.pop((hwnd, self._identity), None)
                 # Keep self._callback intact while its native invocation exits.
-            elif self._active and message == WM_NCCALCSIZE:
+            elif self._active and hwnd == self.hwnd and message == WM_NCCALCSIZE:
                 self.native.constrain_maximized_client(hwnd, lparam)
                 return 0
             elif self._active and message == WM_NCHITTEST:
                 x, y = signed_point(lparam)
-                cx, cy = self.native.client_point(hwnd, x, y)
+                cx, cy = self.native.client_point(self.hwnd, x, y)
                 contains = lambda rect: rect[0] <= cx < rect[2] and rect[1] <= cy < rect[3]
                 draggable = (any(map(contains, self._drag_rects))
                              and not any(map(contains, self._excluded_rects)))
-                return hit_test(x, y, self.native.rectangle(hwnd), *self.native.borders(hwnd),
-                                maximized=self.native.is_maximized(hwnd), draggable=draggable)
+                result = hit_test(x, y, self.native.rectangle(self.hwnd), *self.native.borders(self.hwnd),
+                                  maximized=self.native.is_maximized(self.hwnd), draggable=draggable)
+                if hwnd == self.hwnd:
+                    return result
+                if result != HTCLIENT:
+                    # Returning a caption code on a child moves that child.
+                    # HTTRANSPARENT instead asks Windows to keep testing the
+                    # underlying windows in this thread until the wrapper wins.
+                    return HTTRANSPARENT
         except Exception:
             # Never allow an exception to escape a ctypes callback into Windows.
             pass
         return self.native.forward(hwnd, message, wparam, lparam)
+
+    def _sync_children(self):
+        for child in self.native.children(self.hwnd):
+            if child in self._hooked:
+                continue
+            if not self.native.install(child, self._callback, self._identity):
+                raise OSError("Cannot attach window input routing")
+            self._hooked.add(child)
+            _ACTIVE[(child, self._identity)] = self
 
     def _queue_refresh(self, _event=None):
         if self._active and self._refresh_id is None:
@@ -299,6 +337,9 @@ class NativeWindowChrome:
                     if child not in included and child.winfo_ismapped():
                         excluded.append(rectangle(child))
             self._excluded_rects = tuple(excluded)
+            # Forms create and destroy native child HWNDs as pages change.
+            # Reconcile them on the Tk thread, outside any native callback.
+            self._sync_children()
             state = self.is_maximized()
             if state != self._last_state:
                 self._last_state = state
@@ -344,16 +385,17 @@ class NativeWindowChrome:
             except Exception:
                 pass
         self._bindings = []
-        if self._installed:
+        for hwnd in sorted(self._hooked, key=lambda handle: handle == self.hwnd):
             try:
-                alive = self.native.exists(self.hwnd)
-                removed = not alive or self.native.remove(self.hwnd, self._callback, self._identity)
+                alive = self.native.exists(hwnd)
+                removed = not alive or self.native.remove(hwnd, self._callback, self._identity)
                 if removed:
-                    self._installed = False
-                    _ACTIVE.pop((self.hwnd, self._identity), None)
+                    self._hooked.discard(hwnd)
+                    _ACTIVE.pop((hwnd, self._identity), None)
                 # If removal fails, retain the callback but pass every message
                 # through until WM_NCDESTROY. Native caption restoration is safe.
-                if alive:
-                    self.native.frame_changed(self.hwnd)
+                if alive and hwnd == self.hwnd:
+                    self.native.frame_changed(hwnd)
             except Exception:
                 pass
+        self._installed = bool(self._hooked)
