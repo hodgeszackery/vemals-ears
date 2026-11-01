@@ -27,8 +27,16 @@ Installer/ contains the Windows installer and native launcher build.
 VoiceCaptions/ contains the Discord capture adapter, speech runtime and overlay.
 GuildHub/ contains the member wire client, pairing helpers and voice worker.
 
-The shared guild relay, operator console, hosted jobs and Downtime addons
-remain in https://github.com/hodgeszackery/downtime-addons. The projects
+To host your own guild on Windows with NVIDIA speech recognition, read
+Hosting/README.txt. Build a standalone shareable host source ZIP with:
+  python packaging/build_host.py
+The host slice includes its own relay and pairing pages. Setup generates
+fresh private credentials and retains the caption/privacy defaults; it does
+not copy an existing operator's state or require a Downtime checkout.
+
+The shared Downtime guild relay, operator console, hosted jobs and addons
+remain in https://github.com/hodgeszackery/downtime-addons. VE also carries
+a standalone relay source copy for its own host package. The projects
 communicate through the existing guild protocol. Building and testing VE
 does not require a Downtime checkout, addons, Lua or Warpsim.
 

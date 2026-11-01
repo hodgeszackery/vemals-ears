@@ -1,0 +1,43 @@
+{
+  "schema": 1,
+  "source_repository": "https://github.com/hodgeszackery/downtime-addons",
+  "source_commit": "460c82435a5ecbb73e5c30b8806d274685990aa4",
+  "files": [
+    {
+      "path": "GuildHub/server.py",
+      "upstream_sha256": "8a2ee276461888c719b86d0ffb703b7af7c35bbfa1bce10c3fcf282d081eff8d",
+      "imported_sha256": "cff3b80365c5382f319c93d2107e70c79312f6f73652de876c0382cc685f4956"
+    },
+    {
+      "path": "GuildHub/store.py",
+      "upstream_sha256": "6cb41a77ed34306fbe5a1cbd0150286ae696f4732653ab2fe4c668df3f6736c1",
+      "imported_sha256": "6cb41a77ed34306fbe5a1cbd0150286ae696f4732653ab2fe4c668df3f6736c1"
+    },
+    {
+      "path": "GuildHub/release_pointer.py",
+      "upstream_sha256": "4b4f59611162c51d9357a1752cdba32c08f1f2f3316c85615ce6ea813bdd8f44",
+      "imported_sha256": "4b4f59611162c51d9357a1752cdba32c08f1f2f3316c85615ce6ea813bdd8f44"
+    },
+    {
+      "path": "GuildHub/tests/test_server.py",
+      "upstream_sha256": "2c1e27e46a69ba94042820ac30b8de8570634ef0b855ed8ef42cf4fcc2d95815",
+      "imported_sha256": "d5a9bbfe959cbee8ca1afa16cc526d6850bbfe0ce031b878531eef14ae03149c"
+    },
+    {
+      "path": "GuildHub/tests/test_store.py",
+      "upstream_sha256": "58658e6936aacb77ccbefe9d9a0fd31fa2cbaf28ff54db8e8a09e1122297b66d",
+      "imported_sha256": "58658e6936aacb77ccbefe9d9a0fd31fa2cbaf28ff54db8e8a09e1122297b66d"
+    },
+    {
+      "path": "GuildHub/tests/test_release_pointer.py",
+      "upstream_sha256": "07a9683a716cf4ddb13f80e9812ef3b3b85c2b1cad4d906cf41e4249c181f0e3",
+      "imported_sha256": "07a9683a716cf4ddb13f80e9812ef3b3b85c2b1cad4d906cf41e4249c181f0e3"
+    }
+  ],
+  "adaptations": [
+    "Standalone Vemal's Ears landing/privacy pages and downloads; no Downtime product downloads.",
+    "Relay wire protocol, voice membership gate and credential storage retain the upstream implementation.",
+    "Removed hosted-addon job CLI commands; retained upstream credential database schema for compatibility."
+  ],
+  "hash_normalization": "LF line endings"
+}
