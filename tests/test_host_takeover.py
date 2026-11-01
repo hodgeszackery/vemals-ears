@@ -169,12 +169,79 @@ class LegacyTakeoverTests(unittest.TestCase):
         self.assertEqual(self.consent, self.writer.call_args.args[1]["consent"])
         self.assertNotIn("dirty", self.writer.call_args.args[1])
 
+    def test_export_projects_both_legacy_ledgers_without_changing_original_files(self):
+        consent = deepcopy(self.consent)
+        mapping = deepcopy(self.mapping)
+        foreign_guild = "999999999999999999"
+        # A selected-guild decline must not inherit another guild's grant for
+        # the same Discord user. Mapping values must not cross guilds either.
+        consent["entries"][foreign_guild + ":456789012345678901"] = "granted"
+        consent["entries"][foreign_guild + ":567890123456789012"] = "declined"
+        mapping["entries"][foreign_guild + ":345678901234567890"] = {
+            "characterName": "Foreignfixture", "realm": "Other Realm",
+            "wowClass": "warrior", "role": "tank", "mappedAt": STAMP,
+        }
+        consent_path = self.profile / "consent-state.json"
+        mapping_path = self.profile / "mapping-state.json"
+        write_json(consent_path, consent)
+        write_json(mapping_path, mapping)
+        originals = {path: path.read_bytes() for path in (consent_path, mapping_path)}
+
+        self.export()
+
+        payload = self.writer.call_args.args[1]
+        self.assertEqual(self.consent, payload["consent"])
+        self.assertEqual(self.mapping, payload["mapping"])
+        self.assertEqual("declined", payload["consent"]["entries"][GUILD + ":456789012345678901"])
+        self.assertNotIn(foreign_guild, json.dumps(payload))
+        self.assertNotIn("Foreignfixture", json.dumps(payload))
+        for path, original in originals.items():
+            self.assertEqual(original, path.read_bytes())
+        self.assertEqual("STOPPED", self.worker.status())
+        self.assertEqual("disabled", self.worker.record["start"])
+
+    def test_foreign_guild_only_ledgers_export_as_empty_for_selected_guild(self):
+        foreign = "999999999999999999:345678901234567890"
+        write_json(self.profile / "consent-state.json", {
+            "version": 1, "updatedAt": STAMP, "entries": {foreign: "granted"},
+        })
+        write_json(self.profile / "mapping-state.json", {
+            "version": 1, "updatedAt": STAMP,
+            "entries": {foreign: deepcopy(next(iter(self.mapping["entries"].values())))},
+        })
+        self.export()
+        payload = self.writer.call_args.args[1]
+        for ledger in ("consent", "mapping"):
+            self.assertEqual({"version": 1, "updatedAt": STAMP, "entries": {}}, payload[ledger])
+
+    def test_projection_cannot_salvage_grants_from_untrusted_foreign_consent(self):
+        foreign = "999999999999999999"
+        invalid_foreign_entries = (
+            {foreign + ":1": "pending"},
+            {"not-a-guild-user-key": "granted"},
+            {foreign + ":" + str(index): "granted" for index in range(10_001)},
+        )
+        for entries in invalid_foreign_entries:
+            with self.subTest(entry_count=len(entries)):
+                consent = deepcopy(self.consent)
+                consent["entries"].update(entries)
+                path = self.profile / "consent-state.json"
+                write_json(path, consent)
+                original = path.read_bytes()
+                with self.assertRaises((takeover.TakeoverError, handoff.HandoffError)):
+                    self.export()
+                self.assertEqual(original, path.read_bytes())
+                self.assertFalse(self.destination.exists())
+                self.assertEqual("RUNNING", self.worker.status())
+                self.assertEqual("delayed-auto", self.worker.record["start"])
+        self.writer.assert_not_called()
+
     def test_invalid_ledger_or_outside_secret_restores_without_writing_handoff(self):
         for invalid in ("ledger", "secret"):
             with self.subTest(invalid=invalid):
                 if invalid == "ledger":
                     broken = deepcopy(self.consent)
-                    broken["entries"]["999999999999999999:1"] = "granted"
+                    broken["entries"][GUILD + ":345678901234567890"] = "pending"
                     write_json(self.profile / "consent-state.json", broken)
                 else:
                     write_json(self.profile / "consent-state.json", self.consent)
