@@ -29,6 +29,7 @@ HOST_FILES = (
     "Hosting/setup.py",
     "Hosting/control.py",
     "Hosting/wizard.py",
+    "Hosting/window_chrome.py",
     "Hosting/takeover.py",
     "Hosting/takeover_ui.py",
     "Hosting/handoff.py",
