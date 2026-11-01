@@ -271,6 +271,24 @@ class LegacyTakeover:
             if not isinstance(value, dict) or value.get("version") != 1 or value.get("synced") is not True:
                 raise TakeoverError("The consent ledger has an unfinished write. Resume the original host and resolve its consent state before exporting.")
         empty = {"version": 1, "updatedAt": datetime.now(timezone.utc).isoformat(), "entries": {}}
+        def guild_ledger(path, *, mapping=False):
+            ledger = _json_file(path) if path.exists() else dict(empty)
+            if (not isinstance(ledger, dict) or set(ledger) != {"version", "updatedAt", "entries"}
+                    or not isinstance(ledger["entries"], dict)):
+                raise TakeoverError("A worker ledger has an unsupported structure. Restore it before exporting.")
+            if not mapping and (len(ledger["entries"]) > 10_000 or any(
+                    not re.fullmatch(r"[0-9]{1,20}:[0-9]{1,20}", key)
+                    or not isinstance(value, str) or value not in {"granted", "declined"}
+                    for key, value in ledger["entries"].items())):
+                # Consent's loader distrusts the entire ledger on any bad row.
+                # Projection must not turn an untrusted grant into a trusted one.
+                raise TakeoverError("The consent ledger contains an untrusted entry. Restore it before exporting.")
+            # Older bot profiles can retain records from other guilds. This
+            # worker serves only its configured guild; leave every other row
+            # on the original PC and validate the selected rows on import.
+            prefix = values["VEMALS_EARS_GUILD_ID"] + ":"
+            return {**ledger, "entries": {key: value for key, value in ledger["entries"].items()
+                                         if key.startswith(prefix)}}
         payload = {
             "schema": 1, "kind": "vemals-ears-worker-handoff",
             "guild_id": values["VEMALS_EARS_GUILD_ID"],
@@ -281,8 +299,8 @@ class LegacyTakeover:
             "application_id": secret("VEMALS_EARS_DISCORD_APPLICATION_ID_FILE", "discord-application-id"),
             "bot_token": secret("VEMALS_EARS_DISCORD_BOT_TOKEN_FILE", "discord-bot-token"),
             "publisher_token": secret("VEMALS_EARS_PUBLISHER_TOKEN_FILE", "publisher-token"),
-            "consent": _json_file(consent_path) if consent_path.exists() else dict(empty),
-            "mapping": _json_file(mapping_path) if mapping_path.exists() else dict(empty),
+            "consent": guild_ledger(consent_path),
+            "mapping": guild_ledger(mapping_path, mapping=True),
         }
         return handoff.validate_payload(payload)
 
