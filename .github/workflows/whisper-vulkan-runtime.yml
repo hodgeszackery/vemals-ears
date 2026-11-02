@@ -7,6 +7,9 @@ name: Whisper Vulkan Runtime
 # adds GGML_VULKAN. Manual dispatch only; nothing is published from here.
 
 on:
+  # Temporary: registers this workflow so it can be dispatched from a branch.
+  push:
+    branches: [claude/amd-vulkan-runtime-build]
   workflow_dispatch:
     inputs:
       whisper_tag:
