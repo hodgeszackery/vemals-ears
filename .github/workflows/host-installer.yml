@@ -5,6 +5,9 @@ name: Host Installer
 # Manual dispatch only; nothing is published from here.
 
 on:
+  # Temporary: registers this workflow so it can be dispatched from a branch.
+  push:
+    branches: [claude/host-installer-ci]
   workflow_dispatch:
 
 permissions:
