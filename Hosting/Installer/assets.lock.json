@@ -32,6 +32,26 @@
     "source_commit": "872b241f94871665c1c157adefcf90c11f0ead96",
     "checksum_url": "https://github.com/cloudflare/cloudflared/releases/tag/2026.10.7"
   },
+  "whisper_vulkan": {
+    "filename": "whisper-vulkan-bin-x64.zip",
+    "bytes": 22525659,
+    "sha256": "1b6cede02773817efa74dcb0f94bd7485926d5c472f8f648bd8a4af8ccff46a6",
+    "version": "b4938",
+    "license": "MIT",
+    "source_commit": "371b5a7561823ab2bb32142d2751e35e7534727b",
+    "source_url": "https://github.com/ggml-org/whisper.cpp/tree/371b5a7561823ab2bb32142d2751e35e7534727b",
+    "build_workflow": ".github/workflows/whisper-vulkan-runtime.yml",
+    "build_run": "https://github.com/hodgeszackery/vemals-ears/actions/runs/41365892232",
+    "vulkan_sdk": "1.4.357.0",
+    "local_path": "Installer/runtime-cache/whisper-vulkan-bin-x64.zip",
+    "install_path": "speech-engine/whisper-vulkan-bin-x64.zip",
+    "notice": {
+      "filename": "whisper.cpp-371b5a7-LICENSE",
+      "url": "https://raw.githubusercontent.com/ggml-org/whisper.cpp/371b5a7561823ab2bb32142d2751e35e7534727b/LICENSE",
+      "bytes": 1078,
+      "sha256": "94f29bbed6a22c35b992c5c6ebf0e7c92f13b836b90f36f461c9cf2f0f1d010d"
+    }
+  },
   "sources": [
     {
       "filename": "node-v22.23.4.tar.xz",

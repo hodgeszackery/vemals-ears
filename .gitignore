@@ -52,6 +52,9 @@ Installer/build/
 # directory by vcvars64.bat whenever the native launcher is built.
 vcvars.log
 Installer/cache/
+# Pinned speech-engine build artifacts (see Hosting/Installer/assets.lock.json
+# whisper_vulkan); downloaded with gh run download, never committed.
+Installer/runtime-cache/
 
 # Backups and staging copies of generated data. Generated.lua itself
 # is listed above, but a suffixed copy is not covered by that line -

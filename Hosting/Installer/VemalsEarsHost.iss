@@ -70,6 +70,10 @@ Source: "{#StageRoot}\runtime\Source\*"; DestDir: "{app}\runtime\Source"; Flags:
 ; has a source/ directory that must remain in the executable tool payload.
 Source: "{#StageRoot}\tools\*"; DestDir: "{app}\tools"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "{#StageRoot}\app\*"; DestDir: "{app}\app"; Flags: ignoreversion recursesubdirs createallsubdirs
+; Pinned Vulkan whisper.cpp runtime (assets.lock.json whisper_vulkan) with its
+; license. The runtime installer reads it from {app}\speech-engine. Already a
+; ZIP, so it is stored without recompression.
+Source: "{#StageRoot}\speech-engine\*"; DestDir: "{app}\speech-engine"; Flags: ignoreversion nocompression
 Source: "{#StageRoot}\host-install.json"; DestDir: "{app}"; Flags: ignoreversion
 
 #ifndef TestBuild
@@ -91,6 +95,7 @@ Filename: "{app}\runtime\pythonw.exe"; Parameters: "-E -s -B -m Hosting.wizard -
 Type: filesandordirs; Name: "{app}\app"; Check: UninstallTargetValidated
 Type: filesandordirs; Name: "{app}\runtime"; Check: UninstallTargetValidated
 Type: filesandordirs; Name: "{app}\tools"; Check: UninstallTargetValidated
+Type: filesandordirs; Name: "{app}\speech-engine"; Check: UninstallTargetValidated
 Type: files; Name: "{app}\host-resume.json"; Check: UninstallTargetValidated
 
 [Code]
