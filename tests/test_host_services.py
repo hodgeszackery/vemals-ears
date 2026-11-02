@@ -207,11 +207,11 @@ class HostServiceTests(unittest.TestCase):
             state = Path(folder).resolve()
             write_configuration(state)
             args = ["--state-directory", str(state), "--check-only", "worker"]
-            for pinned, expected in ((False, "verified NVIDIA GPU"), (True, "verified NVIDIA or AMD GPU")):
-                with self.subTest(pinned=pinned):
+            for included, expected in ((False, "verified NVIDIA GPU"), (True, "verified NVIDIA or AMD GPU")):
+                with self.subTest(included=included):
                     stderr = io.StringIO()
                     with patch.object(runtime_installer, "detect_installed_runtime", return_value=None), \
-                            patch.object(runtime_installer, "vulkan_runtime_pinned", return_value=pinned), \
+                            patch.object(runtime_installer, "vulkan_runtime_available", return_value=included), \
                             contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(stderr):
                         self.assertEqual(2, service.main(args))
                     self.assertIn(expected, stderr.getvalue())

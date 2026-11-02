@@ -93,7 +93,7 @@ class HostControlTests(unittest.TestCase):
         progress = []
         with patch.object(Path, "is_file", return_value=True), \
              patch.object(control.runtime_installer, "cuda_12_4_available", return_value=False), \
-             patch.object(control.runtime_installer, "vulkan_runtime_pinned", return_value=True), \
+             patch.object(control.runtime_installer, "vulkan_runtime_available", return_value=True), \
              patch.object(control.runtime_installer, "vulkan_gpu_available", return_value=True), \
              patch.object(control.runtime_installer, "install_voice_dependencies", return_value=SimpleNamespace(
                  runtime=SimpleNamespace(acceleration="vulkan"), adapter=SimpleNamespace(ready=True))) as install:
@@ -103,11 +103,11 @@ class HostControlTests(unittest.TestCase):
 
     def test_no_usable_gpu_stops_before_downloading(self):
         self.configure()
-        for pinned, expected in ((False, "not available in this build"), (True, "NVIDIA or AMD GPU is required")):
-            with self.subTest(pinned=pinned), \
+        for included, expected in ((False, "not included in this installation"), (True, "NVIDIA or AMD GPU is required")):
+            with self.subTest(included=included), \
                     patch.object(Path, "is_file", return_value=True), \
                     patch.object(control.runtime_installer, "cuda_12_4_available", return_value=False), \
-                    patch.object(control.runtime_installer, "vulkan_runtime_pinned", return_value=pinned), \
+                    patch.object(control.runtime_installer, "vulkan_runtime_available", return_value=included), \
                     patch.object(control.runtime_installer, "vulkan_gpu_available", return_value=False), \
                     patch.object(control.runtime_installer, "install_voice_dependencies") as install:
                 with self.assertRaisesRegex(control.HostError, expected):

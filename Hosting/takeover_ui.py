@@ -4,6 +4,8 @@ from pathlib import Path
 import tkinter as tk
 from tkinter import filedialog
 
+from VoiceCaptions import runtime_installer
+
 
 class TakeoverUi:
     def __init__(self, wizard, backend=None):
@@ -25,7 +27,6 @@ class TakeoverUi:
 
     @staticmethod
     def gpu_label():
-        from VoiceCaptions import runtime_installer
         return runtime_installer.gpu_support_label()
 
     def checkbox(self, text, variable):

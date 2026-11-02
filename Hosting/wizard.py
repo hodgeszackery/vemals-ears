@@ -15,8 +15,12 @@ from tkinter import filedialog, messagebox, ttk
 from urllib.parse import urlsplit
 import webbrowser
 
+# Imported here, on the UI thread: a first import inside the setup worker
+# thread can trigger garbage collection of Tk objects off their thread.
+from VoiceCaptions import runtime_installer
 
-ROOT = Path(__file__).resolve().parents[1]
+
+ROOT =Path(__file__).resolve().parents[1]
 BG = "#0b0b0d"
 PANEL = BG
 FIELD = "#19191d"
@@ -85,8 +89,6 @@ def prepare_host(backend, settings: dict, progress, configured, *, configure_exi
         backend.configure(settings)
         current = backend.read_settings()
     configured(current)
-    from VoiceCaptions import runtime_installer
-
     progress("Preparing " + runtime_installer.gpu_support_label()
              + " GPU speech recognition. The first download can be up to about 1.2 GB...")
     backend.prepare(progress)
