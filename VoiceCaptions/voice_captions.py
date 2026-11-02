@@ -284,7 +284,8 @@ def installed_stt_config() -> WhisperCppConfig:
     config = WhisperCppConfig(
         # Absent or unknown reads as not accelerated, which decodes
         # greedy - the conservative direction for a machine we know
-        # nothing about.
+        # nothing about. "vulkan" also decodes greedy until its encoder
+        # speed has been measured on real AMD hardware.
         accelerated=environment.get("VOICE_CAPTIONS_WHISPER_ACCELERATION")
         == "cuda",
         server_path=Path(server) if server else None,

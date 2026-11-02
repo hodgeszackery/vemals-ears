@@ -45,6 +45,37 @@ class AssetError(RuntimeError):
     """The tool inputs or staged payload are incomplete or unsafe."""
 
 
+# The Vulkan speech engine is bundled beside the app rather than downloaded:
+# <install root>/speech-engine/whisper-vulkan-bin-x64.zip. The runtime
+# installer looks for it at exactly this path relative to the install root.
+SPEECH_ENGINE_DIRECTORY = "speech-engine"
+SPEECH_ENGINE_LICENSE = "whisper.cpp-LICENSE.txt"
+SPEECH_ENGINE_NOTICES = "THIRD-PARTY-NOTICES.txt"
+SPEECH_ENGINE_REQUIRED_MEMBERS = ("Release/whisper-server.exe", "Release/ggml-vulkan.dll")
+
+
+def _speech_engine_record(lock: dict) -> dict:
+    """Return the pinned speech-engine record after validating its shape."""
+    record = lock["whisper_vulkan"]
+    notice = record["notice"]
+    name = _safe_relative(record["filename"])
+    notice_name = _safe_relative(notice["filename"])
+    url = urlsplit(notice["url"])
+    if (len(name.parts) != 1 or len(notice_name.parts) != 1
+            or record["install_path"] != SPEECH_ENGINE_DIRECTORY + "/" + record["filename"]
+            or not re.fullmatch(r"[a-f0-9]{64}", record["sha256"])
+            or not re.fullmatch(r"[a-f0-9]{64}", notice["sha256"])
+            or not re.fullmatch(r"[a-f0-9]{40}", record["source_commit"])
+            or type(record["bytes"]) is not int or not 0 < record["bytes"] <= MAX_ASSET_BYTES
+            or type(notice["bytes"]) is not int or not 0 < notice["bytes"] <= MAX_NOTICE_BYTES
+            or url.scheme != "https" or not url.hostname or url.username or url.password or url.fragment
+            or not all(isinstance(record[key], str) and record[key] for key in (
+                "version", "license", "source_url", "build_workflow", "build_run",
+                "vulkan_sdk", "local_path"))):
+        raise ValueError("invalid pinned speech engine")
+    return record
+
+
 def _digest(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as stream:
@@ -83,6 +114,8 @@ def _load_lock(path: Path) -> dict:
                     or not re.fullmatch(r"[a-f0-9]{64}", item["sha256"])
                     or type(item["bytes"]) is not int or not 0 < item["bytes"] <= MAX_ASSET_BYTES):
                 raise ValueError("invalid pinned asset")
+        if "whisper_vulkan" in lock:
+            _speech_engine_record(lock)
         return lock
     except (OSError, ValueError, KeyError, TypeError) as error:
         raise AssetError("Invalid host tool lock") from error
@@ -327,6 +360,100 @@ def stage_tools(destination: Path, cache: Path, *, lock_path: Path = DEFAULT_LOC
         (stage / MANIFEST).write_bytes(_json_bytes(manifest))
         os.replace(stage, destination / "tools")
     return validate_tools(destination, lock_path=lock_path)
+
+
+def _speech_engine_notices(record: dict) -> bytes:
+    return (
+        "Vemal's Ears Host bundled speech engine\n"
+        "=======================================\n\n"
+        + record["filename"] + ": whisper.cpp " + record["version"] + " (commit "
+        + record["source_commit"] + ") built for Windows x64 with the Vulkan backend.\n"
+        "License: " + record["license"] + ". The original license text is " + SPEECH_ENGINE_LICENSE + ".\n"
+        "Source: " + record["source_url"] + "\n"
+        "Built by " + record["build_workflow"] + " with Vulkan SDK " + record["vulkan_sdk"] + ":\n"
+        + record["build_run"] + "\n"
+        "SHA-256 " + record["sha256"] + ", " + str(record["bytes"]) + " bytes.\n"
+        "The Vulkan loader (vulkan-1.dll) comes from the GPU driver and is not included.\n"
+    ).encode("ascii")
+
+
+def _speech_engine_expected(record: dict) -> dict[str, tuple[int, str]]:
+    notices = _speech_engine_notices(record)
+    return {
+        record["filename"]: (record["bytes"], record["sha256"]),
+        SPEECH_ENGINE_LICENSE: (record["notice"]["bytes"], record["notice"]["sha256"]),
+        SPEECH_ENGINE_NOTICES: (len(notices), hashlib.sha256(notices).hexdigest()),
+    }
+
+
+def _check_speech_engine_archive(path: Path) -> None:
+    try:
+        with zipfile.ZipFile(path) as archive:
+            names = [item.filename for item in _zip_members(archive)]
+    except zipfile.BadZipFile as error:
+        raise AssetError("The bundled speech engine is not a valid ZIP") from error
+    for required in SPEECH_ENGINE_REQUIRED_MEMBERS:
+        if names.count(required) != 1:
+            raise AssetError("The bundled speech engine lacks " + required)
+
+
+def validate_speech_engine(destination: Path, *, lock_path: Path = DEFAULT_LOCK) -> Path:
+    """Verify destination/speech-engine holds exactly the pinned files; return the ZIP path."""
+    lock = _load_lock(Path(lock_path))
+    try:
+        record = _speech_engine_record(lock)
+        root = Path(destination) / SPEECH_ENGINE_DIRECTORY
+        if root.is_symlink() or not root.is_dir():
+            raise AssetError("The bundled speech engine directory is missing")
+        actual = {}
+        for path in sorted(root.rglob("*")):
+            if path.is_symlink() or (not path.is_file() and not path.is_dir()):
+                raise AssetError("The bundled speech engine contains a link or special file")
+            if path.is_file():
+                actual[path.relative_to(root).as_posix()] = (path.stat().st_size, _digest(path))
+        if actual != _speech_engine_expected(record):
+            raise AssetError("The bundled speech engine differs from its pinned SHA-256")
+        return root / record["filename"]
+    except (OSError, ValueError, KeyError, TypeError) as error:
+        raise AssetError("Invalid bundled speech engine") from error
+
+
+def stage_speech_engine(destination: Path, source: Path, cache: Path, *,
+                        lock_path: Path = DEFAULT_LOCK) -> Path:
+    """Copy the pinned Vulkan speech-engine ZIP to destination/speech-engine.
+
+    The ZIP is never downloaded here: it is a CI build artifact placed at the
+    lock's local_path. A file whose size or SHA-256 differs is refused.
+    """
+    destination, source, cache = Path(destination), Path(source), Path(cache)
+    lock = _load_lock(Path(lock_path))
+    try:
+        record = _speech_engine_record(lock)
+    except (ValueError, KeyError, TypeError) as error:
+        raise AssetError("The host asset lock does not pin the bundled speech engine") from error
+    if (destination / SPEECH_ENGINE_DIRECTORY).exists():
+        return validate_speech_engine(destination, lock_path=lock_path)
+    if source.is_symlink() or not source.is_file():
+        raise AssetError(
+            "The bundled speech engine is missing: " + str(source) + ". Download the pinned build "
+            "into " + record["local_path"] + " with: gh run download "
+            + record["build_run"].rstrip("/").rsplit("/", 1)[-1]
+            + " -R hodgeszackery/vemals-ears -n whisper-vulkan-bin-x64-" + record["version"]
+            + " -D " + str(PurePosixPath(record["local_path"]).parent))
+    if source.stat().st_size != record["bytes"] or _digest(source) != record["sha256"]:
+        raise AssetError("The bundled speech engine does not match its pinned SHA-256 and size; "
+                         "refusing to package " + str(source))
+    _check_speech_engine_archive(source)
+    notice = _fetch(record["notice"], cache)
+    destination.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix=".speech-engine-", dir=destination) as temporary:
+        stage = Path(temporary) / SPEECH_ENGINE_DIRECTORY
+        stage.mkdir()
+        shutil.copyfile(source, stage / record["filename"])
+        shutil.copyfile(notice, stage / SPEECH_ENGINE_LICENSE)
+        (stage / SPEECH_ENGINE_NOTICES).write_bytes(_speech_engine_notices(record))
+        os.replace(stage, destination / SPEECH_ENGINE_DIRECTORY)
+    return validate_speech_engine(destination, lock_path=lock_path)
 
 
 def main() -> int:

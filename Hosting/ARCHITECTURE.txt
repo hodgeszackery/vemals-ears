@@ -42,7 +42,7 @@ local worker readiness marker.
 The GUI shows the imported IDs/public URL and requires confirmation that the
 old worker is stopped and disabled. A protected host-settings.json activation
 flag is enforced by the controller, installer and runtime. Preparation may
-install NVIDIA assets before confirmation without starting services.
+install GPU speech assets before confirmation without starting services.
 Imported identity is locked against fresh-host edits. Members keep their
 existing connections because the original relay and publisher identity stay.
 
@@ -62,7 +62,7 @@ device associations stay private and outside the source package.
 
 The shareable archive is an explicit allowlist of application/build source,
 locked dependency metadata and notices. It contains neither operator state
-nor handoff files or downloaded NVIDIA binaries. It can be rebuilt without Git. Members still
+nor handoff files or downloaded GPU runtime binaries. It can be rebuilt without Git. Members still
 use the existing VE desktop application, obtained separately.
 
 The copied relay keeps the existing wire contract and hardcoded active-voice

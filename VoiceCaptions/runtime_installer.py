@@ -38,6 +38,29 @@ CPU_RUNTIME_URL = (
 CPU_RUNTIME_SHA256 = (
     "c2a4b60edb11f7e11a9191ffb50929535527d4d91c9903dbe3e554583bbbc63d"
 )
+# AMD/Vulkan speech engine: whisper.cpp b4938 for Windows x64 built with the
+# ggml Vulkan backend. Upstream b4938 publishes no Vulkan zip, so this project
+# builds one in CI. Its layout is expected to match the upstream CUDA zip, with
+# ggml-vulkan.dll in place of ggml-cuda.dll. Vulkan runs on AMD, Intel Arc and
+# NVIDIA GPUs; it is slower than CUDA and is only chosen when CUDA is not.
+#
+# The zip is BUNDLED inside the member and host installers at
+# BUNDLED_VULKAN_RUNTIME (see bundled_vulkan_runtime_candidates()) and is
+# copied into staging, never downloaded, after its pinned SHA-256 matches.
+# VULKAN_RUNTIME_URL is DELIBERATELY UNSET because no public download exists;
+# if one is ever hosted, set it and the installer falls back to it when the
+# bundled copy is absent or fails verification. With neither available,
+# vulkan_runtime_available() is False: the Vulkan path is never probed and
+# installs behave exactly as before this mode existed (CUDA, otherwise CPU).
+VULKAN_RUNTIME_URL = ""
+VULKAN_RUNTIME_SHA256 = (
+    "1b6cede02773817efa74dcb0f94bd7485926d5c472f8f648bd8a4af8ccff46a6"
+)
+VULKAN_RUNTIME_BYTES = 22_525_659
+BUNDLED_VULKAN_RUNTIME = PurePosixPath("speech-engine/whisper-vulkan-bin-x64.zip")
+# Points at one bundled zip instead of the install-root search; for tests and
+# for operators running from a source checkout.
+BUNDLED_VULKAN_RUNTIME_ENV = "VOICE_CAPTIONS_BUNDLED_VULKAN_RUNTIME"
 # Kept as aliases for callers that displayed the former single runtime asset.
 RUNTIME_URL = CUDA_RUNTIME_URL
 RUNTIME_SHA256 = CUDA_RUNTIME_SHA256
@@ -74,6 +97,18 @@ NPM_TIMEOUT_SECONDS = 300.0
 MIN_NODE_VERSION = (22, 12, 0)
 MIN_CUDA_12_4_WINDOWS_DRIVER = (551, 61)
 NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+# Optional explicit choice, read only when an install or upgrade picks its
+# engine. "auto" (or unset/unknown) means cuda -> vulkan -> cpu. "cuda" or
+# "vulkan" limits the GPU candidates to that one, still subject to detection.
+# "cpu" skips GPU engines. It never downgrades an already installed runtime.
+ACCELERATION_PREFERENCE_ENV = "VOICE_CAPTIONS_WHISPER_ACCELERATION_PREFERENCE"
+ACCELERATION_PREFERENCES = frozenset({"auto", "cpu", "cuda", "vulkan"})
+ACCELERATIONS = frozenset({"cpu", "cuda", "vulkan"})
+GPU_ACCELERATIONS = frozenset({"cuda", "vulkan"})
+# Higher is preferred; an explicit repair only replaces a lower-ranked engine.
+_ACCELERATION_RANK = {"cpu": 0, "vulkan": 1, "cuda": 2}
+GPU_PROBE_TIMEOUT_SECONDS = 15.0
+GPU_PROBE_MAX_OUTPUT = 16_384
 
 
 class RuntimeInstallError(RuntimeError):
@@ -108,6 +143,9 @@ class RuntimeAssets:
     cuda_runtime: DownloadAsset
     model: DownloadAsset
     vad_model: DownloadAsset
+    # None, or an asset whose url/sha256 are still empty, means the Vulkan
+    # engine is not pinned and is never offered; see vulkan_runtime_pinned().
+    vulkan_runtime: DownloadAsset | None = None
 
 
 OFFICIAL_ASSETS = RuntimeAssets(
@@ -142,6 +180,16 @@ OFFICIAL_ASSETS = RuntimeAssets(
         minimum_bytes=800 * 1024,
         maximum_bytes=1 * 1024 * 1024,
         maximum_seconds=180.0,
+    ),
+    vulkan_runtime=DownloadAsset(
+        name="AMD/Vulkan speech engine",
+        url=VULKAN_RUNTIME_URL,
+        sha256=VULKAN_RUNTIME_SHA256,
+        # The pinned zip is 22,525,659 bytes; the bounds only guard copying
+        # and any future download before the hash check decides.
+        minimum_bytes=20 * 1024 * 1024,
+        maximum_bytes=24 * 1024 * 1024,
+        maximum_seconds=600.0,
     ),
 )
 
@@ -263,6 +311,327 @@ def cuda_12_4_available(
         ):
             return True
     return False
+
+
+def vulkan_runtime_pinned(assets: RuntimeAssets | None = None) -> bool:
+    """True once the Vulkan engine has a full SHA-256 to verify against.
+
+    Manifest validation asks this: without a pinned digest a manifest that
+    claims "vulkan" cannot be trusted and reads as no install at all.
+    """
+    asset = (assets if assets is not None else OFFICIAL_ASSETS).vulkan_runtime
+    return (
+        asset is not None
+        and isinstance(asset.sha256, str)
+        and re.fullmatch(r"[0-9a-fA-F]{64}", asset.sha256) is not None
+    )
+
+
+def _package_root() -> Path:
+    # VoiceCaptions/runtime_installer.py -> the app folder, which both
+    # installers place at {app}/app; Hosting.control calls it package_root.
+    return Path(__file__).resolve().parents[1]
+
+
+def bundled_vulkan_runtime_candidates(
+    environ: Mapping[str, str] | None = None,
+) -> list[Path]:
+    """Where an installer may have placed the Vulkan zip, in search order.
+
+    The override env var, when set, is the only candidate. Otherwise the
+    install root ({app}, Hosting.control's install_root) is searched first,
+    then the app folder itself. Every candidate is hash-verified before use.
+    """
+    override = (environ if environ is not None else os.environ).get(
+        BUNDLED_VULKAN_RUNTIME_ENV, ""
+    )
+    if isinstance(override, str) and override.strip():
+        return [Path(override.strip())]
+    package_root = _package_root()
+    return [
+        package_root.parent.joinpath(*BUNDLED_VULKAN_RUNTIME.parts),
+        package_root.joinpath(*BUNDLED_VULKAN_RUNTIME.parts),
+    ]
+
+
+def _bundled_candidates(bundled_paths) -> list[Path]:
+    if bundled_paths is None:
+        return bundled_vulkan_runtime_candidates()
+    return [Path(path) for path in bundled_paths]
+
+
+def vulkan_runtime_available(
+    assets: RuntimeAssets | None = None,
+    *,
+    bundled_paths=None,
+) -> bool:
+    """True when the pinned Vulkan engine can actually be obtained here.
+
+    That is a bundled zip on disk or a configured download URL. Selection and
+    user-facing copy ask this, so an installation without the engine never
+    probes GPUs for it or advertises AMD support.
+    """
+    assets = assets if assets is not None else OFFICIAL_ASSETS
+    if not vulkan_runtime_pinned(assets):
+        return False
+    if (assets.vulkan_runtime.url or "").strip():
+        return True
+    try:
+        return any(path.is_file() for path in _bundled_candidates(bundled_paths))
+    except OSError:
+        return False
+
+
+def gpu_support_label(assets: RuntimeAssets | None = None) -> str:
+    """The GPU vendors this installation can honestly offer, for copy."""
+    return "NVIDIA or AMD" if vulkan_runtime_available(assets) else "NVIDIA"
+
+
+def acceleration_label(acceleration: str) -> str:
+    """User-facing name of an installed engine's acceleration."""
+    return {"cuda": "NVIDIA", "vulkan": "AMD/Vulkan"}.get(
+        acceleration, "compatibility"
+    )
+
+
+def gpu_requirement(assets: RuntimeAssets | None = None) -> str:
+    """Why a GPU-only setup (the host) cannot continue, stated honestly."""
+    if vulkan_runtime_available(assets):
+        return (
+            "A compatible NVIDIA or AMD GPU is required: NVIDIA with a "
+            "CUDA 12.4-capable Windows driver, or AMD with a current "
+            "Vulkan-capable driver."
+        )
+    return (
+        "A compatible NVIDIA GPU and CUDA 12.4-capable Windows driver are "
+        "required. AMD/Vulkan support is not included in this installation."
+    )
+
+
+def _system32() -> Path:
+    return Path(os.environ.get("SYSTEMROOT", r"C:\Windows")) / "System32"
+
+
+def _bounded_probe_output(
+    runner: ProcessRunner,
+    command: list[str],
+) -> str | None:
+    try:
+        result = runner(
+            command,
+            cwd=str(Path(command[0]).parent),
+            env=_safe_process_environment(),
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            text=True,
+            timeout=GPU_PROBE_TIMEOUT_SECONDS,
+            check=False,
+            shell=False,
+            creationflags=NO_WINDOW,
+        )
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return None
+    output = result.stdout if isinstance(result.stdout, str) else None
+    if (
+        result.returncode != 0
+        or output is None
+        or len(output) > GPU_PROBE_MAX_OUTPUT
+    ):
+        return None
+    return output
+
+
+def _video_controllers_from_powershell(
+    runner: ProcessRunner,
+    powershell_path: Path | None,
+) -> list[tuple[str, str, str]] | None:
+    if powershell_path is None:
+        candidate = (
+            _system32() / "WindowsPowerShell" / "v1.0" / "powershell.exe"
+        )
+        if candidate.is_file():
+            powershell_path = candidate
+        else:
+            located = shutil.which("powershell.exe")
+            powershell_path = Path(located) if located else None
+    if powershell_path is None or not Path(powershell_path).is_file():
+        return None
+    output = _bounded_probe_output(
+        runner,
+        [
+            str(powershell_path),
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            "Get-CimInstance -ClassName Win32_VideoController | "
+            "ForEach-Object { [string]$_.Name + '|' + "
+            "[string]$_.AdapterCompatibility + '|' + "
+            "[string]$_.DriverVersion }",
+        ],
+    )
+    if output is None:
+        return None
+    adapters = []
+    for line in output.splitlines():
+        if not line.strip():
+            continue
+        parts = line.split("|")
+        if len(parts) != 3:
+            continue
+        adapters.append(tuple(part.strip() for part in parts))
+    return adapters
+
+
+def _video_controllers_from_wmic(
+    runner: ProcessRunner,
+    wmic_path: Path | None,
+) -> list[tuple[str, str, str]] | None:
+    if wmic_path is None:
+        candidate = _system32() / "wbem" / "WMIC.exe"
+        if candidate.is_file():
+            wmic_path = candidate
+        else:
+            located = shutil.which("wmic.exe") or shutil.which("wmic")
+            wmic_path = Path(located) if located else None
+    if wmic_path is None or not Path(wmic_path).is_file():
+        return None
+    # /value prints one Key=Value per line; CSV is unusable because wmic does
+    # not quote "Advanced Micro Devices, Inc.".
+    output = _bounded_probe_output(
+        runner,
+        [
+            str(wmic_path),
+            "path",
+            "win32_VideoController",
+            "get",
+            "Name,AdapterCompatibility,DriverVersion",
+            "/value",
+        ],
+    )
+    if output is None:
+        return None
+    adapters = []
+    record: dict[str, str] = {}
+
+    def flush() -> None:
+        if record:
+            adapters.append(
+                (
+                    record.get("name", ""),
+                    record.get("adaptercompatibility", ""),
+                    record.get("driverversion", ""),
+                )
+            )
+            record.clear()
+
+    # wmic ends lines with \r\r\n, which reads as a blank line after every
+    # value, so a record ends only when one of its keys repeats.
+    for line in output.splitlines():
+        key, separator, value = line.partition("=")
+        if not separator:
+            continue
+        key = key.strip().casefold()
+        if key in record:
+            flush()
+        record[key] = value.strip()
+    flush()
+    return adapters
+
+
+def _vulkan_capable_adapter(name: str, vendor: str, driver: str) -> bool:
+    """AMD/ATI, Intel Arc, or any NVIDIA adapter with a driver installed."""
+    if not driver.strip():
+        return False
+    text = (name + " " + vendor).casefold()
+    if (
+        "advanced micro devices" in text
+        or re.search(r"\b(amd|ati|radeon)\b", text)
+        or re.search(r"\bnvidia\b", text)
+    ):
+        return True
+    return bool(
+        re.search(r"\bintel\b", text) and re.search(r"\barc\b", name.casefold())
+    )
+
+
+def vulkan_gpu_available(
+    *,
+    runner: ProcessRunner | None = None,
+    powershell_path: Path | None = None,
+    wmic_path: Path | None = None,
+    vulkan_loader_path: Path | None = None,
+    windows: bool | None = None,
+) -> bool:
+    """Detect a Vulkan-capable GPU on Windows without changing the system.
+
+    Read-only: requires the Vulkan loader GPU drivers install into System32,
+    then lists video controllers through CIM (falling back to wmic). Both
+    probes are hidden, bounded by a timeout, and any failure reads as False.
+    The caller decides ordering; CUDA is always tried first.
+    """
+    if windows is None:
+        windows = os.name == "nt"
+    if not windows:
+        return False
+    runner = runner or subprocess.run
+    try:
+        loader = (
+            Path(vulkan_loader_path)
+            if vulkan_loader_path is not None
+            else _system32() / "vulkan-1.dll"
+        )
+        if not loader.is_file():
+            return False
+        adapters = _video_controllers_from_powershell(runner, powershell_path)
+        if adapters is None:
+            adapters = _video_controllers_from_wmic(runner, wmic_path)
+        return any(_vulkan_capable_adapter(*adapter) for adapter in adapters or ())
+    except Exception:  # noqa: BLE001 - a detector must never break setup
+        return False
+
+
+def acceleration_preference(environ: Mapping[str, str] | None = None) -> str:
+    raw = (environ if environ is not None else os.environ).get(
+        ACCELERATION_PREFERENCE_ENV, ""
+    )
+    value = raw.strip().casefold() if isinstance(raw, str) else ""
+    return value if value in ACCELERATION_PREFERENCES else "auto"
+
+
+def _probe(detector: Callable[[], bool]) -> bool:
+    try:
+        return bool(detector())
+    except (OSError, RuntimeError, ValueError, subprocess.SubprocessError):
+        return False
+
+
+def select_acceleration(
+    *,
+    assets: RuntimeAssets | None = None,
+    cuda_detector: Callable[[], bool] | None = None,
+    vulkan_detector: Callable[[], bool] | None = None,
+    preference: str | None = None,
+    bundled_paths=None,
+) -> str:
+    """Pick cuda -> vulkan -> cpu. Vulkan is only probed when obtainable."""
+    assets = assets if assets is not None else OFFICIAL_ASSETS
+    if preference is None:
+        preference = acceleration_preference()
+    elif preference not in ACCELERATION_PREFERENCES:
+        preference = "auto"
+    if preference == "cpu":
+        return "cpu"
+    if preference in {"auto", "cuda"} and _probe(
+        cuda_detector or cuda_12_4_available
+    ):
+        return "cuda"
+    if (
+        preference in {"auto", "vulkan"}
+        and vulkan_runtime_available(assets, bundled_paths=bundled_paths)
+        and _probe(vulkan_detector or vulkan_gpu_available)
+    ):
+        return "vulkan"
+    return "cpu"
 
 
 def _emit(
@@ -518,12 +887,25 @@ def _runtime_from_manifest(
     ):
         return None
     acceleration = manifest.get("acceleration")
-    if acceleration not in {"cpu", "cuda"}:
+    if acceleration not in ACCELERATIONS:
+        return None
+    # An unpinned Vulkan engine has no digest to compare against, so a
+    # manifest claiming it cannot be trusted; that install reads as absent.
+    if acceleration == "vulkan" and not vulkan_runtime_pinned(assets):
         return None
     expected_cuda_digest = (
         assets.cuda_runtime.sha256 if acceleration == "cuda" else None
     )
     if manifest.get("cuda_runtime_archive_sha256") != expected_cuda_digest:
+        return None
+    # Manifests written before the Vulkan mode existed have no such key, which
+    # .get() reads as None - exactly what a cpu or cuda install expects.
+    expected_vulkan_digest = (
+        assets.vulkan_runtime.sha256
+        if acceleration == "vulkan" and assets.vulkan_runtime is not None
+        else None
+    )
+    if manifest.get("vulkan_runtime_archive_sha256") != expected_vulkan_digest:
         return None
     server = _relative_inside(root, manifest.get("server"))
     fallback_server = _relative_inside(root, manifest.get("fallback_server"))
@@ -590,11 +972,15 @@ def _runtime_from_manifest(
     # about verification only here. Sweeping the server's directory as well
     # rejected every CUDA install outright, because the CUDA server ships a
     # ggml-cuda.dll that no dependency entry is permitted to name - the check
-    # asked a question the manifest's own shape made unanswerable.
+    # asked a question the manifest's own shape made unanswerable. The Vulkan
+    # server's ggml-vulkan.dll is in exactly the same position and is handled
+    # the same way: it lives beside the Vulkan server, outside this sweep.
     #
     # Those files are not unverified. They arrive inside an archive whose
-    # SHA-256 is pinned in CUDA_RUNTIME_SHA256, checked on download, and
-    # re-asserted against this manifest above. That is install-time provenance
+    # SHA-256 is pinned in CUDA_RUNTIME_SHA256 (or VULKAN_RUNTIME_SHA256),
+    # checked on download, and re-asserted against this manifest above. A
+    # ggml-vulkan.dll or ggml-cuda.dll dropped beside the library, by contrast,
+    # is unlisted there and fails this sweep. That is install-time provenance
     # rather than load-time re-verification, which is genuinely weaker; closing
     # the difference needs the manifest to carry per-file digests for every
     # directory it loads from, not a sweep that can only ever fail.
@@ -757,6 +1143,64 @@ def _download_fraction(
     return report
 
 
+def _download_gpu_runtime(
+    downloader: AssetDownloader,
+    asset: DownloadAsset,
+    destination: Path,
+    progress: ProgressCallback | None,
+    *,
+    phase: str,
+    message: str,
+) -> None:
+    _emit(progress, phase, message, 0.05)
+    downloader(
+        asset,
+        destination,
+        _download_fraction(
+            progress,
+            phase=phase,
+            message=message,
+            start=0.05,
+            span=0.48,
+        ),
+    )
+
+
+def _stage_bundled_asset(
+    asset: DownloadAsset,
+    candidates: list[Path],
+    destination: Path,
+) -> bool:
+    """Copy the first bundled copy that verifies into staging.
+
+    The staged bytes are what gets hashed and later extracted, so a bundled
+    file that changes during the copy cannot slip past the check. A missing,
+    oversized or mismatched candidate is skipped, never an error.
+    """
+    for candidate in candidates:
+        try:
+            if not candidate.is_file():
+                continue
+            size = candidate.stat().st_size
+            if size < asset.minimum_bytes or size > asset.maximum_bytes:
+                continue
+            copied = 0
+            with candidate.open("rb") as source, destination.open("xb") as output:
+                while True:
+                    chunk = source.read(DOWNLOAD_CHUNK_BYTES)
+                    if not chunk:
+                        break
+                    copied += len(chunk)
+                    if copied > asset.maximum_bytes:
+                        raise IntegrityError("A bundled file is larger than expected.")
+                    output.write(chunk)
+            _verify_asset(destination, asset)
+            return True
+        except (OSError, RuntimeInstallError):
+            destination.unlink(missing_ok=True)
+    return False
+
+
 def install_runtime(
     root: Path | None = None,
     *,
@@ -764,30 +1208,69 @@ def install_runtime(
     progress: ProgressCallback | None = None,
     assets: RuntimeAssets = OFFICIAL_ASSETS,
     cuda_detector: Callable[[], bool] | None = None,
+    vulkan_detector: Callable[[], bool] | None = None,
+    retry_gpu_upgrade: bool = False,
     retry_cuda_upgrade: bool = False,
+    acceleration_preference: str | None = None,
+    bundled_vulkan_paths=None,
 ) -> InstalledRuntime:
-    """Download, verify, stage, and atomically activate whisper.cpp."""
+    """Download, verify, stage, and atomically activate whisper.cpp.
+
+    The Vulkan engine comes from the installer's bundled copy (hash-verified,
+    copied into staging) and is downloaded only if that copy is absent or
+    fails verification and VULKAN_RUNTIME_URL is set.
+
+    retry_gpu_upgrade lets an explicit repair replace a valid installed
+    runtime with a faster one (cpu -> vulkan or cuda, vulkan -> cuda) when
+    detection now allows it. retry_cuda_upgrade is its former name.
+    """
     root = Path(root) if root is not None else default_runtime_root()
     installed = detect_installed_runtime(root, assets=assets)
     downloader = downloader or download_asset
-    use_cuda: bool | None = None
+    retry_gpu_upgrade = retry_gpu_upgrade or retry_cuda_upgrade
+
+    def choose() -> str:
+        return select_acceleration(
+            assets=assets,
+            cuda_detector=cuda_detector,
+            vulkan_detector=vulkan_detector,
+            preference=acceleration_preference,
+            bundled_paths=bundled_vulkan_paths,
+        )
+
+    selected: str | None = None
     if installed is not None:
         should_probe_upgrade = (
-            retry_cuda_upgrade and installed.acceleration == "cpu"
+            retry_gpu_upgrade and installed.acceleration != "cuda"
         )
         if should_probe_upgrade:
-            try:
-                use_cuda = bool((cuda_detector or cuda_12_4_available)())
-            except (OSError, RuntimeError, ValueError, subprocess.SubprocessError):
-                use_cuda = False
-        if not should_probe_upgrade or not use_cuda:
+            selected = choose()
+        if not should_probe_upgrade or (
+            _ACCELERATION_RANK[selected]
+            <= _ACCELERATION_RANK.get(installed.acceleration, 0)
+        ):
             _emit(progress, "ready", "Local speech engine is already ready.", 1.0)
             return installed
-    if use_cuda is None:
-        try:
-            use_cuda = bool((cuda_detector or cuda_12_4_available)())
-        except (OSError, RuntimeError, ValueError, subprocess.SubprocessError):
-            use_cuda = False
+    if selected is None:
+        selected = choose()
+    gpu_asset: DownloadAsset | None = None
+    if selected == "cuda":
+        gpu_asset = assets.cuda_runtime
+        gpu_label = "NVIDIA"
+        gpu_download_message = (
+            "Downloading NVIDIA speech acceleration (about 640 MB)..."
+        )
+    elif selected == "vulkan" and assets.vulkan_runtime is not None:
+        gpu_asset = assets.vulkan_runtime
+        gpu_label = "AMD/Vulkan"
+        gpu_download_message = "Downloading AMD/Vulkan speech acceleration..."
+    else:
+        selected = "cpu"
+        gpu_label = ""
+        gpu_download_message = ""
+    gpu_fallback_message = (
+        gpu_label + " acceleration was unavailable; using compatibility mode."
+    )
     installations = root / "installs"
     final_folder: Path | None = None
     activated = False
@@ -798,7 +1281,7 @@ def install_runtime(
         raise RuntimeInstallError("Windows could not prepare the local speech folder.") from error
 
     cpu_runtime_download = staging / "speech-engine-cpu.zip"
-    cuda_runtime_download = staging / "speech-engine-cuda.zip"
+    gpu_runtime_download = staging / "speech-engine-gpu.zip"
     model_download = staging / "speech-model.download"
     vad_model_download = staging / "speech-detector.download"
     try:
@@ -827,43 +1310,49 @@ def install_runtime(
         )
         _verify_asset(cpu_runtime_download, assets.cpu_runtime)
 
-        cuda_installed = False
-        if use_cuda:
+        gpu_installed = False
+        if gpu_asset is not None:
             try:
-                _emit(
-                    progress,
-                    "cuda-download",
-                    "Downloading NVIDIA speech acceleration (about 640 MB)...",
-                    0.05,
-                )
-                downloader(
-                    assets.cuda_runtime,
-                    cuda_runtime_download,
-                    _download_fraction(
+                bundled = False
+                if selected == "vulkan":
+                    _emit(
                         progress,
-                        phase="cuda-download",
-                        message=(
-                            "Downloading NVIDIA speech acceleration "
-                            "(about 640 MB)..."
-                        ),
-                        start=0.05,
-                        span=0.48,
-                    ),
-                )
+                        "vulkan-bundled",
+                        "Preparing the included AMD/Vulkan speech acceleration...",
+                        0.05,
+                    )
+                    bundled = _stage_bundled_asset(
+                        gpu_asset,
+                        _bundled_candidates(bundled_vulkan_paths),
+                        gpu_runtime_download,
+                    )
+                    if not bundled and not (gpu_asset.url or "").strip():
+                        raise RuntimeInstallError(
+                            "The AMD/Vulkan speech engine is not included."
+                        )
+                if not bundled:
+                    _download_gpu_runtime(
+                        downloader,
+                        gpu_asset,
+                        gpu_runtime_download,
+                        progress,
+                        phase=selected + "-download",
+                        message=gpu_download_message,
+                    )
                 _emit(
                     progress,
-                    "cuda-verify",
-                    "Checking NVIDIA speech acceleration...",
+                    selected + "-verify",
+                    "Checking " + gpu_label + " speech acceleration...",
                     0.53,
                 )
-                _verify_asset(cuda_runtime_download, assets.cuda_runtime)
-                cuda_installed = True
+                _verify_asset(gpu_runtime_download, gpu_asset)
+                gpu_installed = True
             except RuntimeInstallError:
-                cuda_runtime_download.unlink(missing_ok=True)
+                gpu_runtime_download.unlink(missing_ok=True)
                 _emit(
                     progress,
-                    "cuda-fallback",
-                    "NVIDIA acceleration was unavailable; using compatibility mode.",
+                    selected + "-fallback",
+                    gpu_fallback_message,
                     0.54,
                 )
 
@@ -950,30 +1439,42 @@ def install_runtime(
             )
         server = cpu_server
         acceleration = "cpu"
-        if cuda_installed:
-            cuda_files = files / "cuda"
+        if gpu_installed:
+            gpu_files = files / selected
             try:
-                safe_extract_zip(cuda_runtime_download, cuda_files)
-                cuda_servers = sorted(
+                safe_extract_zip(gpu_runtime_download, gpu_files)
+                gpu_servers = sorted(
                     path
-                    for path in cuda_files.rglob("*")
+                    for path in gpu_files.rglob("*")
                     if path.is_file()
                     and path.name.casefold() == "whisper-server.exe"
                 )
-                if len(cuda_servers) != 1:
+                if len(gpu_servers) != 1:
                     raise RuntimeInstallError(
-                        "The NVIDIA speech engine did not contain the expected server."
+                        "The "
+                        + gpu_label
+                        + " speech engine did not contain the expected server."
                     )
-                server = cuda_servers[0]
-                acceleration = "cuda"
+                # whisper.cpp quietly runs on the CPU backend when its GPU
+                # backend DLL is missing, so a Vulkan engine without
+                # ggml-vulkan.dll beside its server would be mislabelled.
+                if (
+                    selected == "vulkan"
+                    and not gpu_servers[0].with_name("ggml-vulkan.dll").is_file()
+                ):
+                    raise RuntimeInstallError(
+                        "The AMD/Vulkan speech engine did not contain its GPU backend."
+                    )
+                server = gpu_servers[0]
+                acceleration = selected
             except RuntimeInstallError:
-                shutil.rmtree(cuda_files, ignore_errors=True)
-                cuda_runtime_download.unlink(missing_ok=True)
-                cuda_installed = False
+                shutil.rmtree(gpu_files, ignore_errors=True)
+                gpu_runtime_download.unlink(missing_ok=True)
+                gpu_installed = False
                 _emit(
                     progress,
-                    "cuda-fallback",
-                    "NVIDIA acceleration was unavailable; using compatibility mode.",
+                    selected + "-fallback",
+                    gpu_fallback_message,
                     0.93,
                 )
 
@@ -994,7 +1495,7 @@ def install_runtime(
         os.replace(model_download, model)
         os.replace(vad_model_download, vad_model)
         cpu_runtime_download.unlink(missing_ok=True)
-        cuda_runtime_download.unlink(missing_ok=True)
+        gpu_runtime_download.unlink(missing_ok=True)
 
         generation = RUNTIME_TAG + "-" + uuid.uuid4().hex
         final_folder = installations / generation
@@ -1014,7 +1515,12 @@ def install_runtime(
             "acceleration": acceleration,
             "cpu_runtime_archive_sha256": assets.cpu_runtime.sha256,
             "cuda_runtime_archive_sha256": (
-                assets.cuda_runtime.sha256 if cuda_installed else None
+                assets.cuda_runtime.sha256 if acceleration == "cuda" else None
+            ),
+            "vulkan_runtime_archive_sha256": (
+                gpu_asset.sha256
+                if acceleration == "vulkan" and gpu_asset is not None
+                else None
             ),
             "model_sha256": assets.model.sha256,
             "vad_model_sha256": assets.vad_model.sha256,
@@ -1045,10 +1551,12 @@ def install_runtime(
         _write_active_manifest(root, payload)
         activated = True
         _prune_superseded_generations(final_folder, installations)
-        ready_message = (
-            "Local speech engine is ready with NVIDIA acceleration."
-            if installed.acceleration == "cuda"
-            else "Local speech engine is ready in compatibility mode."
+        ready_message = {
+            "cuda": "Local speech engine is ready with NVIDIA acceleration.",
+            "vulkan": "Local speech engine is ready with AMD/Vulkan acceleration.",
+        }.get(
+            installed.acceleration,
+            "Local speech engine is ready in compatibility mode.",
         )
         _emit(progress, "ready", ready_message, 1.0)
         return installed
@@ -1250,6 +1758,7 @@ def install_voice_dependencies(
     node_path: Path | None = None,
     npm_cli_path: Path | None = None,
     cuda_detector: Callable[[], bool] | None = None,
+    vulkan_detector: Callable[[], bool] | None = None,
 ) -> InstallOutcome:
     """Explicit one-click action for verified STT and locked adapter deps."""
     def runtime_progress(update: InstallProgress) -> None:
@@ -1266,7 +1775,8 @@ def install_voice_dependencies(
         progress=runtime_progress if progress is not None else None,
         assets=assets,
         cuda_detector=cuda_detector,
-        retry_cuda_upgrade=True,
+        vulkan_detector=vulkan_detector,
+        retry_gpu_upgrade=True,
     )
     _emit(progress, "adapter", "Preparing the Discord voice helper...", 0.98)
     adapter = prepare_discord_adapter(

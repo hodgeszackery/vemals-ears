@@ -27,6 +27,9 @@ PRODUCT = "vemals-ears-host"
 OUTPUT_NAME = "Vemals-Ears-Host-Setup"
 TEST_OUTPUT_NAME = OUTPUT_NAME + "-TEST-UNSIGNED"
 INSTALLER_SOURCE = "Hosting/Installer/VemalsEarsHost.iss"
+# Pinned in Hosting/Installer/assets.lock.json (whisper_vulkan.local_path); never committed.
+SPEECH_ENGINE_SOURCE = "Installer/runtime-cache/whisper-vulkan-bin-x64.zip"
+SPEECH_ENGINE_PATH = "speech-engine/whisper-vulkan-bin-x64.zip"
 NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
 
@@ -117,7 +120,7 @@ def stage_runtime(root: Path, stage: Path, cache: Path, existing: Path | None = 
     build_runtime.purge_bytecode(runtime)
 
 
-def stage_tools(stage: Path, cache: Path) -> None:
+def _with_staged_assets(stage: Path, action):
     # Load the exact source snapshot that will be installed, not a later edit
     # from the working tree. Its lock file is included in that same snapshot.
     path = stage / "app/Hosting/assets.py"
@@ -127,9 +130,21 @@ def stage_tools(stage: Path, cache: Path) -> None:
     sys.modules[name] = module
     try:
         spec.loader.exec_module(module)
-        module.stage_tools(stage, cache)
+        try:
+            return action(module)
+        except module.AssetError as error:
+            raise HostInstallerError(str(error)) from error
     finally:
         sys.modules.pop(name, None)
+
+
+def stage_tools(stage: Path, cache: Path) -> None:
+    _with_staged_assets(stage, lambda module: module.stage_tools(stage, cache))
+
+
+def stage_speech_engine(stage: Path, source: Path, cache: Path) -> None:
+    """Bundle the pinned Vulkan speech engine at <install root>/speech-engine/."""
+    _with_staged_assets(stage, lambda module: module.stage_speech_engine(stage, source, cache))
 
 
 def verify_stage(stage: Path) -> None:
@@ -147,7 +162,7 @@ def verify_stage(stage: Path) -> None:
     probe = (
         "import tkinter, websockets; from pathlib import Path; "
         "from Hosting import wizard, control, assets; from GuildHub import host, server; "
-        "assets.validate_tools(Path.cwd().parent); tkinter.Tcl(); print('HOST-INSTALLER-IMPORT-OK')"
+        "assets.validate_tools(Path.cwd().parent); assets.validate_speech_engine(Path.cwd().parent); tkinter.Tcl(); print('HOST-INSTALLER-IMPORT-OK')"
     )
     result = subprocess.run(
         [str(stage / "runtime/python.exe"), "-E", "-s", "-B", "-c", probe],
@@ -173,7 +188,7 @@ def verify_stage(stage: Path) -> None:
                 })
         raise HostInstallerError("The private host runtime failed imports:\n" + result.stdout + result.stderr + detail)
     for relative in ("tools/node/node.exe", "tools/node/node_modules/npm/bin/npm-cli.js",
-                     "tools/nssm/nssm.exe", "tools/cloudflared/cloudflared.exe"):
+                     "tools/nssm/nssm.exe", "tools/cloudflared/cloudflared.exe", SPEECH_ENGINE_PATH):
         if not (stage / relative).is_file():
             raise HostInstallerError("The private host tools are incomplete: " + relative)
 
@@ -341,6 +356,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--cache", type=Path, default=ROOT / "Installer/cache")
     parser.add_argument("--output", type=Path, default=ROOT / "dist")
     parser.add_argument("--iscc", type=Path, default=Path("C:/Program Files/Inno Setup 7/ISCC.exe"))
+    parser.add_argument("--speech-engine", type=Path, default=ROOT / SPEECH_ENGINE_SOURCE,
+                        help="Pinned whisper-vulkan-bin-x64.zip to bundle (SHA-256 checked)")
     parser.add_argument("--test-build", action="store_true")
     parser.add_argument("--compile-stage", type=Path, help="Verify and compile an existing staged host")
     parser.add_argument("--stage-only", action="store_true")
@@ -354,6 +371,8 @@ def main(argv: list[str] | None = None) -> int:
             stage = (args.stage or ROOT / "Installer/build" / ("host-" + uuid.uuid4().hex) / "stage").resolve()
             stage_source(ROOT, stage, args.version, test_build=args.test_build)
             print("Staged host source: " + str(stage), flush=True)
+            # Checked first so a missing or altered speech engine fails fast.
+            stage_speech_engine(stage, args.speech_engine.resolve(), args.cache.resolve() / "host-assets")
             stage_runtime(stage / "app", stage, args.cache.resolve(), args.runtime)
             stage_tools(stage, args.cache.resolve() / "host-assets")
         verify_stage(stage)

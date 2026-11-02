@@ -28,7 +28,9 @@ if __package__ in {None, ""}:
         InstallOutcome,
         InstallProgress,
         RuntimeInstallError,
+        acceleration_label,
         detect_installed_runtime,
+        gpu_support_label,
         install_voice_dependencies,
     )
 else:
@@ -45,7 +47,9 @@ else:
         InstallOutcome,
         InstallProgress,
         RuntimeInstallError,
+        acceleration_label,
         detect_installed_runtime,
+        gpu_support_label,
         install_voice_dependencies,
     )
 
@@ -322,8 +326,9 @@ class DiscordSetupWindow(tk.Tk):
             runtime,
             text=(
                 "Installs a verified high-accuracy speech model on this PC. "
-                "Supported NVIDIA cards are used automatically, with a "
-                "compatibility engine kept as a fallback. Voice stays local."
+                "Supported " + gpu_support_label() + " cards are used "
+                "automatically, with a compatibility engine kept as a "
+                "fallback. Voice stays local."
             ),
             bg=SLATE,
             fg=MUTED,
@@ -491,8 +496,12 @@ class DiscordSetupWindow(tk.Tk):
             installed = None
         if installed is None:
             return
-        if installed.acceleration == "cuda":
-            message = "Local speech engine is ready with NVIDIA acceleration."
+        if installed.acceleration in {"cuda", "vulkan"}:
+            message = (
+                "Local speech engine is ready with "
+                + acceleration_label(installed.acceleration)
+                + " acceleration."
+            )
         else:
             message = "Local speech engine is ready in compatibility mode."
         self.runtime_status.set(message)
@@ -535,8 +544,10 @@ class DiscordSetupWindow(tk.Tk):
                 self._set_runtime_progress(1.0)
                 if payload.adapter.ready:
                     acceleration = (
-                        " with NVIDIA acceleration"
-                        if payload.runtime.acceleration == "cuda"
+                        " with "
+                        + acceleration_label(payload.runtime.acceleration)
+                        + " acceleration"
+                        if payload.runtime.acceleration in {"cuda", "vulkan"}
                         else " in compatibility mode"
                     )
                     self.runtime_status.set(

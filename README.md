@@ -22,7 +22,7 @@ voice chat everyone else took for granted. It is named after him.
 
 - `VoiceCaptions/` - Discord capture adapter (Node), speech runtime, overlay
 - `GuildHub/` - member wire client, pairing helpers, voice worker, standalone relay
-- `Hosting/` - Windows NVIDIA host setup, service installer and guide
+- `Hosting/` - Windows GPU host setup, service installer and guide
 - `Installer/`, `packaging/`, `Windows/` - installer and native launcher
 - `tests/` - 70 test modules; `ci/` - the release checks
 - `docs/` - development, CI, source-distribution and migration notes
@@ -41,7 +41,10 @@ See `docs/SOURCE.txt` to modify and rebuild without signing keys.
 
 For setup without commands, run `Vemals-Ears-Host-Setup.exe` and follow the
 graphical wizard. It includes private Python, Node and service tools, prepares
-NVIDIA speech recognition, and can install your Cloudflare Tunnel connector.
+GPU speech recognition, and can install your Cloudflare Tunnel connector.
+NVIDIA (CUDA) is the tested path. AMD GPUs can use a new Vulkan engine in
+builds that include it; it is expected to be slower than CUDA and has not
+yet been validated on real AMD hardware.
 See [the host quick start](Hosting/QUICKSTART.txt).
 
 The wizard also supports an encrypted handoff from the original Windows
@@ -52,7 +55,7 @@ See the [illustrated hosting guide](https://ears.xenon.solutions/hosting).
 
 Build the Windows installer with `python packaging/build_host_installer.py`.
 
-Build a shareable Windows NVIDIA host package:
+Build a shareable Windows GPU host package:
 
     python packaging/build_host.py
 

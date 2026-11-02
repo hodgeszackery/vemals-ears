@@ -4,6 +4,8 @@ from pathlib import Path
 import tkinter as tk
 from tkinter import filedialog
 
+from VoiceCaptions import runtime_installer
+
 
 class TakeoverUi:
     def __init__(self, wizard, backend=None):
@@ -22,6 +24,10 @@ class TakeoverUi:
     def label(self, text, **options):
         from Hosting.wizard import MUTED
         return self.wizard._label(self.wizard.body, text, color=MUTED, **options)
+
+    @staticmethod
+    def gpu_label():
+        return runtime_installer.gpu_support_label()
 
     def checkbox(self, text, variable):
         from Hosting.wizard import PANEL, TEXT, FIELD, GOLD
@@ -192,7 +198,7 @@ class TakeoverUi:
         self.original_stopped.set(False)
         w._clear("takeover-import", "REPLACEMENT PC  /  OPEN HANDOFF")
         w._heading("Take over an existing host", "Open the encrypted file from the original PC. Members keep their connections.")
-        self.label("This PC runs the Discord bot and NVIDIA caption worker. The original PC keeps pairing, the public relay and Downtime, and must stay online.").pack(anchor="w", pady=(0, 10))
+        self.label("This PC runs the Discord bot and the " + self.gpu_label() + " GPU caption worker. The original PC keeps pairing, the public relay and Downtime, and must stay online.").pack(anchor="w", pady=(0, 10))
         self.file_field(save=False)
         w._field(w.body, "handoff_password", "Handoff passphrase", secret=True)[0].pack(fill="x", pady=6)
         w._button(w.navigation, "Back", self.show_choices).pack(side="left")
@@ -221,7 +227,7 @@ class TakeoverUi:
         w._heading(preview["guild_name"], "Existing member connection: " + preview["public_http_url"])
         self.label("The existing Discord bot, publisher identity, consent choices and mappings will be preserved. No member needs to pair again.").pack(anchor="w", pady=(0, 12))
         self.label("Discord server ID: " + preview["guild_id"] + "\nApplication ID: " + preview["application_id"], size=9).pack(anchor="w", pady=(0, 12))
-        self.label("Setup prepares NVIDIA speech recognition and starts this replacement worker. Keep the original PC online for pairing, the relay and Downtime.").pack(anchor="w")
+        self.label("Setup prepares GPU speech recognition and starts this replacement worker. Keep the original PC online for pairing, the relay and Downtime.").pack(anchor="w")
         self.checkbox("The original caption worker is stopped and disabled. This is the only replacement worker I will start.", self.original_stopped)
         w._button(w.navigation, "Back", self.show_import).pack(side="left")
         w._button(w.navigation, "Import and start captions", self.begin_import, primary=True).pack(side="right")
@@ -234,7 +240,7 @@ class TakeoverUi:
             w.notice.set("Confirm that the original caption worker is stopped and disabled.")
             return
         w.error_back = self.show_import
-        w._show_progress("Setting up the replacement", "Importing the worker and preparing NVIDIA speech recognition...")
+        w._show_progress("Setting up the replacement", "Importing the worker and preparing GPU speech recognition...")
 
         def work(progress):
             settings = self.backend.import_pending(original_stopped=True)

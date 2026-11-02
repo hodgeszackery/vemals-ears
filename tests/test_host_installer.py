@@ -134,6 +134,36 @@ class HostInstallerTests(unittest.TestCase):
         self.assertIn("VemalsEarsHost-Installer-Test-", script)
         self.assertNotIn("Install-Host.ps1", script)
 
+    def test_installer_bundles_the_pinned_speech_engine_at_the_agreed_path(self):
+        script = (ROOT / installer.INSTALLER_SOURCE).read_text(encoding="ascii")
+        files = script.split("[Files]", 1)[1].split("\n[", 1)[0]
+        self.assertIn(
+            'Source: "{#StageRoot}\\speech-engine\\*"; DestDir: "{app}\\speech-engine"; '
+            "Flags: ignoreversion nocompression", files)
+        uninstall_deletes = script.split("[UninstallDelete]", 1)[1].split("[Code]", 1)[0]
+        self.assertIn('Name: "{app}\\speech-engine"; Check: UninstallTargetValidated', uninstall_deletes)
+        lock = json.loads((ROOT / "Hosting/Installer/assets.lock.json").read_text(encoding="ascii"))
+        self.assertEqual(installer.SPEECH_ENGINE_PATH, lock["whisper_vulkan"]["install_path"])
+        self.assertEqual(installer.SPEECH_ENGINE_SOURCE, lock["whisper_vulkan"]["local_path"])
+        self.assertIn("--speech-engine", installer.main.__code__.co_consts)
+
+    def test_speech_engine_staging_uses_the_staged_lock_and_refuses_bad_input_early(self):
+        with tempfile.TemporaryDirectory() as folder:
+            stage = Path(folder) / "stage"
+            for relative in ("Hosting/assets.py", "Hosting/Installer/assets.lock.json"):
+                target = stage / "app" / relative
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes((ROOT / relative).read_bytes())
+            missing = Path(folder) / "absent.zip"
+            with mock.patch("urllib.request.urlopen", side_effect=AssertionError("unexpected network")):
+                with self.assertRaisesRegex(installer.HostInstallerError, "gh run download"):
+                    installer.stage_speech_engine(stage, missing, Path(folder) / "cache")
+                wrong = Path(folder) / "whisper-vulkan-bin-x64.zip"
+                wrong.write_bytes(b"not the pinned speech engine")
+                with self.assertRaisesRegex(installer.HostInstallerError, "pinned SHA-256"):
+                    installer.stage_speech_engine(stage, wrong, Path(folder) / "cache")
+            self.assertFalse((stage / "speech-engine").exists())
+
     def test_install_smoke_refuses_production_artifacts_before_execution(self):
         with tempfile.TemporaryDirectory() as folder:
             executable = Path(folder) / (installer.OUTPUT_NAME + ".exe")

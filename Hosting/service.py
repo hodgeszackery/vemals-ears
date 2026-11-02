@@ -176,10 +176,15 @@ def validate_runtime(values: dict[str, str]) -> None:
 
     root = Path(values["LOCALAPPDATA"]) / "WoWVoiceCaptions" / "runtime"
     runtime = runtime_installer.detect_installed_runtime(root)
-    if runtime is None or runtime.acceleration != "cuda":
-        raise ConfigurationError("Run host setup prepare; a verified NVIDIA speech runtime is required.")
-    if not runtime_installer.cuda_12_4_available():
+    if runtime is None or runtime.acceleration not in ("cuda", "vulkan"):
+        raise ConfigurationError("Run host setup prepare; a verified "
+                                 + runtime_installer.gpu_support_label()
+                                 + " GPU speech runtime is required.")
+    # The installed engine decides which driver must still be present.
+    if runtime.acceleration == "cuda" and not runtime_installer.cuda_12_4_available():
         raise ConfigurationError("The host requires an NVIDIA GPU with a CUDA 12.4-capable driver.")
+    if runtime.acceleration == "vulkan" and not runtime_installer.vulkan_gpu_available():
+        raise ConfigurationError("The host's AMD/Vulkan speech runtime requires an AMD or other Vulkan-capable GPU with a current driver.")
 
 
 def check_port(values: dict[str, str]) -> None:
@@ -222,7 +227,7 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     if args.check_only:
         print("Host configuration verified."
-              + (" NVIDIA runtime verified." if args.role == "worker" else ""))
+              + (" GPU speech runtime verified." if args.role == "worker" else ""))
         return 0
     configure_environment(values)
     if args.role == "worker":

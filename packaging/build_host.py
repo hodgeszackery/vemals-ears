@@ -1,4 +1,4 @@
-"""Build a portable source package for a Windows/NVIDIA Vemal's Ears host.
+"""Build a portable source package for a Windows GPU Vemal's Ears host.
 
 Only the fixed source inventory below is read. Operator state, downloaded
 runtimes and local credentials are not inputs, even when beside the source.

@@ -179,6 +179,43 @@ class HostServiceTests(unittest.TestCase):
                     self.assertEqual(before, dict(os.environ))
                     self.assertEqual(["relay.env"], [path.name for path in state.iterdir()])
 
+    def test_worker_preflight_accepts_verified_vulkan_with_a_vulkan_capable_gpu(self):
+        from VoiceCaptions import runtime_installer
+
+        with tempfile.TemporaryDirectory() as folder:
+            state = Path(folder).resolve()
+            write_configuration(state)
+            args = ["--state-directory", str(state), "--check-only", "worker"]
+            for vulkan_ready, expected in ((False, 2), (True, 0)):
+                with self.subTest(vulkan_ready=vulkan_ready):
+                    runtime = types.SimpleNamespace(acceleration="vulkan")
+                    stderr = io.StringIO()
+                    with patch.object(runtime_installer, "detect_installed_runtime", return_value=runtime), \
+                            patch.object(runtime_installer, "cuda_12_4_available",
+                                         side_effect=AssertionError("CUDA is irrelevant to a Vulkan runtime")), \
+                            patch.object(runtime_installer, "vulkan_gpu_available", return_value=vulkan_ready), \
+                            contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(stderr):
+                        self.assertEqual(expected, service.main(args))
+                    if not vulkan_ready:
+                        self.assertIn("Vulkan-capable GPU", stderr.getvalue())
+                    self.assertEqual(["relay.env"], [path.name for path in state.iterdir()])
+
+    def test_missing_runtime_error_names_only_supported_gpus(self):
+        from VoiceCaptions import runtime_installer
+
+        with tempfile.TemporaryDirectory() as folder:
+            state = Path(folder).resolve()
+            write_configuration(state)
+            args = ["--state-directory", str(state), "--check-only", "worker"]
+            for included, expected in ((False, "verified NVIDIA GPU"), (True, "verified NVIDIA or AMD GPU")):
+                with self.subTest(included=included):
+                    stderr = io.StringIO()
+                    with patch.object(runtime_installer, "detect_installed_runtime", return_value=None), \
+                            patch.object(runtime_installer, "vulkan_runtime_available", return_value=included), \
+                            contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(stderr):
+                        self.assertEqual(2, service.main(args))
+                    self.assertIn(expected, stderr.getvalue())
+
     def test_existing_port_owner_blocks_relay_preflight(self):
         with tempfile.TemporaryDirectory() as folder, socket.socket() as owner:
             owner.bind(("127.0.0.1", 0))
@@ -214,7 +251,7 @@ class HostInstallationTests(unittest.TestCase):
             write_configuration(state)
             result = self.preflight(SCRIPT, state)
             self.assertNotEqual(0, result.returncode)
-            self.assertIn("NVIDIA speech runtime preflight failed", result.stdout + result.stderr)
+            self.assertIn("GPU speech runtime preflight failed", result.stdout + result.stderr)
             self.assertEqual(["relay.env"], [path.name for path in state.iterdir()])
 
     def test_incomplete_package_fails_before_creating_state(self):
