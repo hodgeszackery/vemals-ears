@@ -44,13 +44,23 @@ CPU_RUNTIME_SHA256 = (
 # ggml-vulkan.dll in place of ggml-cuda.dll. Vulkan runs on AMD, Intel Arc and
 # NVIDIA GPUs; it is slower than CUDA and is only chosen when CUDA is not.
 #
-# DELIBERATELY UNSET. Fill in both values together with the hosted release
-# asset URL and its SHA-256 (lowercase hex). While either is empty,
-# vulkan_runtime_pinned() is False: the Vulkan path is never probed or
-# downloaded, a manifest claiming "vulkan" is rejected, and installs behave
-# exactly as before this mode existed (CUDA when usable, otherwise CPU).
+# The zip is BUNDLED inside the member and host installers at
+# BUNDLED_VULKAN_RUNTIME (see bundled_vulkan_runtime_candidates()) and is
+# copied into staging, never downloaded, after its pinned SHA-256 matches.
+# VULKAN_RUNTIME_URL is DELIBERATELY UNSET because no public download exists;
+# if one is ever hosted, set it and the installer falls back to it when the
+# bundled copy is absent or fails verification. With neither available,
+# vulkan_runtime_available() is False: the Vulkan path is never probed and
+# installs behave exactly as before this mode existed (CUDA, otherwise CPU).
 VULKAN_RUNTIME_URL = ""
-VULKAN_RUNTIME_SHA256 = ""
+VULKAN_RUNTIME_SHA256 = (
+    "1b6cede02773817efa74dcb0f94bd7485926d5c472f8f648bd8a4af8ccff46a6"
+)
+VULKAN_RUNTIME_BYTES = 22_525_659
+BUNDLED_VULKAN_RUNTIME = PurePosixPath("speech-engine/whisper-vulkan-bin-x64.zip")
+# Points at one bundled zip instead of the install-root search; for tests and
+# for operators running from a source checkout.
+BUNDLED_VULKAN_RUNTIME_ENV = "VOICE_CAPTIONS_BUNDLED_VULKAN_RUNTIME"
 # Kept as aliases for callers that displayed the former single runtime asset.
 RUNTIME_URL = CUDA_RUNTIME_URL
 RUNTIME_SHA256 = CUDA_RUNTIME_SHA256
@@ -175,11 +185,11 @@ OFFICIAL_ASSETS = RuntimeAssets(
         name="AMD/Vulkan speech engine",
         url=VULKAN_RUNTIME_URL,
         sha256=VULKAN_RUNTIME_SHA256,
-        # Provisional bounds until the CI-built zip's real size is known;
-        # tighten them to a few MB around it when the URL and hash are pinned.
-        minimum_bytes=1 * 1024 * 1024,
-        maximum_bytes=300 * 1024 * 1024,
-        maximum_seconds=1_200.0,
+        # The pinned zip is 22,525,659 bytes; the bounds only guard copying
+        # and any future download before the hash check decides.
+        minimum_bytes=20 * 1024 * 1024,
+        maximum_bytes=24 * 1024 * 1024,
+        maximum_seconds=600.0,
     ),
 )
 
@@ -304,25 +314,77 @@ def cuda_12_4_available(
 
 
 def vulkan_runtime_pinned(assets: RuntimeAssets | None = None) -> bool:
-    """True only once the Vulkan engine has a real URL and SHA-256.
+    """True once the Vulkan engine has a full SHA-256 to verify against.
 
-    The install path, manifest validation and user-facing copy all ask this
-    one question, so an unset VULKAN_RUNTIME_URL/VULKAN_RUNTIME_SHA256 can
-    never be downloaded, verified against, or advertised.
+    Manifest validation asks this: without a pinned digest a manifest that
+    claims "vulkan" cannot be trusted and reads as no install at all.
     """
     asset = (assets if assets is not None else OFFICIAL_ASSETS).vulkan_runtime
     return (
         asset is not None
-        and isinstance(asset.url, str)
-        and bool(asset.url.strip())
         and isinstance(asset.sha256, str)
         and re.fullmatch(r"[0-9a-fA-F]{64}", asset.sha256) is not None
     )
 
 
+def _package_root() -> Path:
+    # VoiceCaptions/runtime_installer.py -> the app folder, which both
+    # installers place at {app}/app; Hosting.control calls it package_root.
+    return Path(__file__).resolve().parents[1]
+
+
+def bundled_vulkan_runtime_candidates(
+    environ: Mapping[str, str] | None = None,
+) -> list[Path]:
+    """Where an installer may have placed the Vulkan zip, in search order.
+
+    The override env var, when set, is the only candidate. Otherwise the
+    install root ({app}, Hosting.control's install_root) is searched first,
+    then the app folder itself. Every candidate is hash-verified before use.
+    """
+    override = (environ if environ is not None else os.environ).get(
+        BUNDLED_VULKAN_RUNTIME_ENV, ""
+    )
+    if isinstance(override, str) and override.strip():
+        return [Path(override.strip())]
+    package_root = _package_root()
+    return [
+        package_root.parent.joinpath(*BUNDLED_VULKAN_RUNTIME.parts),
+        package_root.joinpath(*BUNDLED_VULKAN_RUNTIME.parts),
+    ]
+
+
+def _bundled_candidates(bundled_paths) -> list[Path]:
+    if bundled_paths is None:
+        return bundled_vulkan_runtime_candidates()
+    return [Path(path) for path in bundled_paths]
+
+
+def vulkan_runtime_available(
+    assets: RuntimeAssets | None = None,
+    *,
+    bundled_paths=None,
+) -> bool:
+    """True when the pinned Vulkan engine can actually be obtained here.
+
+    That is a bundled zip on disk or a configured download URL. Selection and
+    user-facing copy ask this, so an installation without the engine never
+    probes GPUs for it or advertises AMD support.
+    """
+    assets = assets if assets is not None else OFFICIAL_ASSETS
+    if not vulkan_runtime_pinned(assets):
+        return False
+    if (assets.vulkan_runtime.url or "").strip():
+        return True
+    try:
+        return any(path.is_file() for path in _bundled_candidates(bundled_paths))
+    except OSError:
+        return False
+
+
 def gpu_support_label(assets: RuntimeAssets | None = None) -> str:
-    """The GPU vendors this build can honestly offer, for user-facing copy."""
-    return "NVIDIA or AMD" if vulkan_runtime_pinned(assets) else "NVIDIA"
+    """The GPU vendors this installation can honestly offer, for copy."""
+    return "NVIDIA or AMD" if vulkan_runtime_available(assets) else "NVIDIA"
 
 
 def acceleration_label(acceleration: str) -> str:
@@ -334,7 +396,7 @@ def acceleration_label(acceleration: str) -> str:
 
 def gpu_requirement(assets: RuntimeAssets | None = None) -> str:
     """Why a GPU-only setup (the host) cannot continue, stated honestly."""
-    if vulkan_runtime_pinned(assets):
+    if vulkan_runtime_available(assets):
         return (
             "A compatible NVIDIA or AMD GPU is required: NVIDIA with a "
             "CUDA 12.4-capable Windows driver, or AMD with a current "
@@ -342,7 +404,7 @@ def gpu_requirement(assets: RuntimeAssets | None = None) -> str:
         )
     return (
         "A compatible NVIDIA GPU and CUDA 12.4-capable Windows driver are "
-        "required. AMD/Vulkan support is not available in this build yet."
+        "required. AMD/Vulkan support is not included in this installation."
     )
 
 
@@ -549,8 +611,9 @@ def select_acceleration(
     cuda_detector: Callable[[], bool] | None = None,
     vulkan_detector: Callable[[], bool] | None = None,
     preference: str | None = None,
+    bundled_paths=None,
 ) -> str:
-    """Pick cuda -> vulkan -> cpu. Vulkan is never probed while unpinned."""
+    """Pick cuda -> vulkan -> cpu. Vulkan is only probed when obtainable."""
     assets = assets if assets is not None else OFFICIAL_ASSETS
     if preference is None:
         preference = acceleration_preference()
@@ -564,7 +627,7 @@ def select_acceleration(
         return "cuda"
     if (
         preference in {"auto", "vulkan"}
-        and vulkan_runtime_pinned(assets)
+        and vulkan_runtime_available(assets, bundled_paths=bundled_paths)
         and _probe(vulkan_detector or vulkan_gpu_available)
     ):
         return "vulkan"
@@ -1080,6 +1143,64 @@ def _download_fraction(
     return report
 
 
+def _download_gpu_runtime(
+    downloader: AssetDownloader,
+    asset: DownloadAsset,
+    destination: Path,
+    progress: ProgressCallback | None,
+    *,
+    phase: str,
+    message: str,
+) -> None:
+    _emit(progress, phase, message, 0.05)
+    downloader(
+        asset,
+        destination,
+        _download_fraction(
+            progress,
+            phase=phase,
+            message=message,
+            start=0.05,
+            span=0.48,
+        ),
+    )
+
+
+def _stage_bundled_asset(
+    asset: DownloadAsset,
+    candidates: list[Path],
+    destination: Path,
+) -> bool:
+    """Copy the first bundled copy that verifies into staging.
+
+    The staged bytes are what gets hashed and later extracted, so a bundled
+    file that changes during the copy cannot slip past the check. A missing,
+    oversized or mismatched candidate is skipped, never an error.
+    """
+    for candidate in candidates:
+        try:
+            if not candidate.is_file():
+                continue
+            size = candidate.stat().st_size
+            if size < asset.minimum_bytes or size > asset.maximum_bytes:
+                continue
+            copied = 0
+            with candidate.open("rb") as source, destination.open("xb") as output:
+                while True:
+                    chunk = source.read(DOWNLOAD_CHUNK_BYTES)
+                    if not chunk:
+                        break
+                    copied += len(chunk)
+                    if copied > asset.maximum_bytes:
+                        raise IntegrityError("A bundled file is larger than expected.")
+                    output.write(chunk)
+            _verify_asset(destination, asset)
+            return True
+        except (OSError, RuntimeInstallError):
+            destination.unlink(missing_ok=True)
+    return False
+
+
 def install_runtime(
     root: Path | None = None,
     *,
@@ -1091,8 +1212,13 @@ def install_runtime(
     retry_gpu_upgrade: bool = False,
     retry_cuda_upgrade: bool = False,
     acceleration_preference: str | None = None,
+    bundled_vulkan_paths=None,
 ) -> InstalledRuntime:
     """Download, verify, stage, and atomically activate whisper.cpp.
+
+    The Vulkan engine comes from the installer's bundled copy (hash-verified,
+    copied into staging) and is downloaded only if that copy is absent or
+    fails verification and VULKAN_RUNTIME_URL is set.
 
     retry_gpu_upgrade lets an explicit repair replace a valid installed
     runtime with a faster one (cpu -> vulkan or cuda, vulkan -> cuda) when
@@ -1109,6 +1235,7 @@ def install_runtime(
             cuda_detector=cuda_detector,
             vulkan_detector=vulkan_detector,
             preference=acceleration_preference,
+            bundled_paths=bundled_vulkan_paths,
         )
 
     selected: str | None = None
@@ -1186,23 +1313,32 @@ def install_runtime(
         gpu_installed = False
         if gpu_asset is not None:
             try:
-                _emit(
-                    progress,
-                    selected + "-download",
-                    gpu_download_message,
-                    0.05,
-                )
-                downloader(
-                    gpu_asset,
-                    gpu_runtime_download,
-                    _download_fraction(
+                bundled = False
+                if selected == "vulkan":
+                    _emit(
+                        progress,
+                        "vulkan-bundled",
+                        "Preparing the included AMD/Vulkan speech acceleration...",
+                        0.05,
+                    )
+                    bundled = _stage_bundled_asset(
+                        gpu_asset,
+                        _bundled_candidates(bundled_vulkan_paths),
+                        gpu_runtime_download,
+                    )
+                    if not bundled and not (gpu_asset.url or "").strip():
+                        raise RuntimeInstallError(
+                            "The AMD/Vulkan speech engine is not included."
+                        )
+                if not bundled:
+                    _download_gpu_runtime(
+                        downloader,
+                        gpu_asset,
+                        gpu_runtime_download,
                         progress,
                         phase=selected + "-download",
                         message=gpu_download_message,
-                        start=0.05,
-                        span=0.48,
-                    ),
-                )
+                    )
                 _emit(
                     progress,
                     selected + "-verify",

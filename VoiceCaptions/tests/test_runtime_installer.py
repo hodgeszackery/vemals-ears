@@ -848,41 +848,201 @@ class VulkanRuntimeTests(unittest.TestCase):
 
     def install(self, root, downloader, **kwargs):
         kwargs.setdefault("acceleration_preference", "auto")
+        # Hermetic: no bundled copy unless a test supplies one.
+        kwargs.setdefault("bundled_vulkan_paths", [])
         return install_runtime(
             root, downloader=downloader, assets=self.assets, **kwargs
         )
 
-    def test_production_vulkan_asset_is_an_explicit_unset_sentinel(self):
-        # Pinning the CI-built zip must update this test with the exact
-        # values, the same way test_production_assets_are_exactly_pinned
-        # holds the upstream ones.
+    def test_production_vulkan_asset_is_pinned_and_bundled_only(self):
+        # The CI-built zip ships inside the installers; there is no public
+        # download, so the URL stays an explicit empty sentinel.
         self.assertEqual("", VULKAN_RUNTIME_URL)
-        self.assertEqual("", VULKAN_RUNTIME_SHA256)
-        self.assertEqual("AMD/Vulkan speech engine", OFFICIAL_ASSETS.vulkan_runtime.name)
-        self.assertEqual(VULKAN_RUNTIME_URL, OFFICIAL_ASSETS.vulkan_runtime.url)
-        self.assertFalse(vulkan_runtime_pinned())
-        self.assertFalse(vulkan_runtime_pinned(OFFICIAL_ASSETS))
-        self.assertEqual("NVIDIA", runtime_installer_module.gpu_support_label())
+        self.assertEqual(
+            "1b6cede02773817efa74dcb0f94bd7485926d5c472f8f648bd8a4af8ccff46a6",
+            VULKAN_RUNTIME_SHA256,
+        )
+        asset = OFFICIAL_ASSETS.vulkan_runtime
+        self.assertEqual("AMD/Vulkan speech engine", asset.name)
+        self.assertEqual(VULKAN_RUNTIME_URL, asset.url)
+        self.assertEqual(VULKAN_RUNTIME_SHA256, asset.sha256)
+        self.assertLessEqual(asset.minimum_bytes, runtime_installer_module.VULKAN_RUNTIME_BYTES)
+        self.assertGreaterEqual(asset.maximum_bytes, runtime_installer_module.VULKAN_RUNTIME_BYTES)
+        self.assertTrue(vulkan_runtime_pinned())
+        self.assertFalse(runtime_installer_module.vulkan_runtime_available(bundled_paths=[]))
+        with tempfile.TemporaryDirectory() as folder:
+            bundled = Path(folder) / "whisper-vulkan-bin-x64.zip"
+            bundled.write_bytes(b"present")
+            self.assertTrue(runtime_installer_module.vulkan_runtime_available(bundled_paths=[bundled]))
+            with mock.patch.dict(os.environ, {runtime_installer_module.BUNDLED_VULKAN_RUNTIME_ENV: str(bundled)}):
+                self.assertEqual("NVIDIA or AMD", runtime_installer_module.gpu_support_label())
+            with mock.patch.dict(
+                os.environ,
+                {runtime_installer_module.BUNDLED_VULKAN_RUNTIME_ENV: str(Path(folder) / "absent.zip")},
+            ):
+                self.assertEqual("NVIDIA", runtime_installer_module.gpu_support_label())
 
-    def test_pinned_requires_both_a_url_and_a_full_sha256(self):
+    def test_bundled_zip_is_searched_under_the_install_root_then_the_app_folder(self):
+        app = Path(runtime_installer_module.__file__).resolve().parents[1]
+        relative = Path("speech-engine") / "whisper-vulkan-bin-x64.zip"
+        self.assertEqual(
+            [app.parent / relative, app / relative],
+            runtime_installer_module.bundled_vulkan_runtime_candidates({}),
+        )
+        self.assertEqual(
+            [Path("/override/engine.zip")],
+            runtime_installer_module.bundled_vulkan_runtime_candidates(
+                {runtime_installer_module.BUNDLED_VULKAN_RUNTIME_ENV: "/override/engine.zip"}
+            ),
+        )
+
+    def test_pinned_requires_a_full_sha256_but_no_url(self):
         self.assertTrue(vulkan_runtime_pinned(self.assets))
-        for url, digest in (("", "a" * 64), ("https://x/y.zip", ""), ("https://x/y.zip", "a" * 63)):
+        for url, digest, expected in (
+            ("", "a" * 64, True),
+            ("https://x/y.zip", "", False),
+            ("https://x/y.zip", "a" * 63, False),
+        ):
             with self.subTest(url=url, digest=digest):
                 assets = dataclasses.replace(
                     self.assets,
                     vulkan_runtime=DownloadAsset("v", url, digest, 1, 2, 3),
                 )
-                self.assertFalse(vulkan_runtime_pinned(assets))
+                self.assertEqual(expected, vulkan_runtime_pinned(assets))
         self.assertFalse(vulkan_runtime_pinned(dataclasses.replace(self.assets, vulkan_runtime=None)))
         self.assertEqual("NVIDIA or AMD", runtime_installer_module.gpu_support_label(self.assets))
 
-    def test_user_facing_labels_follow_pinning(self):
+    def test_user_facing_labels_follow_availability(self):
         label = runtime_installer_module.acceleration_label
         self.assertEqual(("NVIDIA", "AMD/Vulkan", "compatibility"), (label("cuda"), label("vulkan"), label("cpu")))
         requirement = runtime_installer_module.gpu_requirement
         self.assertIn("NVIDIA or AMD GPU is required", requirement(self.assets))
-        self.assertIn("not available in this build", requirement(unpinned_vulkan(self.assets)))
-        self.assertIn("not available in this build", requirement())
+        self.assertIn("not included in this installation", requirement(unpinned_vulkan(self.assets)))
+        with mock.patch.dict(
+            os.environ,
+            {runtime_installer_module.BUNDLED_VULKAN_RUNTIME_ENV: "/nonexistent/vulkan.zip"},
+        ):
+            self.assertIn("not included in this installation", requirement())
+
+    def bundled_assets(self, url=""):
+        """Production shape: pinned digest, bundled zip, usually no URL."""
+        asset = self.assets.vulkan_runtime
+        return dataclasses.replace(
+            self.assets,
+            vulkan_runtime=DownloadAsset(
+                asset.name, url, asset.sha256, asset.minimum_bytes,
+                asset.maximum_bytes, asset.maximum_seconds,
+            ),
+        )
+
+    def test_bundled_zip_is_used_without_downloading(self):
+        self.assets = self.bundled_assets()
+        downloader = self.downloader()
+        progress = []
+        with tempfile.TemporaryDirectory() as folder:
+            bundled = Path(folder) / "speech-engine" / "whisper-vulkan-bin-x64.zip"
+            bundled.parent.mkdir()
+            bundled.write_bytes(self.vulkan_archive)
+            root = Path(folder) / "runtime"
+            installed = self.install(
+                root,
+                downloader,
+                progress=progress.append,
+                cuda_detector=lambda: False,
+                vulkan_detector=lambda: True,
+                bundled_vulkan_paths=[Path(folder) / "missing.zip", bundled],
+            )
+            self.assertEqual("vulkan", installed.acceleration)
+            self.assertEqual(b"Vulkan server", installed.server_path.read_bytes())
+            self.assertEqual(self.vulkan_archive, bundled.read_bytes(), "bundled copy is left in place")
+            manifest = json.loads((root / "active.json").read_text(encoding="ascii"))
+            self.assertEqual(self.assets.vulkan_runtime.sha256, manifest["vulkan_runtime_archive_sha256"])
+        self.assertNotIn("fixture://vulkan-runtime", [call[1] for call in downloader.calls])
+        self.assertEqual(3, len(downloader.calls))
+        phases = [update.phase for update in progress]
+        self.assertIn("vulkan-bundled", phases)
+        self.assertNotIn("vulkan-download", phases)
+
+    def test_bundled_zip_with_wrong_digest_falls_back_to_cpu_without_a_url(self):
+        self.assets = self.bundled_assets()
+        downloader = self.downloader()
+        progress = []
+        with tempfile.TemporaryDirectory() as folder:
+            bundled = Path(folder) / "whisper-vulkan-bin-x64.zip"
+            bundled.write_bytes(vulkan_zip(b"tampered server"))
+            root = Path(folder) / "runtime"
+            installed = self.install(
+                root,
+                downloader,
+                progress=progress.append,
+                cuda_detector=lambda: False,
+                vulkan_detector=lambda: True,
+                bundled_vulkan_paths=[bundled],
+            )
+            manifest = json.loads((root / "active.json").read_text(encoding="ascii"))
+            self.assertFalse(
+                any(path.name.startswith(".install-") for path in (root / "installs").iterdir())
+            )
+        self.assertEqual("cpu", installed.acceleration)
+        self.assertIsNone(manifest["vulkan_runtime_archive_sha256"])
+        self.assertIn("vulkan-fallback", [update.phase for update in progress])
+        self.assertEqual(3, len(downloader.calls))
+
+    def test_bundled_zip_with_wrong_digest_falls_back_to_the_url_when_set(self):
+        self.assets = self.bundled_assets(url="fixture://vulkan-runtime")
+        downloader = self.downloader()
+        progress = []
+        with tempfile.TemporaryDirectory() as folder:
+            bundled = Path(folder) / "whisper-vulkan-bin-x64.zip"
+            bundled.write_bytes(vulkan_zip(b"tampered server"))
+            installed = self.install(
+                Path(folder) / "runtime",
+                downloader,
+                progress=progress.append,
+                cuda_detector=lambda: False,
+                vulkan_detector=lambda: True,
+                bundled_vulkan_paths=[bundled],
+            )
+            self.assertEqual(b"Vulkan server", installed.server_path.read_bytes())
+        self.assertEqual("vulkan", installed.acceleration)
+        self.assertIn("fixture://vulkan-runtime", [call[1] for call in downloader.calls])
+        phases = [update.phase for update in progress]
+        self.assertLess(phases.index("vulkan-bundled"), phases.index("vulkan-download"))
+
+    def test_absent_bundle_without_a_url_reports_vulkan_unavailable(self):
+        self.assets = self.bundled_assets()
+        downloader = self.downloader()
+        detector = never("Vulkan")
+        with tempfile.TemporaryDirectory() as folder:
+            absent = Path(folder) / "whisper-vulkan-bin-x64.zip"
+            self.assertFalse(
+                runtime_installer_module.vulkan_runtime_available(self.assets, bundled_paths=[absent])
+            )
+            installed = self.install(
+                Path(folder) / "runtime",
+                downloader,
+                cuda_detector=lambda: False,
+                vulkan_detector=detector,
+                bundled_vulkan_paths=[absent],
+            )
+        self.assertEqual("cpu", installed.acceleration)
+        self.assertEqual(3, len(downloader.calls))
+        detector.assert_not_called()
+
+    def test_oversized_bundle_is_skipped_before_copying(self):
+        self.assets = self.bundled_assets()
+        downloader = self.downloader()
+        with tempfile.TemporaryDirectory() as folder:
+            bundled = Path(folder) / "whisper-vulkan-bin-x64.zip"
+            bundled.write_bytes(b"x" * (self.assets.vulkan_runtime.maximum_bytes + 1))
+            installed = self.install(
+                Path(folder) / "runtime",
+                downloader,
+                cuda_detector=lambda: False,
+                vulkan_detector=lambda: True,
+                bundled_vulkan_paths=[bundled],
+            )
+        self.assertEqual("cpu", installed.acceleration)
 
     def test_unpinned_vulkan_is_never_probed_and_falls_back_like_before(self):
         assets = unpinned_vulkan(self.assets)
