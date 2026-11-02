@@ -876,6 +876,14 @@ class VulkanRuntimeTests(unittest.TestCase):
         self.assertFalse(vulkan_runtime_pinned(dataclasses.replace(self.assets, vulkan_runtime=None)))
         self.assertEqual("NVIDIA or AMD", runtime_installer_module.gpu_support_label(self.assets))
 
+    def test_user_facing_labels_follow_pinning(self):
+        label = runtime_installer_module.acceleration_label
+        self.assertEqual(("NVIDIA", "AMD/Vulkan", "compatibility"), (label("cuda"), label("vulkan"), label("cpu")))
+        requirement = runtime_installer_module.gpu_requirement
+        self.assertIn("NVIDIA or AMD GPU is required", requirement(self.assets))
+        self.assertIn("not available in this build", requirement(unpinned_vulkan(self.assets)))
+        self.assertIn("not available in this build", requirement())
+
     def test_unpinned_vulkan_is_never_probed_and_falls_back_like_before(self):
         assets = unpinned_vulkan(self.assets)
         downloader = FixtureDownloader(

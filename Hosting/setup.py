@@ -1,4 +1,4 @@
-"""Create a new host's private configuration and prepare its NVIDIA runtime."""
+"""Create a new host's private configuration and prepare its GPU speech runtime."""
 
 from __future__ import annotations
 
@@ -171,18 +171,22 @@ def prepare_runtime(state: Path) -> None:
     state = state_path(state)
     if not (state / "relay.env").is_file():
         raise SetupError("Configure this host before preparing its runtime.")
-    if not runtime_installer.cuda_12_4_available():
-        raise SetupError("A compatible NVIDIA GPU and CUDA 12.4-capable Windows driver are required.")
+    # cuda first, then vulkan (only once its engine is pinned); cpu means no
+    # usable GPU, which is not a host.
+    if runtime_installer.select_acceleration() not in runtime_installer.GPU_ACCELERATIONS:
+        raise SetupError(runtime_installer.gpu_requirement())
     outcome = runtime_installer.install_voice_dependencies(
         state / "profile/WoWVoiceCaptions/runtime",
         adapter_dir=ROOT / "VoiceCaptions/discord_adapter",
         progress=lambda update: print(update.message, flush=True),
     )
-    if outcome.runtime.acceleration != "cuda":
-        raise SetupError("NVIDIA runtime preparation failed. Compatibility mode is not a completed GPU host setup; retry prepare.")
+    if outcome.runtime.acceleration not in runtime_installer.GPU_ACCELERATIONS:
+        raise SetupError("GPU runtime preparation failed. Compatibility mode is not a completed GPU host setup; retry prepare.")
     if not outcome.adapter.ready:
         raise SetupError(outcome.adapter.detail)
-    print("NVIDIA speech runtime and Discord dependencies are ready.")
+    print("Speech runtime is ready with "
+          + runtime_installer.acceleration_label(outcome.runtime.acceleration)
+          + " acceleration; Discord dependencies are ready.")
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -196,7 +200,7 @@ def main(argv: list[str] | None = None) -> int:
     configure.add_argument("--guild-name", default="Vemal's Ears")
     configure.add_argument("--port", type=int, default=8770)
     configure.add_argument("--client-download-url")
-    sub.add_parser("prepare", help="Download and verify the pinned NVIDIA runtime and Discord dependencies")
+    sub.add_parser("prepare", help="Download and verify the pinned GPU speech runtime and Discord dependencies")
     args = parser.parse_args(argv)
     try:
         state = state_path(args.state_directory)

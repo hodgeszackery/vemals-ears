@@ -1,4 +1,4 @@
-# Install the standalone relay and NVIDIA caption worker as Windows services.
+# Install the standalone relay and GPU caption worker as Windows services.
 # -CheckOnly validates local prerequisites without changing services or files.
 [CmdletBinding()]
 param(
@@ -37,7 +37,7 @@ if ($LASTEXITCODE -ne 0) { throw 'Host source, configuration, or takeover confir
 $hostMode = ($modeOutput | Out-String).Trim()
 if ($hostMode -notin @('standalone', 'remote-worker')) { throw 'Unknown host mode; no services changed.' }
 & $PythonPath -I -B -c "import sys; sys.path.insert(0, sys.argv[1]); from Hosting.service import main; sys.exit(main(['--state-directory', sys.argv[2], '--host-mode', sys.argv[3], '--check-only', 'worker']))" $repoRoot $StateDirectory $hostMode
-if ($LASTEXITCODE -ne 0) { throw 'NVIDIA speech runtime preflight failed. Run host setup prepare first.' }
+if ($LASTEXITCODE -ne 0) { throw 'GPU speech runtime preflight failed. Run host setup prepare first.' }
 if ($hostMode -eq 'standalone') {
     & $PythonPath -I -B -c "import sys; sys.path.insert(0, sys.argv[1]); from GuildHub import server; from Hosting.service import main; sys.exit(main(['--state-directory', sys.argv[2], '--check-only', 'relay']))" $repoRoot $StateDirectory
     if ($LASTEXITCODE -ne 0) { throw 'Relay source or configuration preflight failed.' }

@@ -299,8 +299,8 @@ class HostController:
         for path in required_tools:
             if not path.is_file():
                 raise HostError("The host installation is incomplete. Run the Windows installer again.")
-        if not runtime_installer.cuda_12_4_available():
-            raise HostError("Install a current NVIDIA driver for your GPU, then retry setup.")
+        if runtime_installer.select_acceleration() not in runtime_installer.GPU_ACCELERATIONS:
+            raise HostError(runtime_installer.gpu_requirement() + " Install a current driver for your GPU, then retry setup.")
         if settings["client_installer"]:
             progress("Preparing the member download...")
             destination = self.state / "downloads/Vemals-Ears-Setup.exe"
@@ -312,18 +312,20 @@ class HostController:
             metadata = _read_json(self.state / "host-settings.json")
             metadata["client_installer"] = str(destination)
             _write_json(self.state / "host-settings.json", metadata)
-        progress("Preparing the NVIDIA speech engine and Discord helper...")
+        progress("Preparing the GPU speech engine and Discord helper...")
         outcome = runtime_installer.install_voice_dependencies(
             self.state / "profile/WoWVoiceCaptions/runtime",
             adapter_dir=self.package_root / "VoiceCaptions/discord_adapter",
             node_path=self.node, npm_cli_path=self.npm,
             progress=lambda update: progress(update.message),
         )
-        if outcome.runtime.acceleration != "cuda":
-            raise HostError("NVIDIA speech preparation did not finish. Check your driver and internet connection, then retry.")
+        if outcome.runtime.acceleration not in runtime_installer.GPU_ACCELERATIONS:
+            raise HostError("GPU speech preparation did not finish. Check your driver and internet connection, then retry.")
         if not outcome.adapter.ready:
             raise HostError("The Discord helper could not be prepared. Check your internet connection and retry.")
-        progress("Speech engine and Discord helper are ready.")
+        progress("Speech engine is ready with "
+                 + runtime_installer.acceleration_label(outcome.runtime.acceleration)
+                 + " acceleration; the Discord helper is ready.")
 
     def install_services(self) -> None:
         self._validate_activation()
@@ -336,8 +338,8 @@ class HostController:
         ], timeout=180, check=False)
         if result.returncode:
             if self._host_mode() == service.REMOTE_WORKER:
-                raise HostError("The imported caption worker could not start. Check NVIDIA readiness and administrator access, then retry.")
-            raise HostError("Host services could not start. Check NVIDIA readiness, administrator access, and whether the relay port is already used.")
+                raise HostError("The imported caption worker could not start. Check GPU driver readiness and administrator access, then retry.")
+            raise HostError("Host services could not start. Check GPU driver readiness, administrator access, and whether the relay port is already used.")
         if self._host_mode() != service.REMOTE_WORKER:
             self._install_tunnel()
 
@@ -425,7 +427,7 @@ class HostController:
         if healthy and worker_ready:
             detail = "Relay and caption worker are ready. Verify your public address and try /vem start in Discord."
         elif healthy:
-            detail = "Relay is ready. The caption worker is starting or needs attention; check Discord credentials and NVIDIA setup."
+            detail = "Relay is ready. The caption worker is starting or needs attention; check Discord credentials and GPU setup."
         else:
             detail = ("The shared relay is not reachable. Check the existing public host and internet connection."
                       if remote else "The relay is not ready. Start the host or retry setup.")

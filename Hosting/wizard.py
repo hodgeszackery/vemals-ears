@@ -85,7 +85,10 @@ def prepare_host(backend, settings: dict, progress, configured, *, configure_exi
         backend.configure(settings)
         current = backend.read_settings()
     configured(current)
-    progress("Preparing NVIDIA speech recognition. The first download is about 1.2 GB...")
+    from VoiceCaptions import runtime_installer
+
+    progress("Preparing " + runtime_installer.gpu_support_label()
+             + " GPU speech recognition. The first download can be up to about 1.2 GB...")
     backend.prepare(progress)
     progress("Installing and starting your host services...")
     backend.install_services()

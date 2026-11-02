@@ -127,6 +127,60 @@ class HostSetupTests(unittest.TestCase):
             setup.prepare_runtime(self.state)
         self.assertEqual(self.state / "profile/WoWVoiceCaptions/runtime", install.call_args.args[0])
 
+    def test_prepare_requirement_names_amd_only_once_vulkan_is_pinned(self):
+        with mock.patch.object(setup, "protect_directory"):
+            self.configure()
+        installer = setup.runtime_installer
+        probe = mock.Mock(side_effect=AssertionError("unpinned Vulkan must not be probed"))
+        with mock.patch.object(installer, "cuda_12_4_available", return_value=False), \
+             mock.patch.object(installer, "vulkan_gpu_available", probe), \
+             mock.patch.object(installer, "install_voice_dependencies") as install:
+            with self.assertRaisesRegex(setup.SetupError, "AMD/Vulkan support is not available in this build"):
+                setup.prepare_runtime(self.state)
+            install.assert_not_called()
+        probe.assert_not_called()
+        with mock.patch.object(installer, "cuda_12_4_available", return_value=False), \
+             mock.patch.object(installer, "vulkan_runtime_pinned", return_value=True), \
+             mock.patch.object(installer, "vulkan_gpu_available", return_value=False), \
+             mock.patch.object(installer, "install_voice_dependencies") as install:
+            with self.assertRaisesRegex(setup.SetupError, "compatible NVIDIA or AMD GPU is required"):
+                setup.prepare_runtime(self.state)
+            install.assert_not_called()
+
+    def test_prepare_accepts_vulkan_and_rejects_its_runtime_fallback(self):
+        with mock.patch.object(setup, "protect_directory"):
+            self.configure()
+        installer = setup.runtime_installer
+        vulkan = SimpleNamespace(runtime=SimpleNamespace(acceleration="vulkan"),
+                                 adapter=SimpleNamespace(ready=True))
+        with mock.patch.object(installer, "cuda_12_4_available", return_value=False), \
+             mock.patch.object(installer, "vulkan_runtime_pinned", return_value=True), \
+             mock.patch.object(installer, "vulkan_gpu_available", return_value=True), \
+             mock.patch.object(installer, "install_voice_dependencies", return_value=vulkan) as install, \
+             mock.patch("builtins.print") as printed:
+            setup.prepare_runtime(self.state)
+        install.assert_called_once()
+        self.assertIn("with AMD/Vulkan acceleration", printed.call_args.args[0])
+        cpu = SimpleNamespace(runtime=SimpleNamespace(acceleration="cpu"),
+                              adapter=SimpleNamespace(ready=True))
+        with mock.patch.object(installer, "cuda_12_4_available", return_value=False), \
+             mock.patch.object(installer, "vulkan_runtime_pinned", return_value=True), \
+             mock.patch.object(installer, "vulkan_gpu_available", return_value=True), \
+             mock.patch.object(installer, "install_voice_dependencies", return_value=cpu):
+            with self.assertRaisesRegex(setup.SetupError, "not a completed GPU"):
+                setup.prepare_runtime(self.state)
+
+    def test_prepare_reports_nvidia_acceleration(self):
+        with mock.patch.object(setup, "protect_directory"):
+            self.configure()
+        outcome = SimpleNamespace(runtime=SimpleNamespace(acceleration="cuda"),
+                                  adapter=SimpleNamespace(ready=True))
+        with mock.patch.object(setup.runtime_installer, "cuda_12_4_available", return_value=True), \
+             mock.patch.object(setup.runtime_installer, "install_voice_dependencies", return_value=outcome), \
+             mock.patch("builtins.print") as printed:
+            setup.prepare_runtime(self.state)
+        self.assertIn("with NVIDIA acceleration", printed.call_args.args[0])
+
 
 if __name__ == "__main__":
     unittest.main()

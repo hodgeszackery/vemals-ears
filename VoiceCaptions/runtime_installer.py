@@ -94,6 +94,7 @@ NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 ACCELERATION_PREFERENCE_ENV = "VOICE_CAPTIONS_WHISPER_ACCELERATION_PREFERENCE"
 ACCELERATION_PREFERENCES = frozenset({"auto", "cpu", "cuda", "vulkan"})
 ACCELERATIONS = frozenset({"cpu", "cuda", "vulkan"})
+GPU_ACCELERATIONS = frozenset({"cuda", "vulkan"})
 # Higher is preferred; an explicit repair only replaces a lower-ranked engine.
 _ACCELERATION_RANK = {"cpu": 0, "vulkan": 1, "cuda": 2}
 GPU_PROBE_TIMEOUT_SECONDS = 15.0
@@ -322,6 +323,27 @@ def vulkan_runtime_pinned(assets: RuntimeAssets | None = None) -> bool:
 def gpu_support_label(assets: RuntimeAssets | None = None) -> str:
     """The GPU vendors this build can honestly offer, for user-facing copy."""
     return "NVIDIA or AMD" if vulkan_runtime_pinned(assets) else "NVIDIA"
+
+
+def acceleration_label(acceleration: str) -> str:
+    """User-facing name of an installed engine's acceleration."""
+    return {"cuda": "NVIDIA", "vulkan": "AMD/Vulkan"}.get(
+        acceleration, "compatibility"
+    )
+
+
+def gpu_requirement(assets: RuntimeAssets | None = None) -> str:
+    """Why a GPU-only setup (the host) cannot continue, stated honestly."""
+    if vulkan_runtime_pinned(assets):
+        return (
+            "A compatible NVIDIA or AMD GPU is required: NVIDIA with a "
+            "CUDA 12.4-capable Windows driver, or AMD with a current "
+            "Vulkan-capable driver."
+        )
+    return (
+        "A compatible NVIDIA GPU and CUDA 12.4-capable Windows driver are "
+        "required. AMD/Vulkan support is not available in this build yet."
+    )
 
 
 def _system32() -> Path:

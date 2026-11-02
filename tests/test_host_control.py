@@ -85,8 +85,34 @@ class HostControlTests(unittest.TestCase):
              patch.object(control.runtime_installer, "cuda_12_4_available", return_value=True), \
              patch.object(control.runtime_installer, "install_voice_dependencies", return_value=SimpleNamespace(
                  runtime=SimpleNamespace(acceleration="cpu"), adapter=SimpleNamespace(ready=True))):
-            with self.assertRaisesRegex(control.HostError, "NVIDIA speech preparation"):
+            with self.assertRaisesRegex(control.HostError, "GPU speech preparation"):
                 self.controller.prepare()
+
+    def test_vulkan_runtime_is_a_completed_gpu_setup(self):
+        self.configure()
+        progress = []
+        with patch.object(Path, "is_file", return_value=True), \
+             patch.object(control.runtime_installer, "cuda_12_4_available", return_value=False), \
+             patch.object(control.runtime_installer, "vulkan_runtime_pinned", return_value=True), \
+             patch.object(control.runtime_installer, "vulkan_gpu_available", return_value=True), \
+             patch.object(control.runtime_installer, "install_voice_dependencies", return_value=SimpleNamespace(
+                 runtime=SimpleNamespace(acceleration="vulkan"), adapter=SimpleNamespace(ready=True))) as install:
+            self.controller.prepare(progress.append)
+        install.assert_called_once()
+        self.assertIn("with AMD/Vulkan acceleration", progress[-1])
+
+    def test_no_usable_gpu_stops_before_downloading(self):
+        self.configure()
+        for pinned, expected in ((False, "not available in this build"), (True, "NVIDIA or AMD GPU is required")):
+            with self.subTest(pinned=pinned), \
+                    patch.object(Path, "is_file", return_value=True), \
+                    patch.object(control.runtime_installer, "cuda_12_4_available", return_value=False), \
+                    patch.object(control.runtime_installer, "vulkan_runtime_pinned", return_value=pinned), \
+                    patch.object(control.runtime_installer, "vulkan_gpu_available", return_value=False), \
+                    patch.object(control.runtime_installer, "install_voice_dependencies") as install:
+                with self.assertRaisesRegex(control.HostError, expected):
+                    self.controller.prepare()
+                install.assert_not_called()
 
     def test_ownership_check_happens_for_all_services_before_stopping(self):
         def get(name, setting):
