@@ -1,3 +1,4 @@
+import dataclasses
 import hashlib
 import io
 import json
@@ -21,12 +22,15 @@ from VoiceCaptions.runtime_installer import (
     MODEL_ENV,
     MODEL_SHA256,
     MODEL_URL,
+    OFFICIAL_ASSETS,
     RUNTIME_SHA256,
     RUNTIME_URL,
     SERVER_ENV,
     VAD_MODEL_ENV,
     VAD_MODEL_SHA256,
     VAD_MODEL_URL,
+    VULKAN_RUNTIME_SHA256,
+    VULKAN_RUNTIME_URL,
     AdapterPreparation,
     DownloadAsset,
     DownloadError,
@@ -41,7 +45,10 @@ from VoiceCaptions.runtime_installer import (
     install_runtime,
     prepare_discord_adapter,
     safe_extract_zip,
+    select_acceleration,
     stt_environment,
+    vulkan_gpu_available,
+    vulkan_runtime_pinned,
 )
 
 
@@ -89,11 +96,24 @@ def fixture_assets(
     model_payload: bytes,
     vad_model_payload: bytes = b"verified vad fixture",
     cuda_runtime_payload: bytes | None = None,
+    vulkan_runtime_payload: bytes | None = None,
 ) -> RuntimeAssets:
+    """Vulkan stays unpinned (None) unless a payload is given."""
     cuda_runtime_payload = cuda_runtime_payload or runtime_zip(
         server_payload=b"verified cuda whisper server"
     )
+    vulkan_runtime = None
+    if vulkan_runtime_payload is not None:
+        vulkan_runtime = DownloadAsset(
+            "test Vulkan runtime",
+            "fixture://vulkan-runtime",
+            sha256(vulkan_runtime_payload),
+            1,
+            1024 * 1024,
+            10,
+        )
     return RuntimeAssets(
+        vulkan_runtime=vulkan_runtime,
         cpu_runtime=DownloadAsset(
             "test CPU runtime",
             "fixture://cpu-runtime",
@@ -135,6 +155,7 @@ def fixture_downloads(
     model: bytes,
     vad_model: bytes = b"verified vad fixture",
     cuda_runtime: bytes | None = None,
+    vulkan_runtime: bytes | None = None,
 ) -> dict[str, bytes]:
     payloads = {
         assets.cpu_runtime.url: cpu_runtime,
@@ -143,7 +164,31 @@ def fixture_downloads(
     }
     if cuda_runtime is not None:
         payloads[assets.cuda_runtime.url] = cuda_runtime
+    if vulkan_runtime is not None:
+        payloads["fixture://vulkan-runtime"] = vulkan_runtime
     return payloads
+
+
+def vulkan_zip(
+    server_payload: bytes = b"Vulkan server",
+    *,
+    include_backend: bool = True,
+) -> bytes:
+    """Shaped like the upstream CUDA zip, ggml-vulkan.dll for ggml-cuda.dll."""
+    extra = {"Release/ggml-vulkan.dll": b"vulkan backend"} if include_backend else {}
+    return runtime_zip(server_payload=server_payload, extra_files=extra)
+
+
+def unpinned_vulkan(assets: RuntimeAssets) -> RuntimeAssets:
+    """The production sentinel shape: an asset whose url and hash are empty."""
+    return dataclasses.replace(
+        assets,
+        vulkan_runtime=DownloadAsset("test Vulkan runtime", "", "", 1, 1024, 10),
+    )
+
+
+def never(name: str):
+    return mock.Mock(side_effect=AssertionError("unexpected " + name + " probe"))
 
 
 class RuntimeInstallerTests(unittest.TestCase):
@@ -419,7 +464,8 @@ class RuntimeInstallerTests(unittest.TestCase):
             outcome = runtime_installer_module.install_voice_dependencies()
 
         self.assertIs(mock.sentinel.runtime, outcome.runtime)
-        self.assertTrue(installer.call_args.kwargs["retry_cuda_upgrade"])
+        # Covers both GPU engines now; retry_cuda_upgrade is its old name.
+        self.assertTrue(installer.call_args.kwargs["retry_gpu_upgrade"])
 
     def test_failed_cuda_verification_falls_back_without_activating_bad_bytes(self):
         cpu_archive = runtime_zip(server_payload=b"CPU server")
@@ -769,6 +815,554 @@ class CudaDetectionTests(unittest.TestCase):
                     nvidia_smi_path=nvidia_smi,
                 )
             )
+
+
+class VulkanRuntimeTests(unittest.TestCase):
+    """Mirrors the CUDA install cases for the AMD/Vulkan engine."""
+
+    def setUp(self):
+        self.cpu_archive = runtime_zip(server_payload=b"CPU server")
+        self.cuda_archive = runtime_zip(
+            server_payload=b"CUDA server",
+            extra_files={"Release/ggml-cuda.dll": b"cuda backend"},
+        )
+        self.vulkan_archive = vulkan_zip()
+        self.model = b"verified model fixture"
+        self.assets = fixture_assets(
+            self.cpu_archive,
+            self.model,
+            cuda_runtime_payload=self.cuda_archive,
+            vulkan_runtime_payload=self.vulkan_archive,
+        )
+
+    def downloader(self, *, vulkan=None, cuda=None):
+        return FixtureDownloader(
+            fixture_downloads(
+                self.assets,
+                self.cpu_archive,
+                self.model,
+                cuda_runtime=self.cuda_archive if cuda is None else cuda,
+                vulkan_runtime=self.vulkan_archive if vulkan is None else vulkan,
+            )
+        )
+
+    def install(self, root, downloader, **kwargs):
+        kwargs.setdefault("acceleration_preference", "auto")
+        return install_runtime(
+            root, downloader=downloader, assets=self.assets, **kwargs
+        )
+
+    def test_production_vulkan_asset_is_an_explicit_unset_sentinel(self):
+        # Pinning the CI-built zip must update this test with the exact
+        # values, the same way test_production_assets_are_exactly_pinned
+        # holds the upstream ones.
+        self.assertEqual("", VULKAN_RUNTIME_URL)
+        self.assertEqual("", VULKAN_RUNTIME_SHA256)
+        self.assertEqual("AMD/Vulkan speech engine", OFFICIAL_ASSETS.vulkan_runtime.name)
+        self.assertEqual(VULKAN_RUNTIME_URL, OFFICIAL_ASSETS.vulkan_runtime.url)
+        self.assertFalse(vulkan_runtime_pinned())
+        self.assertFalse(vulkan_runtime_pinned(OFFICIAL_ASSETS))
+        self.assertEqual("NVIDIA", runtime_installer_module.gpu_support_label())
+
+    def test_pinned_requires_both_a_url_and_a_full_sha256(self):
+        self.assertTrue(vulkan_runtime_pinned(self.assets))
+        for url, digest in (("", "a" * 64), ("https://x/y.zip", ""), ("https://x/y.zip", "a" * 63)):
+            with self.subTest(url=url, digest=digest):
+                assets = dataclasses.replace(
+                    self.assets,
+                    vulkan_runtime=DownloadAsset("v", url, digest, 1, 2, 3),
+                )
+                self.assertFalse(vulkan_runtime_pinned(assets))
+        self.assertFalse(vulkan_runtime_pinned(dataclasses.replace(self.assets, vulkan_runtime=None)))
+        self.assertEqual("NVIDIA or AMD", runtime_installer_module.gpu_support_label(self.assets))
+
+    def test_unpinned_vulkan_is_never_probed_and_falls_back_like_before(self):
+        assets = unpinned_vulkan(self.assets)
+        downloader = FixtureDownloader(
+            fixture_downloads(assets, self.cpu_archive, self.model)
+        )
+        detector = never("Vulkan")
+        with tempfile.TemporaryDirectory() as folder:
+            installed = install_runtime(
+                Path(folder) / "runtime",
+                downloader=downloader,
+                assets=assets,
+                cuda_detector=lambda: False,
+                vulkan_detector=detector,
+                acceleration_preference="vulkan",
+            )
+        self.assertEqual("cpu", installed.acceleration)
+        self.assertEqual(3, len(downloader.calls))
+        detector.assert_not_called()
+
+    def test_unpinned_vulkan_leaves_cuda_installs_unchanged(self):
+        assets = unpinned_vulkan(self.assets)
+        downloader = FixtureDownloader(
+            fixture_downloads(assets, self.cpu_archive, self.model, cuda_runtime=self.cuda_archive)
+        )
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder) / "runtime"
+            installed = install_runtime(
+                root,
+                downloader=downloader,
+                assets=assets,
+                cuda_detector=lambda: True,
+                vulkan_detector=never("Vulkan"),
+            )
+            self.assertEqual("cuda", installed.acceleration)
+            manifest = json.loads((root / "active.json").read_text(encoding="ascii"))
+            self.assertIsNone(manifest["vulkan_runtime_archive_sha256"])
+            self.assertEqual("cuda", detect_installed_runtime(root, assets=assets).acceleration)
+
+    def test_vulkan_runtime_is_primary_when_cuda_is_unusable(self):
+        downloader = self.downloader()
+        progress = []
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder) / "runtime"
+            installed = self.install(
+                root,
+                downloader,
+                progress=progress.append,
+                cuda_detector=lambda: False,
+                vulkan_detector=lambda: True,
+            )
+            self.assertEqual("vulkan", installed.acceleration)
+            self.assertEqual(b"Vulkan server", installed.server_path.read_bytes())
+            self.assertEqual(b"CPU server", installed.fallback_server_path.read_bytes())
+            self.assertIn("cpu", installed.library_path.parts)
+            self.assertIn("vulkan", installed.server_path.parts)
+            manifest = json.loads((root / "active.json").read_text(encoding="ascii"))
+            self.assertEqual("vulkan", manifest["acceleration"])
+            self.assertEqual(self.assets.vulkan_runtime.sha256, manifest["vulkan_runtime_archive_sha256"])
+            self.assertIsNone(manifest["cuda_runtime_archive_sha256"])
+            self.assertEqual(
+                "vulkan",
+                stt_environment(root, assets=self.assets)["VOICE_CAPTIONS_WHISPER_ACCELERATION"],
+            )
+        self.assertEqual(4, len(downloader.calls))
+        self.assertEqual("fixture://vulkan-runtime", downloader.calls[1][1])
+        phases = [update.phase for update in progress]
+        self.assertIn("vulkan-download", phases)
+        self.assertIn("vulkan-verify", phases)
+        self.assertNotIn("cuda-download", phases)
+        self.assertEqual("Local speech engine is ready with AMD/Vulkan acceleration.", progress[-1].message)
+
+    def test_cuda_is_selected_before_vulkan(self):
+        downloader = self.downloader()
+        detector = never("Vulkan")
+        with tempfile.TemporaryDirectory() as folder:
+            installed = self.install(
+                Path(folder) / "runtime",
+                downloader,
+                cuda_detector=lambda: True,
+                vulkan_detector=detector,
+            )
+        self.assertEqual("cuda", installed.acceleration)
+        detector.assert_not_called()
+
+    def test_no_gpu_uses_cpu(self):
+        downloader = self.downloader()
+        with tempfile.TemporaryDirectory() as folder:
+            installed = self.install(
+                Path(folder) / "runtime",
+                downloader,
+                cuda_detector=lambda: False,
+                vulkan_detector=lambda: False,
+            )
+        self.assertEqual("cpu", installed.acceleration)
+        self.assertEqual(3, len(downloader.calls))
+
+    def test_explicit_repair_can_upgrade_valid_cpu_runtime_to_vulkan(self):
+        downloader = self.downloader()
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder) / "runtime"
+            cpu = self.install(root, downloader, cuda_detector=lambda: False, vulkan_detector=lambda: False)
+            self.assertEqual("cpu", cpu.acceleration)
+            vulkan = self.install(
+                root,
+                downloader,
+                cuda_detector=lambda: False,
+                vulkan_detector=lambda: True,
+                retry_gpu_upgrade=True,
+            )
+            self.assertEqual("vulkan", vulkan.acceleration)
+            self.assertEqual("vulkan", detect_installed_runtime(root, assets=self.assets).acceleration)
+            self.assertEqual(1, len(list((root / "installs").iterdir())))
+        self.assertEqual(7, len(downloader.calls))
+
+    def test_legacy_retry_cuda_upgrade_flag_also_upgrades_to_vulkan(self):
+        downloader = self.downloader()
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder) / "runtime"
+            self.install(root, downloader, cuda_detector=lambda: False, vulkan_detector=lambda: False)
+            upgraded = self.install(
+                root,
+                downloader,
+                cuda_detector=lambda: False,
+                vulkan_detector=lambda: True,
+                retry_cuda_upgrade=True,
+            )
+        self.assertEqual("vulkan", upgraded.acceleration)
+
+    def test_explicit_repair_upgrades_vulkan_to_cuda_but_never_reinstalls_vulkan(self):
+        downloader = self.downloader()
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder) / "runtime"
+            vulkan = self.install(root, downloader, cuda_detector=lambda: False, vulkan_detector=lambda: True)
+            calls = len(downloader.calls)
+            same = self.install(
+                root,
+                downloader,
+                cuda_detector=lambda: False,
+                vulkan_detector=lambda: True,
+                retry_gpu_upgrade=True,
+            )
+            self.assertEqual(vulkan.server_path, same.server_path)
+            self.assertEqual(calls, len(downloader.calls))
+            cuda = self.install(
+                root,
+                downloader,
+                cuda_detector=lambda: True,
+                vulkan_detector=never("Vulkan"),
+                retry_gpu_upgrade=True,
+            )
+            self.assertEqual("cuda", cuda.acceleration)
+            self.assertFalse(vulkan.server_path.exists())
+
+    def test_valid_cuda_runtime_is_never_probed_for_vulkan(self):
+        downloader = self.downloader()
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder) / "runtime"
+            installed = self.install(root, downloader, cuda_detector=lambda: True)
+            calls = len(downloader.calls)
+            again = self.install(
+                root,
+                downloader,
+                cuda_detector=never("CUDA"),
+                vulkan_detector=never("Vulkan"),
+                retry_gpu_upgrade=True,
+            )
+        self.assertEqual(installed.server_path, again.server_path)
+        self.assertEqual(calls, len(downloader.calls))
+
+    def test_valid_vulkan_runtime_does_not_probe_or_download_without_explicit_retry(self):
+        downloader = self.downloader()
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder) / "runtime"
+            installed = self.install(root, downloader, cuda_detector=lambda: False, vulkan_detector=lambda: True)
+            calls = len(downloader.calls)
+            again = self.install(
+                root,
+                downloader,
+                cuda_detector=never("CUDA"),
+                vulkan_detector=never("Vulkan"),
+            )
+        self.assertEqual(installed.server_path, again.server_path)
+        self.assertEqual(calls, len(downloader.calls))
+
+    def test_failed_vulkan_verification_falls_back_without_activating_bad_bytes(self):
+        downloader = self.downloader(vulkan=b"not the verified Vulkan archive")
+        progress = []
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder) / "runtime"
+            installed = self.install(
+                root,
+                downloader,
+                progress=progress.append,
+                cuda_detector=lambda: False,
+                vulkan_detector=lambda: True,
+            )
+            manifest = json.loads((root / "active.json").read_text(encoding="ascii"))
+        self.assertEqual("cpu", installed.acceleration)
+        self.assertEqual(installed.server_path, installed.fallback_server_path)
+        self.assertIsNone(manifest["vulkan_runtime_archive_sha256"])
+        fallback = [update for update in progress if update.phase == "vulkan-fallback"]
+        self.assertEqual(
+            "AMD/Vulkan acceleration was unavailable; using compatibility mode.",
+            fallback[0].message,
+        )
+
+    def test_vulkan_archive_without_its_backend_falls_back_to_cpu(self):
+        archive = vulkan_zip(include_backend=False)
+        self.assets = fixture_assets(
+            self.cpu_archive, self.model, vulkan_runtime_payload=archive
+        )
+        downloader = self.downloader(vulkan=archive)
+        progress = []
+        with tempfile.TemporaryDirectory() as folder:
+            installed = self.install(
+                Path(folder) / "runtime",
+                downloader,
+                progress=progress.append,
+                cuda_detector=lambda: False,
+                vulkan_detector=lambda: True,
+            )
+        self.assertEqual("cpu", installed.acceleration)
+        self.assertIn("vulkan-fallback", [update.phase for update in progress])
+
+    def test_vulkan_backend_beside_the_server_does_not_fail_the_check(self):
+        downloader = self.downloader()
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder) / "runtime"
+            installed = self.install(root, downloader, cuda_detector=lambda: False, vulkan_detector=lambda: True)
+            self.assertNotEqual(installed.server_path.parent, installed.library_path.parent)
+            self.assertTrue(installed.server_path.with_name("ggml-vulkan.dll").is_file())
+            self.assertIsNotNone(detect_installed_runtime(root, assets=self.assets))
+            self.assertNotEqual({}, stt_environment(root, assets=self.assets))
+
+    def test_ggml_vulkan_dropped_beside_the_library_is_rejected(self):
+        downloader = self.downloader()
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder) / "runtime"
+            installed = self.install(root, downloader, cuda_detector=lambda: False, vulkan_detector=lambda: False)
+            installed.library_path.with_name("ggml-vulkan.dll").write_bytes(b"unlisted")
+            self.assertIsNone(detect_installed_runtime(root, assets=self.assets))
+            self.assertEqual({}, stt_environment(root, assets=self.assets))
+
+    def test_vulkan_manifest_round_trips_and_fails_closed(self):
+        downloader = self.downloader()
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder) / "runtime"
+            installed = self.install(root, downloader, cuda_detector=lambda: False, vulkan_detector=lambda: True)
+            detected = detect_installed_runtime(root, assets=self.assets)
+            self.assertEqual(installed, detected)
+            # The constant being unset again (or never set) must not trust it.
+            self.assertIsNone(detect_installed_runtime(root, assets=unpinned_vulkan(self.assets)))
+            self.assertIsNone(
+                detect_installed_runtime(
+                    root, assets=dataclasses.replace(self.assets, vulkan_runtime=None)
+                )
+            )
+            manifest_path = root / "active.json"
+            original = json.loads(manifest_path.read_text(encoding="ascii"))
+            for change in (
+                {"vulkan_runtime_archive_sha256": "0" * 64},
+                {"vulkan_runtime_archive_sha256": None},
+                {"cuda_runtime_archive_sha256": self.assets.cuda_runtime.sha256},
+                {"acceleration": "metal"},
+            ):
+                with self.subTest(change=change):
+                    manifest_path.write_text(json.dumps({**original, **change}), encoding="ascii")
+                    self.assertIsNone(detect_installed_runtime(root, assets=self.assets))
+            manifest_path.write_text(json.dumps(original), encoding="ascii")
+            self.assertIsNotNone(detect_installed_runtime(root, assets=self.assets))
+
+    def test_manifest_written_before_vulkan_existed_still_validates(self):
+        downloader = self.downloader()
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder) / "runtime"
+            self.install(root, downloader, cuda_detector=lambda: True)
+            manifest_path = root / "active.json"
+            manifest = json.loads(manifest_path.read_text(encoding="ascii"))
+            del manifest["vulkan_runtime_archive_sha256"]
+            manifest_path.write_text(json.dumps(manifest), encoding="ascii")
+            self.assertEqual("cuda", detect_installed_runtime(root, assets=self.assets).acceleration)
+
+    def test_failed_final_vulkan_candidate_preserves_active_runtime(self):
+        downloader = self.downloader()
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder) / "runtime"
+            self.install(root, downloader, cuda_detector=lambda: False, vulkan_detector=lambda: False)
+            active_before = (root / "active.json").read_bytes()
+            installs_before = {path.name for path in (root / "installs").iterdir()}
+            real_validator = runtime_installer_module._runtime_from_manifest
+
+            def reject_vulkan(candidate_root, manifest, **kwargs):
+                if manifest.get("acceleration") == "vulkan":
+                    return None
+                return real_validator(candidate_root, manifest, **kwargs)
+
+            with mock.patch.object(
+                runtime_installer_module, "_runtime_from_manifest", side_effect=reject_vulkan
+            ):
+                with self.assertRaises(RuntimeInstallError):
+                    self.install(
+                        root,
+                        downloader,
+                        cuda_detector=lambda: False,
+                        vulkan_detector=lambda: True,
+                        retry_gpu_upgrade=True,
+                    )
+            self.assertEqual(active_before, (root / "active.json").read_bytes())
+            self.assertEqual(installs_before, {path.name for path in (root / "installs").iterdir()})
+
+
+class AccelerationSelectionTests(unittest.TestCase):
+    def setUp(self):
+        self.assets = fixture_assets(
+            runtime_zip(), b"model", vulkan_runtime_payload=vulkan_zip()
+        )
+
+    def select(self, cuda, vulkan, preference="auto", assets=None):
+        return select_acceleration(
+            assets=assets or self.assets,
+            cuda_detector=cuda,
+            vulkan_detector=vulkan,
+            preference=preference,
+        )
+
+    def test_order_is_cuda_then_vulkan_then_cpu(self):
+        yes, no = (lambda: True), (lambda: False)
+        self.assertEqual("cuda", self.select(yes, never("Vulkan")))
+        self.assertEqual("vulkan", self.select(no, yes))
+        self.assertEqual("cpu", self.select(no, no))
+
+    def test_preferences_limit_the_candidates_but_never_skip_detection(self):
+        yes, no = (lambda: True), (lambda: False)
+        self.assertEqual("cpu", self.select(never("CUDA"), never("Vulkan"), "cpu"))
+        self.assertEqual("vulkan", self.select(never("CUDA"), yes, "vulkan"))
+        self.assertEqual("cpu", self.select(never("CUDA"), no, "vulkan"))
+        self.assertEqual("cuda", self.select(yes, never("Vulkan"), "cuda"))
+        self.assertEqual("cpu", self.select(no, never("Vulkan"), "cuda"))
+        self.assertEqual("vulkan", self.select(no, yes, "nonsense"))
+
+    def test_preference_is_read_from_the_environment(self):
+        yes = lambda: True  # noqa: E731
+        for value, expected in (("VULKAN", "vulkan"), (" cpu ", "cpu"), ("auto", "cuda"), ("bogus", "cuda")):
+            with self.subTest(value=value), mock.patch.dict(
+                os.environ,
+                {runtime_installer_module.ACCELERATION_PREFERENCE_ENV: value},
+            ):
+                self.assertEqual(
+                    expected,
+                    select_acceleration(assets=self.assets, cuda_detector=yes, vulkan_detector=yes),
+                )
+
+    def test_unpinned_vulkan_is_not_probed_even_when_preferred(self):
+        assets = unpinned_vulkan(self.assets)
+        self.assertEqual("cpu", self.select(lambda: False, never("Vulkan"), "auto", assets))
+        self.assertEqual("cpu", self.select(never("CUDA"), never("Vulkan"), "vulkan", assets))
+
+    def test_failing_detectors_read_as_unavailable(self):
+        def broken():
+            raise OSError("probe failed")
+
+        self.assertEqual("vulkan", self.select(broken, lambda: True))
+        self.assertEqual("cpu", self.select(broken, broken))
+
+
+class VulkanDetectionTests(unittest.TestCase):
+    def setUp(self):
+        self.folder = tempfile.TemporaryDirectory()
+        self.addCleanup(self.folder.cleanup)
+        root = Path(self.folder.name)
+        self.loader = root / "vulkan-1.dll"
+        self.loader.touch()
+        self.powershell = root / "powershell.exe"
+        self.powershell.touch()
+        self.wmic = root / "WMIC.exe"
+        self.wmic.touch()
+        self.calls = []
+
+    def detect(self, responses, **overrides):
+        """responses maps 'powershell'/'wmic' to (returncode, stdout) or an exception."""
+
+        def runner(command, **kwargs):
+            self.calls.append((command, kwargs))
+            key = "powershell" if Path(command[0]).name == "powershell.exe" else "wmic"
+            response = responses[key]
+            if isinstance(response, BaseException):
+                raise response
+            return subprocess.CompletedProcess(command, response[0], response[1], "")
+
+        options = {
+            "runner": runner,
+            "powershell_path": self.powershell,
+            "wmic_path": self.wmic,
+            "vulkan_loader_path": self.loader,
+            "windows": True,
+        }
+        options.update(overrides)
+        return vulkan_gpu_available(**options)
+
+    def test_amd_adapter_is_detected_with_a_bounded_hidden_probe(self):
+        with mock.patch.dict(os.environ, {"BOT_TOKEN": "secret"}):
+            self.assertTrue(
+                self.detect(
+                    {
+                        "powershell": (
+                            0,
+                            "AMD Radeon RX 7800 XT|Advanced Micro Devices, Inc.|31.0.24027.1012\r\n",
+                        ),
+                        "wmic": AssertionError("wmic must not run"),
+                    }
+                )
+            )
+        self.assertEqual(1, len(self.calls))
+        command, options = self.calls[0]
+        self.assertIn("Win32_VideoController", command[-1])
+        self.assertIn("Get-CimInstance", command[-1])
+        self.assertFalse(options["shell"])
+        self.assertLessEqual(options["timeout"], 15.0)
+        self.assertEqual(subprocess.DEVNULL, options["stdin"])
+        self.assertNotIn("BOT_TOKEN", options["env"])
+
+    def test_adapter_classification(self):
+        cases = (
+            ("ATI Radeon HD 5450|ATI Technologies Inc.|15.200.1062.1004", True),
+            ("Intel(R) Arc(TM) A770 Graphics|Intel Corporation|32.0.101.5762", True),
+            ("NVIDIA GeForce GTX 1060|NVIDIA|30.0.14.7141", True),
+            ("Intel(R) UHD Graphics 770|Intel Corporation|31.0.101.4502", False),
+            ("Microsoft Basic Display Adapter|(Standard display types)|10.0.22621.1", False),
+            ("AMD Radeon RX 6600|Advanced Micro Devices, Inc.|", False),
+            ("Parsec Virtual Display Adapter|Parsec Cloud, Inc.|0.45.0.0", False),
+        )
+        for line, expected in cases:
+            with self.subTest(line=line):
+                self.assertEqual(
+                    expected,
+                    self.detect({"powershell": (0, line + "\n"), "wmic": (1, "")}),
+                )
+
+    def test_any_capable_adapter_among_several_is_enough(self):
+        output = (
+            "Intel(R) UHD Graphics 630|Intel Corporation|31.0.101.2111\n"
+            "AMD Radeon RX 580|Advanced Micro Devices, Inc.|31.0.21921.1000\n"
+        )
+        self.assertTrue(self.detect({"powershell": (0, output), "wmic": (1, "")}))
+
+    def test_wmic_fallback_parses_value_records(self):
+        output = (
+            "\r\r\n\r\r\nAdapterCompatibility=Intel Corporation\r\r\n"
+            "DriverVersion=31.0.101.2111\r\r\nName=Intel(R) UHD Graphics 630\r\r\n"
+            "\r\r\n\r\r\nAdapterCompatibility=Advanced Micro Devices, Inc.\r\r\n"
+            "DriverVersion=31.0.21921.1000\r\r\nName=AMD Radeon RX 580\r\r\n\r\r\n"
+        )
+        for failure in ((1, ""), subprocess.TimeoutExpired("powershell", 15), OSError("blocked")):
+            with self.subTest(failure=failure):
+                self.calls.clear()
+                self.assertTrue(self.detect({"powershell": failure, "wmic": (0, output)}))
+                self.assertEqual(2, len(self.calls))
+                command, options = self.calls[1]
+                self.assertEqual(
+                    ["path", "win32_VideoController", "get", "Name,AdapterCompatibility,DriverVersion", "/value"],
+                    command[1:],
+                )
+                self.assertFalse(options["shell"])
+
+    def test_every_failure_reads_as_unavailable_without_raising(self):
+        self.assertFalse(
+            self.detect({"powershell": (1, ""), "wmic": subprocess.TimeoutExpired("wmic", 15)})
+        )
+        self.assertFalse(self.detect({"powershell": (0, "x" * 20_000), "wmic": (1, "")}))
+        self.assertFalse(self.detect({"powershell": ValueError("bad"), "wmic": RuntimeError("odd")}))
+
+    def test_missing_loader_or_non_windows_never_runs_a_probe(self):
+        responses = {"powershell": AssertionError("no probe"), "wmic": AssertionError("no probe")}
+        self.assertFalse(self.detect(responses, vulkan_loader_path=Path(self.folder.name) / "absent.dll"))
+        self.assertFalse(self.detect(responses, windows=False))
+        self.assertEqual([], self.calls)
+
+    def test_missing_probe_tools_read_as_unavailable(self):
+        absent = Path(self.folder.name) / "absent.exe"
+        self.assertFalse(
+            self.detect(
+                {"powershell": AssertionError("no probe"), "wmic": AssertionError("no probe")},
+                powershell_path=absent,
+                wmic_path=absent,
+            )
+        )
+
 
 class SafeZipTests(unittest.TestCase):
     def _write_zip(self, path: Path, entries) -> None:
