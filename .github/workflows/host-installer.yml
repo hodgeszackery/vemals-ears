@@ -1,0 +1,144 @@
+name: Host Installer
+
+# Builds the unsigned production Vemal's Ears Host installer on Windows so it
+# can be published with Hosting/Publish-HostDownloads.ps1 from the artifact.
+# Manual dispatch only; nothing is published from here.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: host-installer-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  PYTHONUNBUFFERED: '1'
+  # The pinned Vulkan speech engine (Hosting/Installer/assets.lock.json
+  # whisper_vulkan) comes from this whisper-vulkan-runtime.yml run.
+  SPEECH_ENGINE_RUN_ID: '41365892232'
+  SPEECH_ENGINE_ARTIFACT: whisper-vulkan-bin-x64-b4938
+  SPEECH_ENGINE_SHA256: 1b6cede02773817efa74dcb0f94bd7485926d5c472f8f648bd8a4af8ccff46a6
+
+jobs:
+  build:
+    name: Build unsigned host installer
+    runs-on: windows-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.14"
+
+      - name: Install locked Inno Setup
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $lock = Get-Content -Raw -LiteralPath "Installer/runtime-lock.json" | ConvertFrom-Json
+          $download = Join-Path $env:RUNNER_TEMP "inno-setup-$($lock.inno_setup.version).exe"
+          Invoke-WebRequest -Uri $lock.inno_setup.url -OutFile $download
+          $actual = (Get-FileHash -Algorithm SHA256 -LiteralPath $download).Hash.ToLowerInvariant()
+          $expected = ([string]$lock.inno_setup.sha256).ToLowerInvariant()
+          if ($actual -cne $expected) {
+            throw "The Inno Setup download does not match runtime-lock.json."
+          }
+          $installRoot = Join-Path $env:RUNNER_TEMP "InnoSetup"
+          $process = Start-Process -FilePath $download -ArgumentList @(
+            "/VERYSILENT",
+            "/SUPPRESSMSGBOXES",
+            "/NORESTART",
+            "/SP-",
+            "/DIR=$installRoot"
+          ) -Wait -PassThru
+          if ($process.ExitCode -ne 0) {
+            throw "Inno Setup installation failed with exit code $($process.ExitCode)."
+          }
+          $iscc = Join-Path $installRoot "ISCC.exe"
+          if (-not (Test-Path -LiteralPath $iscc -PathType Leaf)) {
+            throw "The locked Inno Setup compiler was not installed."
+          }
+          $installedVersion = (& $iscc --version | Select-Object -First 1).Trim()
+          if ($installedVersion -cne [string]$lock.inno_setup.version) {
+            throw "Unexpected Inno Setup version: $installedVersion"
+          }
+          "INNO_ISCC=$iscc" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Fetch the pinned Vulkan speech engine
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: ${{ env.SPEECH_ENGINE_ARTIFACT }}
+          run-id: ${{ env.SPEECH_ENGINE_RUN_ID }}
+          repository: ${{ github.repository }}
+          github-token: ${{ github.token }}
+          path: Installer/runtime-cache
+
+      - name: Verify the speech engine against its pin
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $zip = "Installer/runtime-cache/whisper-vulkan-bin-x64.zip"
+          $actual = (Get-FileHash -Algorithm SHA256 -LiteralPath $zip).Hash.ToLowerInvariant()
+          if ($actual -cne $env:SPEECH_ENGINE_SHA256) {
+            throw "The downloaded speech engine does not match its pinned SHA-256: $actual"
+          }
+          $lock = Get-Content -Raw -LiteralPath "Hosting/Installer/assets.lock.json" | ConvertFrom-Json
+          if ([string]$lock.whisper_vulkan.sha256 -cne $env:SPEECH_ENGINE_SHA256) {
+            throw "The workflow pin and assets.lock.json disagree."
+          }
+          Write-Host "$actual  whisper-vulkan-bin-x64.zip"
+
+      - name: Build the host source ZIP
+        shell: pwsh
+        run: |
+          python packaging/build_host.py --output dist/VemalsEars-Host.zip
+          if ($LASTEXITCODE -ne 0) { throw "Host source ZIP build failed." }
+          python packaging/build_host.py --verify dist/VemalsEars-Host.zip
+          if ($LASTEXITCODE -ne 0) { throw "Host source ZIP verification failed." }
+
+      - name: Build the host installer
+        shell: pwsh
+        run: |
+          $stage = Join-Path $env:RUNNER_TEMP "host-stage"
+          python packaging/build_host_installer.py `
+            --stage $stage `
+            --cache (Join-Path $env:RUNNER_TEMP "host-cache") `
+            --output dist `
+            --iscc $env:INNO_ISCC
+          if ($LASTEXITCODE -ne 0) { throw "Host installer build failed." }
+
+      - name: Verify the installer receipt
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $exe = Get-Item -LiteralPath "dist/Vemals-Ears-Host-Setup.exe"
+          $receipt = Get-Content -Raw -LiteralPath "dist/Vemals-Ears-Host-Setup.json" | ConvertFrom-Json
+          $digest = (Get-FileHash -Algorithm SHA256 -LiteralPath $exe.FullName).Hash.ToLowerInvariant()
+          if ($receipt.schema -ne 1 -or $receipt.product -ne "vemals-ears-host" -or
+              $receipt.test_build -ne $false -or $receipt.bytes -ne $exe.Length -or
+              $receipt.sha256 -cne $digest) {
+            throw "The installer does not match its receipt."
+          }
+          Write-Host "$digest  Vemals-Ears-Host-Setup.exe ($($exe.Length) bytes, version $($receipt.version))"
+
+      - name: Upload host installer
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: vemals-ears-host-installer
+          path: |
+            dist/Vemals-Ears-Host-Setup.exe
+            dist/Vemals-Ears-Host-Setup.json
+            dist/VemalsEars-Host.zip
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 90
