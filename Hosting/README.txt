@@ -124,8 +124,11 @@ use a Vulkan build of the same whisper.cpp b4938 speech engine, built by this
 project's CI, which runs on AMD (and Intel Arc) GPUs with a current driver.
 Treat this path as new: it is expected to be slower than CUDA, it decodes
 greedy rather than with beam search, and it has not yet been tested on real
-AMD hardware. It is only offered by a build whose Vulkan engine download has been pinned; until
-then setup reports that AMD/Vulkan support is not available in this build.
+AMD hardware. The Vulkan engine (about 22.5 MB) is bundled inside the
+installer at speech-engine/whisper-vulkan-bin-x64.zip and is checked against
+its pinned SHA-256 before use; nothing extra is downloaded for it. If the
+bundled copy is missing, setup reports that AMD/Vulkan support is not
+included in this installation.
 
 Detection only reads the installed video adapters and the driver's Vulkan
 loader; it changes nothing. To narrow the choice for a new install, set
