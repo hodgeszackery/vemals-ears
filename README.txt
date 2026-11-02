@@ -27,7 +27,8 @@ Installer/ contains the Windows installer and native launcher build.
 VoiceCaptions/ contains the Discord capture adapter, speech runtime and overlay.
 GuildHub/ contains the member wire client, pairing helpers and voice worker.
 
-To host your own guild on Windows with NVIDIA speech recognition, read
+To host your own guild on Windows with GPU speech recognition (NVIDIA, or
+AMD through a new and not yet hardware-validated Vulkan engine), read
 Hosting/README.txt. Build a standalone shareable host source ZIP with:
   python packaging/build_host.py
 The host slice includes its own relay and pairing pages. Setup generates

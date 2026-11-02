@@ -1,12 +1,12 @@
-Vemal's Ears - Windows NVIDIA Host
-=================================
+Vemal's Ears - Windows GPU Host
+===============================
 
 WINDOWS INSTALLER
 
 For setup without commands, run Vemals-Ears-Host-Setup.exe and follow the
 graphical wizard. Read Hosting/QUICKSTART.txt for the short operator guide.
 The installer includes private Python, Node and Windows service tools. The
-wizard prepares NVIDIA speech recognition and optional Cloudflare Tunnel.
+wizard prepares GPU speech recognition and optional Cloudflare Tunnel.
 
 Choose Set up a new host for a new bot, hostname and member pairing. To move
 the original Windows caption worker, choose Export from the current host on
@@ -41,13 +41,15 @@ The instructions below are the alternative source/ZIP setup for a NEW
 standalone host. Existing-host takeover uses the graphical workflow above.
 
 Host your own guild's captions and typed chat with the same speech model,
-NVIDIA acceleration and privacy behavior as the original host. This package
+GPU acceleration and privacy behavior as the original host. This package
 includes the relay, one-use pairing pages, Discord worker and setup tools.
 It runs without a Downtime checkout or access to a private source repository.
 
 You need Windows x64, Python 3.12 or newer, Node.js 22.12 or newer, an NVIDIA
-GPU with a CUDA 12.4-capable driver, and a Discord server you can add a bot to.
-Allow about 1.2 GB of downloads for the speech engines and models, plus room
+GPU with a CUDA 12.4-capable driver (or, in builds that include it, an AMD GPU
+for the new Vulkan engine; see AMD GPUS below), and a Discord server you can
+add a bot to. Allow up to about 1.2 GB of downloads for the speech engines
+and models (the NVIDIA engine alone is about 640 MB), plus room
 for extraction. Keep this host awake while captions are in use. You also need
 a stable HTTPS hostname that forwards WebSocket traffic to this computer.
 
@@ -106,14 +108,29 @@ contain the member installer. Alternatively pass --client-download-url with
 an HTTPS link to the installer when configuring. Leave CLIENT_VERSION blank
 unless you are deliberately publishing a matching client update.
 
-3. PREPARE THE NVIDIA SPEECH RUNTIME
+3. PREPARE THE GPU SPEECH RUNTIME
 
   ./.venv/Scripts/python.exe -m Hosting.setup --state-directory C:/VemalsEarsHostState prepare
 
 This downloads hash-verified, pinned speech assets and runs npm ci using the
 adapter lockfile. It does not connect the bot or start a caption session.
-The NVIDIA runtime belongs to this host's private state folder. Preparation
+The GPU runtime belongs to this host's private state folder. Preparation
 can be rerun after a failed download. It does not recreate keys or consent.
+
+AMD GPUS (VULKAN) - NEW, NOT YET VALIDATED ON AMD HARDWARE
+
+Setup always tries NVIDIA CUDA first. When CUDA is not usable it can instead
+use a Vulkan build of the same whisper.cpp b4938 speech engine, built by this
+project's CI, which runs on AMD (and Intel Arc) GPUs with a current driver.
+Treat this path as new: it is expected to be slower than CUDA, it decodes
+greedy rather than with beam search, and it has not yet been tested on real
+AMD hardware. It is only offered by a build whose Vulkan engine download has been pinned; until
+then setup reports that AMD/Vulkan support is not available in this build.
+
+Detection only reads the installed video adapters and the driver's Vulkan
+loader; it changes nothing. To narrow the choice for a new install, set
+VOICE_CAPTIONS_WHISPER_ACCELERATION_PREFERENCE to cuda or vulkan before
+running prepare (auto is the default). A host still needs one of the two.
 
 4. CONNECT YOUR PUBLIC HTTPS ADDRESS
 

@@ -58,7 +58,14 @@ concurrent speaker, and clears its temporary float PCM copy after every call.
 The setup window performs the only download action. It pins official b4938
 Windows archives, the large-v3-turbo q5 model, and Silero V6.2 to immutable
 URLs and exact SHA-256 hashes. NVIDIA CUDA 12.4 is selected only when a
-compatible driver is detected. A verified CPU server is always retained and
+compatible driver is detected. When CUDA is not usable and the build pins
+the AMD/Vulkan engine (a b4938 Vulkan zip built by this project's CI, not an
+official upstream archive), a Vulkan-capable AMD, Intel Arc or NVIDIA adapter
+selects it instead. That path is new, expected to be slower than CUDA,
+decodes greedy, and has not been validated on real AMD hardware. While its
+URL and hash in runtime_installer.py are empty it is never probed or
+downloaded. VOICE_CAPTIONS_WHISPER_ACCELERATION_PREFERENCE (auto, cpu, cuda
+or vulkan) narrows the choice for new installs. A verified CPU server is always retained and
 is tried automatically if the GPU server cannot start. Nothing downloads on
 import, startup, or capability detection. Official server documentation is at:
 

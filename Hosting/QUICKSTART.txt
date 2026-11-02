@@ -31,8 +31,12 @@ SET UP A NEW HOST
 
 5. Click Set up host. Setup downloads about 1.2 GB of verified speech assets,
    prepares the Discord helper, and starts the host services. A compatible
-   NVIDIA GPU and driver are required. Python, Node and service tools are
-   included in Host Setup; no terminal commands are needed.
+   NVIDIA GPU and driver are required. Builds that include the new
+   AMD/Vulkan engine also accept an AMD GPU with a current driver; that
+   path is expected to be slower than NVIDIA and is not yet validated on
+   real AMD hardware.
+   Python, Node and service tools are included in Host Setup; no terminal
+   commands are needed.
 
 6. Use Add bot to Discord to add your bot to your server. Open the join page
    to check the public connection and member download. In Discord, use
@@ -54,10 +58,12 @@ This path recognizes the original Windows VemalsEarsWorker installation.
 It does not export arbitrary standalone Host Setup installations. Use the
 latest Host Setup on both PCs. The replacement needs Windows x64, NVIDIA
 graphics, a current CUDA 12.4-capable driver and administrator access.
+(Builds with the new AMD/Vulkan engine also accept an AMD GPU with a
+current driver; see the AMD note in Hosting/README.txt.)
 
 The original PC MUST remain online. Its relay, pairing, member downloads,
 public hostname/tunnel and Downtime stay there. Only the Discord bot worker
-and NVIDIA speech recognition move to the replacement PC.
+and GPU speech recognition move to the replacement PC.
 
 1. On the original PC, choose Export from the current host. Check the guild
    and public address. Select Choose save location for a new .vehost file

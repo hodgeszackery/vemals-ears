@@ -72,6 +72,9 @@ server operator's tooling pins its downloads in VoiceCaptions/runtime_installer.
   Two builds: a CPU one, and a CUDA/cuBLAS one shown by server tooling as
   the "NVIDIA speech engine". The NVIDIA CUDA runtime libraries inside
   that second archive remain subject to NVIDIA's own licence terms.
+  Server tooling may also offer a third build of the same source with the
+  ggml Vulkan backend, the "AMD/Vulkan speech engine", built by the
+  project's CI from the same MIT-licensed source.
 - Whisper large-v3-turbo speech model, by OpenAI, licensed under the MIT
   License. Obtained as the ggml quantisation ggml-large-v3-turbo-q5_0.
 - Silero VAD 6.2.0, licensed under the MIT License. Used as the local
