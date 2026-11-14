@@ -48,6 +48,8 @@ from GuildHub.protocol import (
     QUICK_CHAT_WORKER_PATH,
     SUBPROTOCOL,
     SUBPROTOCOL_V2,
+    TRANSFER_CLAIM_PATH,
+    TRANSFER_OFFER_PATH,
     VIEWER_LINK_PATH,
     AudienceUpdate,
     DeviceAuthentication,
@@ -125,6 +127,22 @@ VIEWER_LINK_TTL_SECONDS = 5 * 60
 VIEWER_LINK_CODE_LENGTH = 8
 VIEWER_LINK_CODE_ALPHABET = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
 AUDIENCE_SNAPSHOT_LIMIT = 256
+# Host transfer rendezvous. The relay holds one pending offer in memory,
+# pipes opaque binary frames between the two hosts and persists nothing: it
+# never sees the one-time code, a key or any plaintext.
+TRANSFER_OFFER_TTL_SECONDS = 10 * 60
+# A claim socket holds the only slot, so it has to keep moving: its first
+# frame (hello and PAKE share) within the first window, and the offer
+# side's verdict on its confirmation within the second. A claim that
+# stalls is dropped WITHOUT counting as a failure - only a completed wrong
+# confirmation, reported by the offer side, burns one of the three.
+TRANSFER_CLAIM_HELLO_SECONDS = 5.0
+TRANSFER_CLAIM_CONFIRM_SECONDS = 10.0
+TRANSFER_CLAIM_CONNECTION_BUDGET = 20
+TRANSFER_CLAIM_FAILURE_BUDGET = 3
+TRANSFER_FROZEN_CODE = "transfer_in_progress"
+TRANSFER_FROZEN_MESSAGE = "The guild server is moving. Try again in a minute."
+TRANSFER_FROZEN_CLOSE = 1013
 ARTIFACT_ADMISSION_TIMEOUT_SECONDS = 0.1
 
 
@@ -365,6 +383,15 @@ class ServerConfig:
     # comparing this against what they report at enrollment; leaving it
     # empty simply means nobody is ever told.
     client_version: str = ""
+    # Host transfer. Empty means the two transfer paths do not exist
+    # (404), which is every relay except a standalone Host's. The key file
+    # is read per offer attempt and may be absent most of the time: the
+    # Host writes it only while it is offering a move.
+    transfer_key_file: str = ""
+    # Optional flag file. While it exists the relay is frozen exactly as
+    # if the offer socket had asked, so a freeze survives a relay restart.
+    # The Host owns the file; the relay only looks for it.
+    transfer_freeze_file: str = ""
 
     def __post_init__(self) -> None:
         if not _SAFE_ID.fullmatch(self.guild_id) or len(self.guild_id) > 64:
@@ -425,6 +452,12 @@ class ServerConfig:
             )
         if not isinstance(self.trust_proxy, bool):
             raise ValueError("trust proxy acknowledgement must be true or false")
+        for label, value in (
+            ("transfer key file", self.transfer_key_file),
+            ("transfer freeze file", self.transfer_freeze_file),
+        ):
+            if not isinstance(value, str) or "\x00" in value:
+                raise ValueError(label + " must be a file path")
 
 
 def _http_response(
@@ -801,6 +834,26 @@ class _PendingViewerLink:
 
 
 @dataclass(eq=False)
+class _TransferOffer:
+    """The one pending Host transfer. Memory only; gone with its socket."""
+
+    connection: ServerConnection
+    # The claim socket currently holding the slot, and its number. Numbers
+    # count every claim admitted for this offer, so they are also the
+    # connection budget and let the offer side name the claim it judged.
+    claim: ServerConnection | None = None
+    claim_number: int = 0
+    claim_reason: str = ""
+    failures: int = 0
+    confirmed: bool = False
+    # Set once a confirmed claim has gone: the one-time code is used up
+    # and the claim path answers 404 again. The offer socket stays for
+    # freeze control until the Host closes it.
+    spent: bool = False
+    ended: bool = False
+
+
+@dataclass(eq=False)
 class _QuickChatWorkerSession:
     connection: ServerConnection
     active: bool = True
@@ -1077,6 +1130,8 @@ class GuildHubServer:
         self._artifact_slot = asyncio.Semaphore(1)
         self._artifact_release_tasks: set[asyncio.Task[None]] = set()
         self._release_validation_lock = asyncio.Lock()
+        self._transfer_offer: _TransferOffer | None = None
+        self._transfer_freeze_owner: ServerConnection | None = None
 
     async def _published_release(self) -> PublishedRelease:
         async with self._release_validation_lock:
@@ -1177,6 +1232,47 @@ class GuildHubServer:
     @property
     def quick_chat_rate_device_count(self) -> int:
         return len(self._quick_chat_rate_windows)
+
+    @property
+    def transfer_offer_pending(self) -> bool:
+        return self._transfer_offer is not None
+
+    @property
+    def transfer_frozen(self) -> bool:
+        """Whether a Host transfer has frozen pairing and viewer linking.
+
+        Two sources, either is enough: the live offer socket asked, or the
+        Host left its flag file in place (which is what survives a relay
+        restart). Frozen never touches captions, typed chat or profile
+        writes - a typed line depends only on the relay.
+        """
+        if self._transfer_freeze_owner is not None:
+            return True
+        flag = self.config.transfer_freeze_file
+        if not flag:
+            return False
+        try:
+            os.stat(flag)
+        except FileNotFoundError:
+            return False
+        except OSError:
+            # Present but unreadable still means the Host froze us.
+            return True
+        return True
+
+    def _clear_viewer_links(self) -> None:
+        self._pending_viewer_links.clear()
+        self._viewer_link_by_device.clear()
+
+    def _transfer_claimable(self) -> bool:
+        offer = self._transfer_offer
+        return (
+            bool(self.config.transfer_key_file)
+            and offer is not None
+            and not offer.ended
+            and not offer.spent
+            and offer.claim is None
+        )
 
     def _ineligible_close(self, understands_stop: bool) -> tuple[str, str]:
         """The reason a viewer is being closed - never WHETHER it is.
@@ -1413,6 +1509,12 @@ class GuildHubServer:
         return True
 
     async def _bind_viewer(self, request: ViewerLink) -> bool:
+        if self.transfer_frozen:
+            # A binding written now could miss the transfer snapshot. The
+            # flag file can appear without a control frame, so pending
+            # links are cleared here as well as when the freeze is asked.
+            self._clear_viewer_links()
+            return False
         self._prune_viewer_links()
         pending = self._pending_viewer_links.pop(request.code, None)
         if pending is None:
@@ -1660,6 +1762,14 @@ class GuildHubServer:
             VIEWER_LINK_PATH,
         }:
             return None
+        # Host transfer. Without the key file setting neither path exists.
+        # With it the offer path always upgrades, so a missing key file and
+        # a wrong key are the same answer; the claim path exists only while
+        # an offer is waiting with its one slot free.
+        if request.path == TRANSFER_OFFER_PATH and self.config.transfer_key_file:
+            return None
+        if request.path == TRANSFER_CLAIM_PATH and self._transfer_claimable():
+            return None
         return _http_response(b"Not found.\n", "text/plain; charset=utf-8", 404)
 
     async def handle(self, connection: ServerConnection) -> None:
@@ -1687,6 +1797,10 @@ class GuildHubServer:
                     await self._quick_chat_worker(connection)
                 elif path == VIEWER_LINK_PATH:
                     await self._viewer_link(connection)
+                elif path == TRANSFER_OFFER_PATH:
+                    await self._transfer_offer_socket(connection)
+                elif path == TRANSFER_CLAIM_PATH:
+                    await self._transfer_claim_socket(connection)
                 else:
                     await connection.close(code=1008, reason="Unknown endpoint")
             except ConnectionClosed:
@@ -1714,6 +1828,16 @@ class GuildHubServer:
         except (GuildHubProtocolError, TimeoutError):
             await self._error_and_close(
                 connection, "invalid_request", "Invalid request.", 1008
+            )
+            return
+        if self.transfer_frozen:
+            # Refused before the code is touched, so the invitation still
+            # works on whichever host answers a minute from now.
+            await self._error_and_close(
+                connection,
+                TRANSFER_FROZEN_CODE,
+                TRANSFER_FROZEN_MESSAGE,
+                TRANSFER_FROZEN_CLOSE,
             )
             return
         try:
@@ -2321,6 +2445,246 @@ class GuildHubServer:
     ) -> None:
         session.active = False
 
+    async def _transfer_notice(
+        self, offer: _TransferOffer, notice: dict[str, object]
+    ) -> None:
+        try:
+            await offer.connection.send(encode_message(notice))
+        except ConnectionClosed:
+            pass
+
+    async def _end_transfer_offer(self, offer: _TransferOffer, reason: str) -> None:
+        """Destroy an offer: forget it, drop its claim, close its socket."""
+        if offer.ended:
+            return
+        offer.ended = True
+        if self._transfer_offer is offer:
+            self._transfer_offer = None
+        if self._transfer_freeze_owner is offer.connection:
+            self._transfer_freeze_owner = None
+        LOGGER.info("host transfer offer ended (%s)", reason)
+        claim = offer.claim
+        if claim is not None:
+            try:
+                await claim.close(code=1008, reason="Connection closed")
+            except ConnectionClosed:
+                pass
+        await self._transfer_notice(
+            offer, {"type": "transfer_ended", "reason": reason}
+        )
+        # The reason rides the close frame as well: a notice sent just
+        # before a close is not reliably read by the other end.
+        try:
+            await offer.connection.close(
+                code=1008, reason="Transfer ended: " + reason
+            )
+        except ConnectionClosed:
+            pass
+
+    async def _expire_transfer_offer(self, offer: _TransferOffer) -> None:
+        await asyncio.sleep(TRANSFER_OFFER_TTL_SECONDS)
+        # The ten minutes bound how long a code may wait to be used. Once
+        # the two hosts have confirmed each other the move itself is not
+        # on that clock.
+        if not offer.confirmed and not offer.spent:
+            await self._end_transfer_offer(offer, "expired")
+
+    async def _drop_transfer_claim(
+        self, offer: _TransferOffer, claim: ServerConnection, reason: str
+    ) -> None:
+        if offer.claim is not claim:
+            return
+        if not offer.claim_reason:
+            offer.claim_reason = reason
+        try:
+            await claim.close(code=1008, reason="Connection closed")
+        except ConnectionClosed:
+            pass
+
+    async def _transfer_claim_deadline(
+        self, offer: _TransferOffer, claim: ServerConnection
+    ) -> None:
+        await asyncio.sleep(TRANSFER_CLAIM_CONFIRM_SECONDS)
+        if not offer.confirmed:
+            await self._drop_transfer_claim(offer, claim, "confirm_timeout")
+
+    async def _transfer_control(
+        self, offer: _TransferOffer, payload: dict[str, object]
+    ) -> None:
+        """One control frame from the authenticated offer socket."""
+        kind = payload.get("type")
+        if kind in {"transfer_freeze", "transfer_unfreeze"}:
+            if set(payload) != {"type"}:
+                raise GuildHubProtocolError("unexpected transfer control field")
+            if kind == "transfer_freeze":
+                self._transfer_freeze_owner = offer.connection
+                self._clear_viewer_links()
+            elif self._transfer_freeze_owner is offer.connection:
+                self._transfer_freeze_owner = None
+            LOGGER.info(
+                "host transfer %s",
+                "freeze" if kind == "transfer_freeze" else "unfreeze",
+            )
+            # Reports the effective state: the flag file can keep the relay
+            # frozen after the socket lets go.
+            await self._transfer_notice(
+                offer, {"type": "transfer_frozen", "frozen": self.transfer_frozen}
+            )
+            return
+        if kind in {"transfer_confirmed", "transfer_failed"}:
+            if set(payload) != {"type", "claim"}:
+                raise GuildHubProtocolError("unexpected transfer control field")
+            number = payload.get("claim")
+            if isinstance(number, bool) or not isinstance(number, int):
+                raise GuildHubProtocolError("transfer claim number is invalid")
+            claim = offer.claim
+            # A verdict names the claim it judged. One that arrives after
+            # that claim has gone must not land on its successor.
+            if claim is None or number != offer.claim_number or offer.confirmed:
+                return
+            if kind == "transfer_confirmed":
+                offer.confirmed = True
+                return
+            # Only this verdict burns a failure, so the offer Host must judge
+            # the claim's confirmation before it sends its own; a claim that
+            # stalls instead is dropped uncounted.
+            offer.failures += 1
+            await self._drop_transfer_claim(offer, claim, "failed")
+            return
+        raise GuildHubProtocolError("unknown transfer control message")
+
+    async def _transfer_offer_socket(self, connection: ServerConnection) -> None:
+        """The old Host's side of a transfer: authenticate, then control and pipe.
+
+        Text frames on this socket are relay control, in both directions.
+        Binary frames are the peer's, piped unread to and from the claim
+        socket. Loopback is not proof of anything here - public traffic
+        arrives from loopback too - so the socket is gated by a key the
+        elevated Host app writes to a file only it and the relay can read.
+        """
+        try:
+            payload = await self._first_message(connection)
+            provided = parse_service_authentication(payload, "transfer_key")
+            expected = await asyncio.to_thread(
+                _read_transfer_key, self.config.transfer_key_file
+            )
+            # Compare against something either way, so an absent key file
+            # costs the same and says the same as a wrong key.
+            matched = _constant_token_equal(
+                provided,
+                expected if expected is not None else secrets.token_urlsafe(32),
+            )
+            authenticated = matched and expected is not None
+        except (GuildHubProtocolError, TimeoutError):
+            authenticated = False
+        if not authenticated:
+            await self._authentication_failed(connection)
+            return
+        offer = _TransferOffer(connection=connection)
+        previous = self._transfer_offer
+        self._transfer_offer = offer
+        if previous is not None:
+            # The key holder is the Host itself; its newest offer wins.
+            await self._end_transfer_offer(previous, "replaced")
+        LOGGER.info("host transfer offer opened")
+        expiry = asyncio.create_task(self._expire_transfer_offer(offer))
+        try:
+            await connection.send(
+                encode_message(
+                    {
+                        "type": "transfer_offered",
+                        "ttl_seconds": int(TRANSFER_OFFER_TTL_SECONDS),
+                    }
+                )
+            )
+            async for raw in connection:
+                if isinstance(raw, bytes):
+                    claim = offer.claim
+                    if claim is not None:
+                        try:
+                            await claim.send(raw)
+                        except ConnectionClosed:
+                            pass
+                    continue
+                try:
+                    await self._transfer_control(offer, decode_message(raw))
+                except GuildHubProtocolError:
+                    await self._error_and_close(
+                        connection, "invalid_request", "Invalid request.", 1008
+                    )
+                    return
+        finally:
+            expiry.cancel()
+            await self._end_transfer_offer(offer, "closed")
+
+    async def _transfer_claim_socket(self, connection: ServerConnection) -> None:
+        """The new Host's side: binary frames only, piped unread to the offer.
+
+        Nothing here is authenticated by the relay and nothing needs to be:
+        the two hosts prove the one-time code to each other end to end and
+        the relay only carries the bytes.
+        """
+        offer = self._transfer_offer
+        if offer is None or not self._transfer_claimable():
+            # Lost the race for the slot after the upgrade was admitted.
+            await connection.close(code=1008, reason="Connection closed")
+            return
+        offer.claim = connection
+        offer.claim_number += 1
+        offer.claim_reason = ""
+        number = offer.claim_number
+        deadline: asyncio.Task[None] | None = None
+        try:
+            await self._transfer_notice(
+                offer, {"type": "transfer_claim_opened", "claim": number}
+            )
+            try:
+                hello = await asyncio.wait_for(
+                    connection.recv(), timeout=TRANSFER_CLAIM_HELLO_SECONDS
+                )
+            except TimeoutError:
+                await self._drop_transfer_claim(offer, connection, "hello_timeout")
+                return
+            if not isinstance(hello, bytes):
+                await self._drop_transfer_claim(offer, connection, "invalid_frame")
+                return
+            deadline = asyncio.create_task(
+                self._transfer_claim_deadline(offer, connection)
+            )
+            await offer.connection.send(hello)
+            async for raw in connection:
+                if not isinstance(raw, bytes):
+                    await self._drop_transfer_claim(
+                        offer, connection, "invalid_frame"
+                    )
+                    return
+                await offer.connection.send(raw)
+        finally:
+            if deadline is not None:
+                deadline.cancel()
+            if offer.claim is connection:
+                offer.claim = None
+                reason = offer.claim_reason or "closed"
+                if offer.confirmed:
+                    offer.spent = True
+                if not offer.ended:
+                    await self._transfer_notice(
+                        offer,
+                        {
+                            "type": "transfer_claim_closed",
+                            "claim": number,
+                            "reason": reason,
+                            "failures": offer.failures,
+                        },
+                    )
+                    if offer.failures >= TRANSFER_CLAIM_FAILURE_BUDGET:
+                        await self._end_transfer_offer(offer, "failures")
+                    elif (
+                        not offer.spent
+                        and number >= TRANSFER_CLAIM_CONNECTION_BUDGET
+                    ):
+                        await self._end_transfer_offer(offer, "claims")
+
     async def _first_message(self, connection: ServerConnection) -> dict[str, object]:
         raw = await asyncio.wait_for(
             connection.recv(), timeout=self.config.auth_timeout
@@ -2520,6 +2884,10 @@ async def _housekeeping_loop(application: GuildHubServer) -> None:
         return
     while True:
         await asyncio.sleep(interval)
+        if application.transfer_frozen:
+            # A Host transfer is copying the database; retiring credentials
+            # now would make the copy disagree with what members hold.
+            continue
         try:
             enrollments = await asyncio.to_thread(application.store.prune_enrollments)
             never_used, idle = await asyncio.to_thread(
@@ -2824,6 +3192,33 @@ def _required_environment(name: str, parser: argparse.ArgumentParser) -> str:
     return value
 
 
+def _read_transfer_key(path: str) -> str | None:
+    """The Host transfer key, or None. Never fatal, never an exception.
+
+    Unlike the secrets read at startup this file is expected to be missing
+    most of the time - the Host writes it for the length of one offer - and
+    it is read on every offer attempt, so nothing here may stop the relay.
+    Anything that is not a publisher-token-shaped secret is treated as no
+    key at all.
+    """
+    if not path:
+        return None
+    try:
+        with open(path, "rb") as handle:
+            raw = handle.read(MAX_SECRET_FILE_BYTES + 1)
+    except OSError:
+        return None
+    if len(raw) > MAX_SECRET_FILE_BYTES:
+        return None
+    try:
+        value = raw.decode("utf-8").strip()
+    except UnicodeDecodeError:
+        return None
+    if len(value) < 32 or len(value) > MAX_TOKEN or not _SAFE_ID.fullmatch(value):
+        return None
+    return value
+
+
 def _timestamp(value: float | None) -> str:
     if value is None:
         return "never"
@@ -2975,6 +3370,14 @@ def main(argv: Sequence[str] | None = None) -> int:
                 trust_proxy=arguments.trust_proxy,
                 download_file=arguments.download_file,
                 client_version=arguments.client_version,
+                # Environment only, like the other secret file paths. The
+                # standalone Host sets these; nothing else does.
+                transfer_key_file=os.environ.get(
+                    "VEMALS_EARS_TRANSFER_KEY_FILE", ""
+                ).strip(),
+                transfer_freeze_file=os.environ.get(
+                    "VEMALS_EARS_TRANSFER_FREEZE_FILE", ""
+                ).strip(),
             )
         except ValueError as error:
             parser.error(str(error))

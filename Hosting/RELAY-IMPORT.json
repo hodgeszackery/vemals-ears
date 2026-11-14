@@ -6,7 +6,7 @@
     {
       "path": "GuildHub/server.py",
       "upstream_sha256": "8a2ee276461888c719b86d0ffb703b7af7c35bbfa1bce10c3fcf282d081eff8d",
-      "imported_sha256": "cff3b80365c5382f319c93d2107e70c79312f6f73652de876c0382cc685f4956"
+      "imported_sha256": "dc60f006accd2e5f3a02f89dcb5a88b4090754fb4d3d26036b981988c0e3d6e6"
     },
     {
       "path": "GuildHub/store.py",
@@ -37,7 +37,8 @@
   "adaptations": [
     "Standalone Vemal's Ears landing/privacy pages and downloads; no Downtime product downloads.",
     "Relay wire protocol, voice membership gate and credential storage retain the upstream implementation.",
-    "Removed hosted-addon job CLI commands; retained upstream credential database schema for compatibility."
+    "Removed hosted-addon job CLI commands; retained upstream credential database schema for compatibility.",
+    "Host transfer rendezvous: /v1/transfer-offer and /v1/transfer-claim, present only with VEMALS_EARS_TRANSFER_KEY_FILE; opaque piping in memory, and a freeze that refuses pairing and viewer-link binds only."
   ],
   "hash_normalization": "LF line endings"
 }
