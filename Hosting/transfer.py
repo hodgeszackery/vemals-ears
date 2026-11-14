@@ -17,9 +17,11 @@ network; the sender and receiver state machines drive these pieces.
 
 from __future__ import annotations
 
+import base64
 from contextlib import closing, contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
+import functools
 import hashlib
 import hmac
 import json
@@ -33,6 +35,7 @@ import stat
 import struct
 import subprocess
 import tempfile
+import threading
 import time
 
 from GuildHub import relay_env
@@ -59,7 +62,6 @@ FRAME_DATA, FRAME_END = 1, 2
 FRAME_END_BODY = struct.Struct(">Q32s")  # total length, SHA-256 of the bundle
 ACTIVATION_PENDING = "pending"
 ACTIVATION_ACTIVE = "active"
-MAX_CODE_FAILURES = 5
 
 MANIFEST_KEYS = frozenset({
     "schema", "kind", "transfer_id", "release_commitment", "host_version",
@@ -114,6 +116,10 @@ SNAPSHOT_LEFTOVER_ERROR = ("A temporary copy of the relay database could not be 
 OPEN_ERROR = "The host transfer could not be opened. Start the transfer again."
 FRAME_ERROR = "The other PC sent an invalid transfer message. Start the transfer again."
 RECORD_ERROR = "The transfer record cannot be read. Nothing was changed."
+# Never tells the operator to discard: when a release code is being typed,
+# the copy on this PC may be the only one left.
+WRONG_RELEASE_CODE = ("That release code does not match this transfer. Read it again on the old PC, on "
+                      "This host has moved, and type it exactly. Do not discard the copy on this PC.")
 _HEX32 = re.compile(r"[0-9a-f]{32}")
 _HEX64 = re.compile(r"[0-9a-f]{64}")
 _ARTIFACT_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}")
@@ -719,6 +725,10 @@ def import_state(state: Path, bundle: Bundle) -> dict:
             handoff._write_private(staging / "host-settings.json", handoff._json_bytes({
                 "schema": 1, "tunnel_enabled": bundle.manifest["tunnel_enabled"], "client_installer": "",
                 "activation": ACTIVATION_PENDING, "transfer_id": bundle.manifest["transfer_id"],
+                # One tunnel token on two PCs splits members between them. A
+                # received host's tunnel is withheld from the start; only a
+                # check that the old public address is quiet clears this.
+                "tunnel_withheld": bundle.manifest["tunnel_enabled"],
             }) + b"\n")
             if POINTER in bundle.blobs:
                 handoff._write_private(staging / POINTER, bundle.blobs[POINTER])
@@ -792,6 +802,15 @@ def _replace(source: Path, target: Path) -> None:
         os.replace(source, target)
 
 
+def _serial(method):
+    """Run one records step at a time within this process."""
+    @functools.wraps(method)
+    def step(self, *arguments, **keywords):
+        with self._mutex:
+            return method(self, *arguments, **keywords)
+    return step
+
+
 class TransferRecords:
     """The persisted receipt and release secret under a protected transfer directory.
 
@@ -810,6 +829,9 @@ class TransferRecords:
         self.directory = Path(directory)
         self.receipt = self.directory / "transfer.json"
         self._secret = self.directory / "release-secret"
+        # locked() keeps other processes out. This keeps two threads of this
+        # process (a move and a cancel) from interleaving a read-then-write.
+        self._mutex = threading.RLock()
 
     def _prepare(self) -> None:
         if self.directory.is_symlink() or getattr(self.directory, "is_junction", lambda: False)():
@@ -926,6 +948,7 @@ class TransferRecords:
 
     # Old host.
 
+    @_serial
     def offer(self, transfer_id: str | None = None, **details) -> tuple:
         """Start an offer: make R, keep it private here, return (transfer_id, commitment)."""
         transfer_id = transfer_id or new_transfer_id()
@@ -943,6 +966,7 @@ class TransferRecords:
         self._write(value)
         return transfer_id, commitment
 
+    @_serial
     def advance(self, state: str, **details) -> dict:
         """Move the receipt to sending, moved, cancelled or discarded.
 
@@ -959,6 +983,7 @@ class TransferRecords:
             self._forget_secret()
         return value
 
+    @_serial
     def note(self, **details) -> dict:
         """Record facts about the current transfer (for example sending_complete=True)."""
         current = self.read()
@@ -966,6 +991,7 @@ class TransferRecords:
             raise TransferError("This PC has no such transfer in progress.")
         return self._write({**current, "details": {**current["details"], **details}})
 
+    @_serial
     def release(self, **details) -> bytes:
         """Write "released" durably, THEN hand out R for the RELEASE frame or the release code."""
         current = self._current(SENDER)
@@ -978,6 +1004,7 @@ class TransferRecords:
             self._flush()
         return self.release_secret()
 
+    @_serial
     def release_secret(self) -> bytes:
         """R, and only once this host is durably released (or already moved)."""
         current = self._current(SENDER)
@@ -993,6 +1020,7 @@ class TransferRecords:
 
     # New host.
 
+    @_serial
     def receive(self, transfer_id: str, commitment: bytes, **details) -> dict:
         """Record a staged import as pending. Only the commitment is kept, never R."""
         if (type(transfer_id) is not str or not _HEX32.fullmatch(transfer_id)
@@ -1006,6 +1034,7 @@ class TransferRecords:
             raise TransferError("This PC has no such transfer in progress.")
         return current
 
+    @_serial
     def activate(self, release_secret: bytes) -> dict:
         """pending -> active with R from the authenticated RELEASE frame."""
         current = self._pending()
@@ -1013,21 +1042,27 @@ class TransferRecords:
             raise TransferError("The old host has not released this transfer.")
         return self._write({**current, "state": "active"})
 
+    @_serial
     def activate_with_code(self, text: str) -> dict:
-        """pending -> active with the release code typed from the old PC; five wrong codes lock it."""
+        """pending -> active with the release code typed from the old PC.
+
+        The genuine code is never refused, however many wrong ones came first:
+        R is 256 random bits and cannot be guessed, and by the time a code is
+        typed this copy may be the only one left. Wrong codes are counted for
+        display only, and a typing mistake (caught by the code's check group)
+        is not even counted.
+        """
         current = self._pending()
-        if current["code_failures"] >= MAX_CODE_FAILURES:
-            raise TransferError("Too many wrong release codes. Discard this transfer and start again.")
         try:
             release_secret = transfer_pake.parse_release_code(text)
         except transfer_pake.PakeError as error:
-            # A mistyped shape is not a guess; it never reaches the comparison.
             raise TransferError(str(error)) from None
         if not transfer_pake.verify_release(current["transfer_id"], bytes.fromhex(current["commitment"]), release_secret):
-            self._write({**current, "code_failures": current["code_failures"] + 1})
-            raise TransferError("That release code does not match this transfer.")
+            self._write({**current, "code_failures": min(current["code_failures"] + 1, 1_000_000)})
+            raise TransferError(WRONG_RELEASE_CODE)
         return self._write({**current, "state": "active"})
 
+    @_serial
     def activate_by_override(self) -> dict:
         """Emergency only: the old PC is gone for good and can never release.
 
@@ -1040,6 +1075,7 @@ class TransferRecords:
             raise TransferError("The old host never finished sending. Discard this transfer and start again.")
         return self._write({**current, "state": "active", "details": {**current["details"], "override": True}})
 
+    @_serial
     def erase(self, *, archive_erased: bool = False) -> None:
         """Remove a finished transfer's receipt and release secret (terminal states only).
 
@@ -1057,3 +1093,362 @@ class TransferRecords:
                 self.receipt.unlink()
         except OSError:
             raise TransferError("Could not erase the transfer record.") from None
+
+
+# Control frames, the profile delta, the locked archive and the member
+# downloads a host serves. The sender and receiver sequences in
+# Hosting.transfer_flow are built from these.
+
+CONTROL_MAGIC = b"VETC"
+CONTROL_HEADER = struct.Struct(">4s16sBI")  # magic, transfer id, direction, sequence
+TO_CLAIM, TO_OFFER = 1, 2
+MAX_CONTROL_BODY = FRAME_LIMIT - CONTROL_HEADER.size - 32
+MAX_DELTA_ROWS = 5_000
+MAX_DELTA_BYTES = 2 * 1_048_576
+DELTA_PART_BYTES = 8_000
+ARCHIVE_SUFFIX = ".moved-archive"
+INSTALLER_NAME = "Vemals-Ears-Setup.exe"
+SOURCE_NAME = "vemals-ears-member.zip"
+_DEVICE_ID = re.compile(r"[A-Za-z0-9_-]{1,128}")
+_ARTIFACT_PATH = re.compile(r"/download|/source(/[0-9]{1,6}\.[0-9]{1,6}\.[0-9]{1,6})?")
+_SENSITIVE = ("secrets", "relay", "consent")
+
+
+def records_directory(state: Path) -> Path:
+    """The protected receipt directory of the host whose state is here."""
+    return service.transfer_directory(state)
+
+
+def is_control_frame(frame) -> bool:
+    return type(frame) is bytes and frame[:4] == CONTROL_MAGIC
+
+
+class ControlChannel:
+    """Authenticated control messages between the two hosts of one transfer.
+
+    Control frames have their own MAC domain, separate from bundle frames
+    that share the key. The direction and a strict per-direction sequence are
+    inside the authenticated body, so a frame can be neither reflected back
+    to its sender nor replayed, reordered or moved to another transfer.
+    The frames themselves are integrity-protected only. Two things in them
+    are private, and each is handled on its own: the DELTA rows (device IDs,
+    typed-chat names, classes, revocations) are AES-encrypted under the
+    session's bundle key before they are put in a frame (seal_delta), and R
+    in the RELEASE frame is sent in clear, only after "released" is durable;
+    it is useless without local access to the new PC.
+
+    seal() may be called from two threads (a move and its cancel), so the
+    sequence number is taken under a lock.
+    """
+
+    def __init__(self, transfer_id: str, mac_key: bytes, role: str) -> None:
+        _require(type(mac_key) is bytes and len(mac_key) == 32
+                 and role in (transfer_pake.ROLE_OFFER, transfer_pake.ROLE_CLAIM))
+        self._identifier = _raw_id(transfer_id)
+        self._mac_key = mac_key
+        offer = role == transfer_pake.ROLE_OFFER
+        self._outgoing, self._incoming = (TO_CLAIM, TO_OFFER) if offer else (TO_OFFER, TO_CLAIM)
+        self._sent = self._received = 0
+        self._failed = False
+        self._lock = threading.Lock()
+
+    def _mac(self, body: bytes) -> bytes:
+        return hmac.digest(self._mac_key, b"VemalsEars host transfer v1 control frame\x00" + body, "sha256")
+
+    def seal(self, kind: str, **fields) -> bytes:
+        _require(type(kind) is str and re.fullmatch(r"[a-z_]{1,32}", kind) is not None and "type" not in fields)
+        message = handoff._json_bytes({"type": kind, **fields})
+        _require(len(message) <= MAX_CONTROL_BODY)
+        with self._lock:
+            body = CONTROL_HEADER.pack(CONTROL_MAGIC, self._identifier, self._outgoing, self._sent) + message
+            self._sent += 1
+        return body + self._mac(body)
+
+    def open(self, frame) -> dict:
+        """Verify one frame and return its message; any failure ends the channel."""
+        try:
+            if self._failed or type(frame) is not bytes or not CONTROL_HEADER.size + 32 <= len(frame) <= FRAME_LIMIT:
+                raise TransferError(FRAME_ERROR)
+            body, mac = frame[:-32], frame[-32:]
+            if not hmac.compare_digest(self._mac(body), mac):
+                raise TransferError(FRAME_ERROR)
+            magic, identifier, direction, sequence = CONTROL_HEADER.unpack_from(body)
+            if (magic != CONTROL_MAGIC or identifier != self._identifier
+                    or direction != self._incoming or sequence != self._received):
+                raise TransferError(FRAME_ERROR)
+            message = _json(body[CONTROL_HEADER.size:])
+            if type(message) is not dict or type(message.get("type")) is not str:
+                raise TransferError(FRAME_ERROR)
+            self._received += 1
+            return message
+        except (TransferError, ValueError, struct.error):
+            self._failed = True
+            raise TransferError(FRAME_ERROR) from None
+
+
+def _writable(database: Path) -> sqlite3.Connection:
+    connection = sqlite3.connect(Path(database).resolve().as_uri() + "?mode=rw", uri=True,
+                                 timeout=5.0, isolation_level=None)
+    connection.execute("PRAGMA busy_timeout = 5000")
+    return connection
+
+
+def profile_rows(database: Path) -> dict:
+    """{device_id: (typed-chat name, class, revoked_at)} as one committed state.
+
+    Read inside BEGIN IMMEDIATE so no writer is half way through: the lock is
+    held for this one query only, never across a network step, because every
+    typed line authenticates with a small write of its own.
+    """
+    try:
+        with closing(_writable(database)) as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            try:
+                rows = connection.execute(
+                    "SELECT device_id, quick_chat_name, quick_chat_wow_class, revoked_at FROM devices").fetchall()
+            finally:
+                connection.execute("ROLLBACK")
+    except (sqlite3.Error, OSError):
+        raise TransferError("The relay database could not be read. Nothing was moved.") from None
+    return {str(row[0]): (row[1], str(row[2] or ""), row[3]) for row in rows}
+
+
+def profile_delta(before: dict, database: Path) -> list:
+    """Rows whose typed-chat profile or revocation changed since `before`.
+
+    Profile writes are never refused during a move, so the ones that landed
+    after the snapshot follow it in authenticated control frames.
+    """
+    rows = [[device, name, wow_class, revoked]
+            for device, (name, wow_class, revoked) in sorted(profile_rows(database).items())
+            if before.get(device) != (name, wow_class, revoked)]
+    if len(rows) > MAX_DELTA_ROWS:
+        raise TransferError("Too many typed-chat profiles changed during the move. Start the move again.")
+    return rows
+
+
+def seal_delta(rows: list, keys) -> list:
+    """The delta as the fields of one or more DELTA control frames, encrypted.
+
+    The rows name members' devices and typed-chat names, so they are sealed
+    with the session's bundle key (AES-256-CBC, fresh IV) exactly like the
+    bundle; the control frames that carry the parts authenticate them. Always
+    at least one part, the last one marked final.
+    """
+    _require(type(rows) is list and len(rows) <= MAX_DELTA_ROWS)
+    plaintext = handoff._json_bytes(rows)
+    if len(plaintext) > MAX_DELTA_BYTES:
+        raise TransferError("Too many typed-chat profiles changed during the move. Start the move again.")
+    iv = secrets.token_bytes(16)
+    try:
+        data = iv + handoff.transfer_aes(plaintext, keys.bundle_enc, iv, decrypt=False)
+    except handoff.HandoffError as error:
+        raise TransferError(str(error)) from None
+    parts = [data[index:index + DELTA_PART_BYTES] for index in range(0, len(data), DELTA_PART_BYTES)]
+    return [{"data": base64.b64encode(part).decode("ascii"), "final": index == len(parts) - 1}
+            for index, part in enumerate(parts)]
+
+
+def delta_part(message: dict) -> tuple:
+    """(bytes, final) from one authenticated DELTA control message."""
+    data, final = message.get("data"), message.get("final")
+    _require(type(data) is str and 0 < len(data) <= 2 * DELTA_PART_BYTES and type(final) is bool)
+    try:
+        return base64.b64decode(data.encode("ascii"), validate=True), final
+    except (ValueError, UnicodeError):
+        raise TransferError(FRAME_ERROR) from None
+
+
+def open_delta(data: bytes, keys) -> list:
+    """Decrypt the joined DELTA parts. The control channel authenticated every part first."""
+    _require(type(data) is bytes and 32 <= len(data) <= MAX_DELTA_BYTES + 48 and len(data) % 16 == 0)
+    try:
+        rows = _json(handoff.transfer_aes(data[16:], keys.bundle_enc, data[:16], decrypt=True))
+    except handoff.HandoffError:
+        raise TransferError(FRAME_ERROR) from None
+    _require(type(rows) is list and len(rows) <= MAX_DELTA_ROWS)
+    return rows
+
+
+def _delta_row(row) -> tuple:
+    _require(type(row) is list and len(row) == 4)
+    device, name, wow_class, revoked = row
+    _require(type(device) is str and _DEVICE_ID.fullmatch(device) is not None)
+    _require(name is None or (type(name) is str and 1 <= len(name) <= 64
+                              and all(ord(char) >= 32 for char in name)))
+    _require(type(wow_class) is str and re.fullmatch(r"[a-z-]{0,32}", wow_class) is not None)
+    _require(revoked is None or (type(revoked) in (int, float) and 0 <= revoked < 1e11))
+    return device, name, wow_class, revoked
+
+
+def apply_profile_delta(database: Path, rows: list) -> int:
+    """Apply a received delta to the staged database in one transaction.
+
+    Only the typed-chat profile and a revocation can change, only on devices
+    the snapshot already holds, and a revoked device is never un-revoked.
+    """
+    _require(type(rows) is list and len(rows) <= MAX_DELTA_ROWS)
+    checked = [_delta_row(row) for row in rows]
+    try:
+        with closing(_writable(database)) as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            try:
+                changed = 0
+                for device, name, wow_class, revoked in checked:
+                    changed += connection.execute(
+                        "UPDATE devices SET quick_chat_name = ?, quick_chat_wow_class = ?, "
+                        "revoked_at = COALESCE(revoked_at, ?) WHERE device_id = ?",
+                        (name, wow_class, revoked, device)).rowcount
+                connection.execute("COMMIT")
+            except BaseException:
+                connection.execute("ROLLBACK")
+                raise
+    except (sqlite3.Error, OSError):
+        raise TransferError("The latest typed-chat profiles could not be saved. Nothing was moved.") from None
+    return changed
+
+
+def served_artifacts(state: Path) -> list:
+    """Every member download this host serves, as {name, size, sha256, path}.
+
+    With a release pointer: the installer and source bundle it names. Without
+    one: the rolling installer, the rolling source bundle and the source
+    bundle for the configured client version. `path` is where the old host
+    serves the file; the new PC mirrors each one and checks size and SHA-256.
+    Nothing is listed for a host that only links to an external download.
+    """
+    from GuildHub.release_pointer import ReleasePointerError, canonical_version, load_release_pointer
+
+    try:
+        values = service.load_configuration(Path(state))
+    except service.ConfigurationError:
+        raise TransferError("This host's configuration could not be read. Nothing was moved.") from None
+    download = values.get("VEMALS_EARS_DOWNLOAD_FILE", "")
+    if not download:
+        return []
+    folder = Path(download).parent
+    try:
+        snapshot = load_release_pointer(folder)
+    except ReleasePointerError:
+        raise TransferError("The published member release on this host is damaged. Publish it again, "
+                            "then move the host.") from None
+    files = []
+    if snapshot is not None:
+        files = [(snapshot.installer.path, "/download"), (snapshot.source.path, "/source")]
+    else:
+        if Path(download).is_file():
+            if Path(download).name != INSTALLER_NAME:
+                raise TransferError("The member installer on this host has an unexpected file name. "
+                                    "Choose it again in Edit settings, then move the host.")
+            files.append((Path(download), "/download"))
+        if (folder / SOURCE_NAME).is_file():
+            files.append((folder / SOURCE_NAME, "/source"))
+        version = canonical_version(values.get("VEMALS_EARS_CLIENT_VERSION", ""))
+        if version is not None and (folder / ("vemals-ears-member-" + version + ".zip")).is_file():
+            files.append((folder / ("vemals-ears-member-" + version + ".zip"), "/source/" + version))
+    artifacts = [{**describe_artifact(path), "path": served} for path, served in files]
+    if len({entry["name"].lower() for entry in artifacts}) != len(artifacts) or len(artifacts) > MAX_ARTIFACTS:
+        raise TransferError("The member downloads on this host cannot be listed. Publish them again, "
+                            "then move the host.")
+    return artifacts
+
+
+def card_artifacts(value) -> list:
+    """Validate the artifact list of an identity card; returns detached entries."""
+    _require(type(value) is list and len(value) <= MAX_ARTIFACTS)
+    result = []
+    for entry in value:
+        _require(type(entry) is dict and set(entry) == {"name", "size", "sha256", "path"}
+                 and type(entry["path"]) is str and _ARTIFACT_PATH.fullmatch(entry["path"]) is not None)
+        result.append({**_artifact({key: entry[key] for key in ("name", "size", "sha256")}),
+                       "path": entry["path"]})
+    _require(len({entry["name"].lower() for entry in result}) == len(result)
+             and len({entry["path"] for entry in result}) == len(result))
+    return result
+
+
+def _erase_host_tree(folder: Path) -> None:
+    """Remove a host state tree: credentials and the database are overwritten first.
+
+    The speech runtime, logs and downloads hold nothing private and are large,
+    so they are only deleted.
+    """
+    for name in ("relay.env", "relay.tmp", "host-settings.json", "host-settings.tmp"):
+        if (folder / name).is_file() or (folder / name).is_symlink():
+            _erase(folder / name)
+    for name in _SENSITIVE:
+        if (folder / name).is_symlink() or getattr(folder / name, "is_junction", lambda: False)():
+            (folder / name).unlink()
+        elif (folder / name).is_dir():
+            _erase_tree(folder / name)
+    shutil.rmtree(folder)
+
+
+def archive_path(state: Path) -> Path:
+    """Where the locked archive of a moved host is kept: a sibling of its state."""
+    state = Path(state)
+    return state.with_name(state.name + ARCHIVE_SUFFIX)
+
+
+def archive_state(state: Path) -> Path:
+    """Rename a stopped host's state into its locked archive.
+
+    The archive keeps the state directory's own protection. It cannot start:
+    its services are removed, nothing is configured at the state path any
+    more, and the "moved" receipt refuses every start route until the archive
+    is erased.
+    """
+    state = Path(state)
+    archive = archive_path(state)
+    try:
+        handoff._safe_path(archive)
+        if archive.exists():
+            raise TransferError("An older archive is still on this PC. Erase it, then finish the move.")
+        for attempt in range(20):
+            try:
+                state.rename(archive)
+                break
+            except PermissionError:
+                # A service that has only just stopped may still be letting go.
+                if attempt == 19:
+                    raise
+                time.sleep(0.5)
+        setup.protect_directory(archive)
+        return archive
+    except (OSError, subprocess.SubprocessError, setup.SetupError, handoff.HandoffError):
+        raise TransferError("The stopped host could not be archived. Close other programs using its "
+                            "folder, then finish the move.") from None
+
+
+def erase_archive(state: Path) -> bool:
+    """"Erase archive": overwrite and remove the archived host. True when one was there."""
+    archive = archive_path(Path(state))
+    try:
+        handoff._safe_path(archive)
+        if archive.is_symlink() or getattr(archive, "is_junction", lambda: False)():
+            archive.unlink()
+            return True
+        if not archive.exists():
+            return False
+        _erase_host_tree(archive)
+        return True
+    except (OSError, handoff.HandoffError):
+        raise TransferError("The archive could not be erased. Close other programs using its folder and retry.") from None
+
+
+def discard_published(state: Path) -> bool:
+    """Erase a received host that was published but never released. True when one was there.
+
+    Refuses anything that is not marked activation-pending: an active host is
+    never removed by a discard.
+    """
+    state = _destination(state)
+    try:
+        if not state.exists():
+            return False
+        if activation(state) != ACTIVATION_PENDING:
+            raise TransferError("This PC's host is not a pending transfer. Nothing was erased.")
+        _erase_host_tree(state)
+        return True
+    except OSError:
+        raise TransferError("Could not erase the pending transfer. Close other programs and retry.") from None

@@ -845,7 +845,7 @@ class WindowsImportTests(unittest.TestCase):
             self.device.device_id, self.device.device_token))
         metadata = json.loads((self.state / "host-settings.json").read_text(encoding="ascii"))
         self.assertEqual({"schema": 1, "tunnel_enabled": True, "client_installer": "",
-                          "activation": "pending", "transfer_id": TRANSFER}, metadata)
+                          "activation": "pending", "transfer_id": TRANSFER, "tunnel_withheld": True}, metadata)
         # Nothing that is never moved appeared, and no temp or marker file.
         files = {path.relative_to(self.state).as_posix() for path in self.state.rglob("*") if path.is_file()}
         self.assertEqual({"relay.env", "host-settings.json", "relay/guild-hub.sqlite3",
@@ -1193,7 +1193,7 @@ class RecordsTests(unittest.TestCase):
         with self.assertRaises(transfer.TransferError):
             self.new.activate(SECRET)
 
-    def test_release_code_activates_and_five_wrong_codes_lock(self):
+    def test_release_code_activates_and_wrong_codes_never_lock_out_the_genuine_one(self):
         transfer_id, commitment = self.old.offer()
         self.old.advance("sending")
         code = transfer_pake.release_code(self.old.release())
@@ -1202,6 +1202,11 @@ class RecordsTests(unittest.TestCase):
         for typed in ("", "XENO", code[:-2]):
             with self.assertRaisesRegex(transfer.TransferError, "complete release code"):
                 self.new.activate_with_code(typed)
+        # Nor is a slip of the finger: the check group catches it first.
+        for position in (0, 7, 30, len(code) - 1):
+            typo = code[:position] + ("0" if code[position] != "0" else "1") + code[position + 1:]
+            with self.assertRaisesRegex(transfer.TransferError, "typing mistake"):
+                self.new.activate_with_code(typo)
         self.assertEqual(0, self.new.read()["code_failures"])
         wrong = transfer_pake.release_code(b"\x01" * 32)
         for attempt in range(1, 5):
@@ -1210,14 +1215,19 @@ class RecordsTests(unittest.TestCase):
             self.assertEqual(attempt, self.new.read()["code_failures"])
         self.assertEqual("active", self.new.activate_with_code(code.lower().replace("-", " "))["state"])
 
+        # When a release code is typed the old PC has usually stopped for
+        # good, so this copy may be the only one left. No number of wrong
+        # codes may lock it, and no message may say to discard it.
         self.new.receive(transfer_id, commitment)
-        for _ in range(5):
-            with self.assertRaisesRegex(transfer.TransferError, "does not match"):
+        for attempt in range(1, 26):
+            with self.assertRaisesRegex(transfer.TransferError, "does not match") as refused:
                 self.new.activate_with_code(wrong)
-        with self.assertRaisesRegex(transfer.TransferError, "Too many wrong release codes"):
-            self.new.activate_with_code(code)
+            self.assertNotIn("iscard this transfer", str(refused.exception))
+            self.assertNotIn("Too many", str(refused.exception))
+            self.assertEqual(attempt, self.new.read()["code_failures"])
         self.assertEqual("pending", self.new.read()["state"])
-        self.assertEqual("discarded", self.new.advance("discarded")["state"])
+        self.assertFalse(hasattr(transfer, "MAX_CODE_FAILURES"))
+        self.assertEqual("active", self.new.activate_with_code(code)["state"])
 
     def test_override_needs_an_authenticated_sending_complete(self):
         self.new.receive(TRANSFER, COMMITMENT)

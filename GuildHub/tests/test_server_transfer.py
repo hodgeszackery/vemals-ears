@@ -409,6 +409,27 @@ class TransferRelayTests(unittest.IsolatedAsyncioTestCase):
                 lambda: not self.application.transfer_offer_pending
             )
 
+    async def test_maintenance_control_tells_viewers_and_keeps_the_transfer_open(self):
+        offer, claim = await self.bridged()
+        paired, _code = await self.pair()
+        captions, response = await self.open_captions(paired)
+        self.sockets.append(captions)
+        self.assertEqual("authenticated", response["type"])
+        await self.control(offer, "transfer_maintenance")
+        self.assertEqual(
+            {"type": "transfer_maintenance", "announced": True},
+            await self.notice(offer),
+        )
+        with self.assertRaises(ConnectionClosed) as caught:
+            await asyncio.wait_for(captions.recv(), timeout=5)
+        self.assertEqual(1001, caught.exception.rcvd.code)
+        self.assertIn("Paused for updates", caught.exception.rcvd.reason)
+        # The two hosts are still connected: the release frame travels next.
+        await offer.send(OPAQUE)
+        self.assertEqual(OPAQUE, await asyncio.wait_for(claim.recv(), 5))
+        await self.control(offer, "transfer_maintenance", extra=1)
+        self.assertEqual("invalid_request", (await self.notice(offer))["code"])
+
     async def test_confirmed_claim_leaving_spends_the_offer(self):
         offer, claim = await self.bridged()
         await claim.close()
@@ -447,7 +468,9 @@ class TransferRelayTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(404, await self.refused_status(TRANSFER_CLAIM_PATH))
 
     async def test_confirmed_transfer_is_not_cut_off_by_the_offer_ttl(self):
-        with patch.object(server, "TRANSFER_OFFER_TTL_SECONDS", 0.2):
+        # One second, not a fifth: on a loaded runner the handshake below has
+        # to finish inside the TTL for the test to be about what it says.
+        with patch.object(server, "TRANSFER_OFFER_TTL_SECONDS", 1.0):
             self.write_key()
             offer = await self.open_offer_socket()
             self.assertEqual("transfer_offered", (await self.notice(offer))["type"])
@@ -461,7 +484,7 @@ class TransferRelayTests(unittest.IsolatedAsyncioTestCase):
             await self.wait_until(
                 lambda: self.application._transfer_offer.confirmed
             )
-            await asyncio.sleep(0.4)
+            await asyncio.sleep(1.5)
         await offer.send(b"after-ttl")
         self.assertEqual(b"after-ttl", await asyncio.wait_for(claim.recv(), 10))
 

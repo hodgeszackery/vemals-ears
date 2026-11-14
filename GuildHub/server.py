@@ -2551,6 +2551,18 @@ class GuildHubServer:
             offer.failures += 1
             await self._drop_transfer_claim(offer, claim, "failed")
             return
+        if kind == "transfer_maintenance":
+            if set(payload) != {"type"}:
+                raise GuildHubProtocolError("unexpected transfer control field")
+            # The old Host has released and is about to stop for good. Tell
+            # viewers now, while its public connection can still carry the
+            # close frame; the shutdown announcement would come too late,
+            # after the tunnel has gone. Typed chat is left alone.
+            await self.announce_maintenance()
+            await self._transfer_notice(
+                offer, {"type": "transfer_maintenance", "announced": True}
+            )
+            return
         raise GuildHubProtocolError("unknown transfer control message")
 
     async def _transfer_offer_socket(self, connection: ServerConnection) -> None:

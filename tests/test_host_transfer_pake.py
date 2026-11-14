@@ -237,14 +237,41 @@ class ReleaseProofTests(unittest.TestCase):
     def test_release_code_round_trips_the_whole_secret(self):
         for secret in (bytes(32), b"\xff" * 32, bytes(range(32)), pake.new_release_secret()):
             code = pake.release_code(secret)
-            self.assertRegex(code, "^(?:[" + pake.CODE_ALPHABET + "]{4}-){12}[" + pake.CODE_ALPHABET + "]{4}$")
+            # Thirteen groups carry R; the fourteenth is a check on them.
+            self.assertRegex(code, "^(?:[" + pake.CODE_ALPHABET + "]{4}-){13}[" + pake.CODE_ALPHABET + "]{4}$")
             self.assertEqual(secret, pake.parse_release_code(code))
             self.assertEqual(secret, pake.parse_release_code(" " + code.lower().replace("-", " ") + "\n"))
         code = pake.release_code(bytes(range(32)))
-        for typed in ("", code[:-1], code + "0", code[:-1] + "I", code[:-1] + "1", None):
+        self.assertEqual(code, pake.release_code(bytes(range(32))))
+        for typed in ("", code[:-1], code + "0", code[:-1] + "I", code[:-5], None):
             with self.subTest(typed=typed):
                 with self.assertRaisesRegex(pake.PakeError, "complete release code"):
                     pake.parse_release_code(typed)
+
+    def test_release_code_check_group_catches_typing_mistakes(self):
+        secret = bytes(range(32))
+        code = pake.release_code(secret)
+        symbols = code.replace("-", "")
+        self.assertEqual(pake.RELEASE_CODE_SYMBOLS, len(symbols))
+        # Every single wrong symbol, anywhere in the code, is a typing mistake
+        # and never comes back as some other release secret.
+        for position in range(len(symbols)):
+            for other in pake.CODE_ALPHABET[:3]:
+                if other == symbols[position]:
+                    continue
+                typed = symbols[:position] + other + symbols[position + 1:]
+                with self.subTest(position=position, other=other), \
+                     self.assertRaisesRegex(pake.PakeError, "typing mistake"):
+                    pake.parse_release_code(typed)
+        # So is swapping two neighbouring groups.
+        groups = code.split("-")
+        swapped = "-".join([groups[1], groups[0], *groups[2:]])
+        with self.assertRaisesRegex(pake.PakeError, "typing mistake"):
+            pake.parse_release_code(swapped)
+        # The check is a public function of R: it adds nothing an outsider
+        # could use, and a code for another secret still parses as that secret.
+        self.assertEqual(b"\x01" * 32, pake.parse_release_code(pake.release_code(b"\x01" * 32)))
+        self.assertNotEqual(pake.release_code(b"\x01" * 32)[-4:], code[-4:])
 
     def test_release_proof_is_independent_of_the_session(self):
         # The receiver holds every session key and the commitment. None of

@@ -224,13 +224,32 @@ def verify_release(transfer_id: str, commitment: bytes, release_secret: bytes) -
     return isinstance(commitment, bytes) and hmac.compare_digest(expected, commitment)
 
 
+RELEASE_CODE_SYMBOLS = 56
+RELEASE_CODE_TYPO = ("That release code has a typing mistake. Compare it with the code on the old PC, "
+                     "group by group, and type it again.")
+
+
+def _release_check(release_secret: bytes) -> str:
+    """Four check symbols, so a slip of the finger is caught as a typing mistake.
+
+    They add nothing secret (R is 256 random bits) and prove nothing: they
+    only tell a mistyped code from a code that belongs to another transfer.
+    """
+    number = int.from_bytes(hashlib.sha256(_frame(_DOMAIN, b"release code check", release_secret)).digest()[:3], "big")
+    return "".join(CODE_ALPHABET[(number >> shift) & 31] for shift in (19, 14, 9, 4))
+
+
 def release_code(release_secret: bytes) -> str:
-    """R as 52 typed symbols (13 groups of four) for when RELEASE never arrived."""
+    """R as typed symbols for when RELEASE never arrived: 14 groups of four.
+
+    The first 13 groups are R itself; the last group is a check on the rest.
+    """
     if not isinstance(release_secret, bytes) or len(release_secret) != RELEASE_SECRET_BYTES:
         raise PakeError("The release proof is invalid.")
     number = int.from_bytes(release_secret, "big") << 4
     symbols = "".join(CODE_ALPHABET[(number >> shift) & 31] for shift in range(255, -1, -5))
-    return "-".join(symbols[index:index + 4] for index in range(0, 52, 4))
+    symbols += _release_check(release_secret)
+    return "-".join(symbols[index:index + 4] for index in range(0, RELEASE_CODE_SYMBOLS, 4))
 
 
 def parse_release_code(text: str) -> bytes:
@@ -238,11 +257,14 @@ def parse_release_code(text: str) -> bytes:
     if not isinstance(text, str) or len(text) > 256:
         raise PakeError(message)
     symbols = "".join(char for char in text.upper() if char not in " -\t\r\n")
-    if len(symbols) != 52 or any(char not in CODE_ALPHABET for char in symbols):
+    if len(symbols) != RELEASE_CODE_SYMBOLS or any(char not in CODE_ALPHABET for char in symbols):
         raise PakeError(message)
     number = 0
-    for char in symbols:
+    for char in symbols[:52]:
         number = (number << 5) | CODE_ALPHABET.index(char)
     if number & 15:
-        raise PakeError(message)
-    return (number >> 4).to_bytes(RELEASE_SECRET_BYTES, "big")
+        raise PakeError(RELEASE_CODE_TYPO)
+    release_secret = (number >> 4).to_bytes(RELEASE_SECRET_BYTES, "big")
+    if not hmac.compare_digest(_release_check(release_secret), symbols[52:]):
+        raise PakeError(RELEASE_CODE_TYPO)
+    return release_secret

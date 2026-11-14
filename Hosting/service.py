@@ -44,8 +44,56 @@ SECRET_KEYS = (
 )
 
 
+TRANSFER_MOVING_ERROR = ("This host is being moved to another PC. Finish or cancel the move "
+                         "in the Host app before starting it.")
+TRANSFER_MOVED_ERROR = ("This PC holds the locked archive of a host that moved to another PC. "
+                        "It cannot start here. Erase the archive in the Host app first.")
+TRANSFER_PENDING_ERROR = ("This host was received from another PC and is waiting for that PC to "
+                          "release it. It cannot start until the move is finished in the Host app.")
+TRANSFER_ADMIN_ERROR = ("A host transfer is open on this PC. Finish or cancel it in the Host app "
+                        "before changing relay records.")
+TRANSFER_RECORD_ERROR = "The transfer record on this PC cannot be read. Nothing was started."
+
+
 class ConfigurationError(ValueError):
     """Host configuration is incomplete or unsafe to start."""
+
+
+def transfer_directory(state_directory: str | Path) -> Path:
+    """Where this host keeps its transfer receipt: a protected sibling of the state.
+
+    It is outside the state directory so it survives the state being archived
+    after a move, and it is derived from the state path so two installs on one
+    PC never share a receipt.
+    """
+    state = Path(state_directory)
+    return state.with_name(state.name + "Transfer")
+
+
+def transfer_receipt(state_directory: str | Path) -> dict:
+    """Role and state of this PC's transfer receipt, {} when there is none.
+
+    Only the two fields a start decision needs are read here; Hosting.transfer
+    owns the full record. A receipt that exists but cannot be understood is an
+    error, never "no transfer": a damaged record must not let a moved or
+    pending host start.
+    """
+    path = transfer_directory(state_directory) / "transfer.json"
+    try:
+        with path.open("rb") as stream:
+            raw = stream.read(65_537)
+    except FileNotFoundError:
+        return {}
+    except OSError:
+        raise ConfigurationError(TRANSFER_RECORD_ERROR) from None
+    try:
+        value = json.loads(raw.decode("ascii")) if len(raw) <= 65_536 else None
+    except (ValueError, UnicodeError, RecursionError):
+        value = None
+    if (not isinstance(value, dict) or value.get("role") not in ("sender", "receiver")
+            or not isinstance(value.get("state"), str)):
+        raise ConfigurationError(TRANSFER_RECORD_ERROR)
+    return {"role": value["role"], "state": value["state"]}
 
 
 def load_configuration(state_directory: str | Path) -> dict[str, str]:
@@ -137,6 +185,14 @@ def load_configuration(state_directory: str | Path) -> dict[str, str]:
             if value and not Path(value).is_absolute():
                 raise ConfigurationError(key + " must be an absolute path.")
 
+    # The transfer rendezvous exists only on a standalone host, which owns a
+    # relay. Both paths are derived, never taken from relay.env, so a
+    # remote-worker install or a shared relay can never be given them.
+    for key in ("VEMALS_EARS_TRANSFER_KEY_FILE", "VEMALS_EARS_TRANSFER_FREEZE_FILE"):
+        values.pop(key, None)
+    if mode == STANDALONE:
+        values["VEMALS_EARS_TRANSFER_KEY_FILE"] = str(state / "secrets" / "transfer-key")
+        values["VEMALS_EARS_TRANSFER_FREEZE_FILE"] = str(state / "transfer-frozen")
     values.update({
         "VEMALS_EARS_STATE_DIR": str(state),
         "VEMALS_EARS_SERVER_URL": (values["VEMALS_EARS_PUBLIC_SERVER_URL"]
@@ -149,17 +205,60 @@ def load_configuration(state_directory: str | Path) -> dict[str, str]:
     return values
 
 
-def validate_activation(values: dict[str, str]) -> None:
-    """An imported worker needs explicit confirmation before it may run."""
-    if values["VEMALS_EARS_HOST_MODE"] != REMOTE_WORKER:
-        return
+def _host_metadata(values: dict[str, str]) -> dict:
     try:
         metadata = json.loads((Path(values["VEMALS_EARS_STATE_DIR"]) / "host-settings.json").read_text(encoding="ascii"))
     except (OSError, ValueError, UnicodeError):
         metadata = {}
-    if (not isinstance(metadata, dict) or metadata.get("schema") != 1
-            or metadata.get("mode") != REMOTE_WORKER or metadata.get("takeover_confirmed") is not True):
-        raise ConfigurationError("Confirm that the previous caption worker is stopped before starting the imported worker.")
+    return metadata if isinstance(metadata, dict) else {}
+
+
+def validate_activation(values: dict[str, str], role: str | None = None) -> None:
+    """Refuse to run a host that is not, or is no longer, the one active copy.
+
+    An imported worker needs explicit confirmation before it may run. A
+    standalone host may not start while its transfer receipt says it is being
+    sent, has been released or has moved (the old PC), or while it is still
+    waiting for the release proof (the new PC). The relay administration
+    command is also refused while an offer is merely open, so no record can
+    change behind a transfer.
+
+    One exception, for the relay process alone: while the host is being sent
+    ("sending") its relay may start. It comes back frozen from the persisted
+    flag file, so a reboot or a relay crash in the middle of a move never
+    takes typed chat down until somebody opens the Host app. The caption
+    worker, which holds the bot identity, stays refused.
+    """
+    metadata = _host_metadata(values)
+    if values["VEMALS_EARS_HOST_MODE"] == REMOTE_WORKER:
+        if (metadata.get("schema") != 1 or metadata.get("mode") != REMOTE_WORKER
+                or metadata.get("takeover_confirmed") is not True):
+            raise ConfigurationError("Confirm that the previous caption worker is stopped before starting the imported worker.")
+        return
+    receipt = transfer_receipt(values["VEMALS_EARS_STATE_DIR"])
+    kind = (receipt.get("role"), receipt.get("state"))
+    if kind == ("sender", "moved"):
+        raise ConfigurationError(TRANSFER_MOVED_ERROR)
+    if kind == ("sender", "released") or (kind == ("sender", "sending") and role != "relay"):
+        raise ConfigurationError(TRANSFER_MOVING_ERROR)
+    if kind == ("receiver", "pending") or metadata.get("activation") == "pending":
+        raise ConfigurationError(TRANSFER_PENDING_ERROR)
+    if role == "admin" and kind == ("sender", "offered"):
+        raise ConfigurationError(TRANSFER_ADMIN_ERROR)
+
+
+def validate_staged(values: dict[str, str]) -> None:
+    """The one case services may be registered for a host that cannot start yet.
+
+    A received host is installed with its services disabled while it waits
+    for the release proof. Nothing else may use the staged path: not a host
+    that is active, being sent, released or moved, and not an imported worker.
+    """
+    receipt = transfer_receipt(values["VEMALS_EARS_STATE_DIR"])
+    if (values["VEMALS_EARS_HOST_MODE"] != STANDALONE
+            or (receipt.get("role"), receipt.get("state")) != ("receiver", "pending")
+            or _host_metadata(values).get("activation") != "pending"):
+        raise ConfigurationError("Staged service installation is only for a received host that is waiting for its release.")
 
 
 def configure_environment(values: dict[str, str]) -> None:
@@ -219,7 +318,7 @@ def main(argv: list[str] | None = None) -> int:
         if args.role == "worker":
             validate_runtime(values)
         if not args.check_only:
-            validate_activation(values)
+            validate_activation(values, args.role)
         if args.check_port:
             check_port(values)
     except ConfigurationError as error:

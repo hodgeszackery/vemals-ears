@@ -11,6 +11,7 @@ import shutil
 import sqlite3
 import subprocess
 import sys
+import time
 import urllib.request
 from urllib.parse import urlsplit
 
@@ -26,6 +27,12 @@ WORKER = "VemalsEarsHostWorker"
 TUNNEL = "VemalsEarsHostTunnel"
 SERVICES = (RELAY, WORKER, TUNNEL)
 NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+DISABLED = "SERVICE_DISABLED"
+AUTOMATIC = "SERVICE_DELAYED_AUTO_START"
+START_MODES = ("SERVICE_AUTO_START", AUTOMATIC, "SERVICE_DEMAND_START", DISABLED)
+# A transfer state in which this PC's host may not be started by any route.
+TRANSFER_HELD = (("sender", "sending"), ("sender", "released"), ("receiver", "pending"))
+TRANSFER_MOVED = ("sender", "moved")
 
 
 class HostError(RuntimeError):
@@ -124,6 +131,35 @@ class HostController:
         except service.ConfigurationError as error:
             raise HostError(str(error)) from None
 
+    def _validate_staged(self) -> None:
+        try:
+            service.validate_staged(service.load_configuration(self.state))
+        except service.ConfigurationError as error:
+            raise HostError(str(error)) from None
+
+    def transfer_hold(self) -> str:
+        """"moved", "held" or "": what this PC's transfer receipt allows.
+
+        "moved": the host left this PC and only its locked archive remains.
+        "held": it is being sent, was released, or is a received copy still
+        waiting for its release. Either way nothing here may be started. An
+        unreadable receipt is an error, never "no transfer".
+        """
+        try:
+            receipt = service.transfer_receipt(self.state)
+        except service.ConfigurationError as error:
+            raise HostError(str(error)) from None
+        kind = (receipt.get("role"), receipt.get("state"))
+        if kind == TRANSFER_MOVED:
+            return "moved"
+        if kind in TRANSFER_HELD:
+            return "held"
+        try:
+            pending = _read_json(self.state / "host-settings.json").get("activation") == "pending"
+        except HostError:
+            pending = False
+        return "held" if pending else ""
+
     def _owned_services(self) -> dict[str, str]:
         mode = self._host_mode()
         selected = (WORKER,) if mode == service.REMOTE_WORKER else SERVICES
@@ -157,7 +193,8 @@ class HostController:
                     "guild_name": "Vemal's Ears", "port": 8770, "client_installer": "",
                     "client_download_url": "", "tunnel_enabled": True,
                     "bot_install_url": "", "join_url": "", "identity_locked": False,
-                    "mode": service.STANDALONE, "takeover_confirmed": False}
+                    "mode": service.STANDALONE, "takeover_confirmed": False, "activation": "",
+                    "tunnel_withheld": False}
         values = service.load_configuration(self.state)
         remote = values["VEMALS_EARS_HOST_MODE"] == service.REMOTE_WORKER
         metadata = _read_json(self.state / "host-settings.json")
@@ -183,6 +220,11 @@ class HostController:
             "public_server_url": values["VEMALS_EARS_PUBLIC_SERVER_URL"],
             "public_http_url": values["VEMALS_EARS_PUBLIC_HTTP_URL"],
             "bot_install_url": install_url, "join_url": values["VEMALS_EARS_PUBLIC_HTTP_URL"].rstrip("/") + "/join",
+            # "pending": received from another PC and not released yet.
+            "activation": "" if remote else str(metadata.get("activation", "")),
+            # A received host whose public tunnel must stay off until the old
+            # public address is verified quiet (transfer_flow.start_tunnel).
+            "tunnel_withheld": not remote and metadata.get("tunnel_withheld") is True,
         }
 
     def _identity_locked(self, values: dict) -> bool:
@@ -208,6 +250,11 @@ class HostController:
         current = self.read_settings()
         if current["mode"] == service.REMOTE_WORKER or settings.get("mode", service.STANDALONE) != service.STANDALONE:
             raise HostError("Imported worker settings preserve the existing host identity. Use the takeover controls instead of fresh-host setup.")
+        hold = self.transfer_hold()
+        if hold == "held":
+            raise HostError("This host is part of a move between PCs. Finish or cancel the move before changing its settings.")
+        if hold == "moved":
+            raise HostError(service.TRANSFER_MOVED_ERROR)
         domain = setup.hostname(str(settings.get("hostname", "")))
         guild_id = str(settings.get("guild_id", "")).strip()
         application_id = str(settings.get("application_id", "")).strip()
@@ -276,10 +323,18 @@ class HostController:
                 self._write_secret(self.state / "secrets/discord-bot-token", token)
         if tunnel_token:
             self._write_secret(tunnel_file, tunnel_token)
-        _write_json(self.state / "host-settings.json", {
+        metadata = {
             "schema": 1, "tunnel_enabled": tunnel_enabled,
             "client_installer": str(installer) if installer else "",
-        })
+        }
+        if current["configured"]:
+            # A received host keeps the record of how it became active; saving
+            # settings must never drop or forge that mark.
+            previous = _read_json(self.state / "host-settings.json")
+            for key in ("activation", "transfer_id", "tunnel_withheld"):
+                if key in previous:
+                    metadata[key] = previous[key]
+        _write_json(self.state / "host-settings.json", metadata)
 
     @staticmethod
     def _write_secret(path: Path, value: str) -> None:
@@ -327,32 +382,52 @@ class HostController:
                  + runtime_installer.acceleration_label(outcome.runtime.acceleration)
                  + " acceleration; the Discord helper is ready.")
 
-    def install_services(self) -> None:
-        self._validate_activation()
-        self._owned_services()  # Validate every existing registration first.
+    def install_services(self, *, staged: bool = False) -> None:
+        """Register and start the host services.
+
+        staged=True is for a host received from another PC that still waits
+        for its release: the services are registered DISABLED and nothing is
+        started. It is refused for any other host, and the ordinary install
+        is refused for a host that may not start.
+        """
+        if staged:
+            self._validate_staged()
+        else:
+            self._validate_activation()
+        statuses = self._owned_services()  # Validate every existing registration first.
+        if staged and any(status != "Not installed" for status in statuses.values()):
+            raise HostError("This PC already has host services. A received host needs an empty Host install.")
         result = self._run([
             "powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
             "-File", str(self.package_root / "Hosting/Install-Host.ps1"),
             "-StateDirectory", str(self.state), "-PythonPath", str(self.python),
-            "-NssmPath", str(self.nssm),
+            "-NssmPath", str(self.nssm), *(("-Staged",) if staged else ()),
         ], timeout=180, check=False)
         if result.returncode:
+            if staged:
+                raise HostError("The received host's services could not be registered. Check GPU driver readiness, administrator access, and whether the relay port is already used.")
             if self._host_mode() == service.REMOTE_WORKER:
                 raise HostError("The imported caption worker could not start. Check GPU driver readiness and administrator access, then retry.")
             raise HostError("Host services could not start. Check GPU driver readiness, administrator access, and whether the relay port is already used.")
         if self._host_mode() != service.REMOTE_WORKER:
-            self._install_tunnel()
+            self._install_tunnel(staged=staged)
 
-    def _install_tunnel(self) -> None:
+    def _install_tunnel(self, *, staged: bool = False) -> None:
         if self._host_mode() == service.REMOTE_WORKER:
             return
         statuses = self._owned_services()
-        if not self.read_settings()["tunnel_enabled"]:
+        if staged and statuses[TUNNEL] != "Not installed":
+            raise HostError("This PC already has host services. A received host needs an empty Host install.")
+        current = self.read_settings()
+        if not current["tunnel_enabled"]:
             if statuses[TUNNEL] != "Not installed":
                 if statuses[TUNNEL] != "Stopped":
                     self._nssm("stop", TUNNEL)
                 self._nssm("remove", TUNNEL, "confirm")
             return
+        # A withheld tunnel is registered like a staged one: disabled, never
+        # started. Only release_tunnel() lets it run.
+        held = staged or current["tunnel_withheld"]
         if statuses[TUNNEL] == "Not installed":
             self._nssm("install", TUNNEL, str(self.cloudflared))
         elif statuses[TUNNEL] != "Stopped":
@@ -367,12 +442,15 @@ class HostController:
             "AppStdout": str(self.state / "logs/tunnel.log"),
             "AppStderr": str(self.state / "logs/tunnel.log"),
             "AppRotateFiles": "1", "AppRotateBytes": "1048576",
-            "AppRestartDelay": "30000", "Start": "SERVICE_DELAYED_AUTO_START",
+            # One token on two PCs makes them replicas of one tunnel, so a
+            # staged tunnel is registered disabled and is started last.
+            "AppRestartDelay": "30000", "Start": DISABLED if held else AUTOMATIC,
         }
         try:
             for key, value in settings.items():
                 self._nssm("set", TUNNEL, key, value)
-            self._nssm("start", TUNNEL)
+            if not held:
+                self._nssm("start", TUNNEL)
         except HostError:
             if statuses[TUNNEL] == "Not installed":
                 # Only roll back the registration this invocation created.
@@ -381,17 +459,128 @@ class HostController:
                 self._nssm("remove", TUNNEL, "confirm")
             raise
 
-    def start_services(self) -> None:
+    def start_services(self, *, tunnel: bool = True) -> None:
+        """Start the host. tunnel=False leaves the public tunnel stopped (a move
+        starts it last, and only once the old public address has gone quiet)."""
         self._validate_activation()
         statuses = self._owned_services()
         settings = self.read_settings()
+        tunnel = tunnel and settings["tunnel_enabled"] and not settings["tunnel_withheld"]
         selected = ((WORKER,) if settings["mode"] == service.REMOTE_WORKER else
-                    ((RELAY, WORKER, TUNNEL) if settings["tunnel_enabled"] else (RELAY, WORKER)))
+                    ((RELAY, WORKER, TUNNEL) if tunnel else (RELAY, WORKER)))
         if any(statuses[name] == "Not installed" for name in selected):
             raise HostError("Finish setup before starting the host.")
         for name in selected:
             if statuses[name] != "Running":
                 self._nssm("start", name)
+
+    # Narrow service operations for a host move. Each one checks ownership
+    # first and none of them can touch a service outside this installation.
+
+    def service_states(self) -> dict:
+        """{name: {"status", "start"}} for this host's services ("" start when not installed)."""
+        return {name: {"status": status,
+                       "start": "" if status == "Not installed" else self._get(name, "Start")}
+                for name, status in self._owned_services().items()}
+
+    def _wait_for(self, name: str, expected: str, timeout: float = 45.0) -> None:
+        deadline = time.monotonic() + timeout
+        while self._service_status(name) != expected:
+            if time.monotonic() >= deadline:
+                raise HostError("A host service did not finish changing state. Check host status before continuing.")
+            time.sleep(0.2)
+
+    def disable_service(self, name: str, *, stop: bool = True) -> None:
+        """Disable first, then stop, then verify both.
+
+        The services restart themselves and start with Windows, so stopping
+        alone is never accepted: a service counts as down only when Windows
+        reports it STOPPED and its start type is disabled.
+        """
+        statuses = self._owned_services()
+        if name not in statuses or statuses[name] == "Not installed":
+            raise HostError("A host service is not installed. No services were changed.")
+        self._nssm("set", name, "Start", DISABLED)
+        if stop and statuses[name] != "Stopped":
+            self._nssm("stop", name, check=False)
+            self._wait_for(name, "Stopped")
+        if self._get(name, "Start") != DISABLED or (stop and self._service_status(name) != "Stopped"):
+            raise HostError("A host service did not stay disabled and stopped. Check host status before continuing.")
+
+    def restore_service(self, name: str, start: str, *, running: bool) -> None:
+        """Put back a start type recorded before a move, and the running state with it."""
+        if start not in START_MODES:
+            raise HostError("The recorded service start type is not supported.")
+        statuses = self._owned_services()
+        if name not in statuses or statuses[name] == "Not installed":
+            raise HostError("A host service is not installed. No services were changed.")
+        self._nssm("set", name, "Start", start)
+        if running and start != DISABLED and statuses[name] != "Running":
+            self._validate_activation()
+            self._nssm("start", name)
+
+    def enable_services(self, *, tunnel: bool = True) -> None:
+        """Let a received host's disabled services start again. Only after its release is verified.
+
+        tunnel=False leaves the public tunnel disabled: it is enabled last,
+        once the old public address has stopped answering.
+        """
+        self._validate_activation()
+        tunnel = tunnel and not self.read_settings()["tunnel_withheld"]
+        for name, status in self._owned_services().items():
+            if status != "Not installed" and (tunnel or name != TUNNEL):
+                self._nssm("set", name, "Start", AUTOMATIC)
+
+    def release_tunnel(self) -> None:
+        """Let a received host's withheld public tunnel run.
+
+        Only for transfer_flow, and only after it verified that the old
+        public address is quiet. The mark is cleared first, so the ordinary
+        Start and setup paths can finish the job if the start below fails.
+        """
+        self._validate_activation()
+        statuses = self._owned_services()
+        settings = self.read_settings()
+        if settings["mode"] == service.REMOTE_WORKER or not settings["tunnel_enabled"]:
+            return
+        metadata = _read_json(self.state / "host-settings.json")
+        if metadata.pop("tunnel_withheld", None) is not None:
+            _write_json(self.state / "host-settings.json", metadata)
+        if statuses[TUNNEL] == "Not installed":
+            self._install_tunnel()
+            return
+        self._nssm("set", TUNNEL, "Start", AUTOMATIC)
+        if statuses[TUNNEL] != "Running":
+            self._nssm("start", TUNNEL)
+
+    def staged_runtime_ready(self, staging: Path) -> bool:
+        """Whether a transfer's staging directory holds a complete GPU speech runtime."""
+        runtime = runtime_installer.detect_installed_runtime(Path(staging) / "profile/WoWVoiceCaptions/runtime")
+        return runtime is not None and runtime.acceleration in runtime_installer.GPU_ACCELERATIONS
+
+    def prepare_staged_runtime(self, staging: Path, progress=lambda message: None) -> None:
+        """Prepare the GPU speech runtime and Discord helper inside a transfer's staging directory.
+
+        Done before any cutover, so the slow download never happens while the
+        old host is stopped. The staging directory becomes the state directory
+        with one rename, and the runtime goes with it.
+        """
+        for path in (self.node, self.npm, self.nssm, self.python, self.cloudflared):
+            if not path.is_file():
+                raise HostError("The host installation is incomplete. Run the Windows installer again.")
+        if runtime_installer.select_acceleration() not in runtime_installer.GPU_ACCELERATIONS:
+            raise HostError(runtime_installer.gpu_requirement() + " Install a current driver for your GPU, then retry.")
+        progress("Preparing the GPU speech engine and Discord helper...")
+        outcome = runtime_installer.install_voice_dependencies(
+            Path(staging) / "profile/WoWVoiceCaptions/runtime",
+            adapter_dir=self.package_root / "VoiceCaptions/discord_adapter",
+            node_path=self.node, npm_cli_path=self.npm,
+            progress=lambda update: progress(update.message),
+        )
+        if outcome.runtime.acceleration not in runtime_installer.GPU_ACCELERATIONS:
+            raise HostError("GPU speech preparation did not finish. Check your driver and internet connection, then retry.")
+        if not outcome.adapter.ready:
+            raise HostError("The Discord helper could not be prepared. Check your internet connection and retry.")
 
     def stop_services(self) -> None:
         statuses = self._owned_services()
@@ -433,6 +622,8 @@ class HostController:
                       if remote else "The relay is not ready. Start the host or retry setup.")
         if remote and not settings["takeover_confirmed"]:
             detail = "Prepared for takeover. Confirm the previous caption worker is stopped before starting this worker."
+        if settings["activation"] == "pending":
+            detail = "Received from another PC. This host stays stopped until the old PC releases it."
         return {"configured": True, "mode": settings["mode"],
                 "relay": ("Shared relay ready" if healthy else "Shared relay unavailable") if remote else statuses[RELAY],
                 "worker": statuses[WORKER],
@@ -449,10 +640,21 @@ def installer_lifecycle(install_root: Path, state_directory: Path, *, remove: bo
     if marker.get("test_build") is True:
         return
     controller = HostController(install_root / "app", state_directory)
+    # The transfer receipt is read before anything else. A host that moved
+    # away has no services left and an update must not bring its archive back;
+    # a host in the middle of a move may be stopped but never started.
+    hold = controller.transfer_hold()
+    receipt_path = install_root / "host-resume.json"
+    if hold == "moved" and not remove:
+        if resume:
+            receipt_path.unlink(missing_ok=True)
+        return
     mode = controller._host_mode()
     selected = controller._service_names()
-    receipt_path = install_root / "host-resume.json"
     if resume:
+        if hold:
+            receipt_path.unlink(missing_ok=True)
+            return
         receipt = _read_json(receipt_path)
         if not receipt:
             return
@@ -487,6 +689,8 @@ def installer_lifecycle(install_root: Path, state_directory: Path, *, remove: bo
             raise HostError("The host upgrade service receipt is invalid.")
         running = set(previous.get("running", []))
         running.update(name for name, status in statuses.items() if status == "Running")
+        if hold:
+            running = set()    # stop only: the move decides what runs next
         _write_json(receipt_path, {"schema": 1, "mode": mode, "running": sorted(running)})
         controller.stop_services()
 
