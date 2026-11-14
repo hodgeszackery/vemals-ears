@@ -1,5 +1,6 @@
 """The host package is complete outside the checkout and cannot collect state."""
 
+import ast
 from contextlib import closing
 import hashlib
 import importlib.util
@@ -290,6 +291,107 @@ class HostArchiveTests(unittest.TestCase):
                 except subprocess.TimeoutExpired:
                     relay.kill()
                     relay.communicate(timeout=5)
+
+
+class HostArchiveInventoryTests(unittest.TestCase):
+    """A module the packaged Host imports must itself be in the package."""
+
+    PACKAGES = ("Hosting", "GuildHub", "VoiceCaptions")
+    TRANSFER_FILES = (
+        "Hosting/transfer.py", "Hosting/transfer_pake.py", "Hosting/transfer_net.py",
+        "Hosting/transfer_flow.py", "Hosting/transfer_ui.py",
+    )
+
+    def local_imports(self, relative):
+        """Repository modules named by one packaged file, as source paths."""
+        tree = ast.parse((ROOT / relative).read_text(encoding="utf-8"), relative)
+        package = relative.split("/")[:-1]
+        names = set()
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                names.update(alias.name for alias in node.names)
+            elif isinstance(node, ast.ImportFrom):
+                base = node.module.split(".") if node.module else []
+                if node.level:
+                    base = package[:len(package) - node.level + 1] + base
+                names.add(".".join(base))
+                names.update(".".join(base + [alias.name]) for alias in node.names)
+        found = set()
+        for name in names:
+            parts = name.split(".")
+            if parts[0] not in self.PACKAGES:
+                continue
+            for candidate in ("/".join(parts) + ".py", "/".join(parts) + "/__init__.py"):
+                if (ROOT / candidate).is_file():
+                    found.add(candidate)
+        return found
+
+    def test_full_transfer_sources_are_packaged(self):
+        # Hosting/wizard.py imports the transfer screens when the window is
+        # built, so a package without any of these fails at Host start.
+        for relative in self.TRANSFER_FILES:
+            with self.subTest(relative=relative):
+                self.assertIn(relative, build_host.HOST_FILES)
+                self.assertTrue((ROOT / relative).is_file())
+        self.assertEqual(len(build_host.HOST_FILES), len(set(build_host.HOST_FILES)))
+
+    def test_every_module_a_packaged_file_imports_is_packaged(self):
+        checked = 0
+        for relative in build_host.HOST_FILES:
+            if not relative.endswith(".py"):
+                continue
+            checked += 1
+            for needed in sorted(self.local_imports(relative)):
+                with self.subTest(source=relative, imports=needed):
+                    self.assertIn(needed, build_host.HOST_FILES)
+        self.assertGreater(checked, 30)
+
+    def test_a_package_without_a_transfer_source_is_caught(self):
+        # The import check must notice the exact omission it exists for,
+        # and the builder must refuse the shortened inventory.
+        complete = build_host.snapshot(ROOT)
+        for missing in self.TRANSFER_FILES:
+            shortened = tuple(name for name in build_host.HOST_FILES if name != missing)
+            with self.subTest(missing=missing):
+                needed = set()
+                for relative in shortened:
+                    if relative.endswith(".py"):
+                        needed.update(self.local_imports(relative))
+                self.assertIn(missing, needed - set(shortened))
+                partial = {name: data for name, data in complete.items() if name != missing}
+                with self.assertRaises(build_host.HostArchiveError):
+                    build_host.archive_bytes(partial)
+
+    def test_extracted_package_imports_the_transfer_modules_and_screens(self):
+        data = build_host.archive_bytes(build_host.snapshot(ROOT))
+        with tempfile.TemporaryDirectory() as folder:
+            temporary = Path(folder)
+            with zipfile.ZipFile(io.BytesIO(data)) as archive:
+                archive.extractall(temporary)
+            extracted = temporary / build_host.ARCHIVE_ROOT.rstrip("/")
+            probe = "\n".join((
+                "import pathlib, sys",
+                "root = pathlib.Path(sys.argv[1]).resolve()",
+                "sys.path.insert(0, str(root))",
+                "from Hosting import transfer, transfer_pake, transfer_net, transfer_flow",
+                "assert callable(transfer_flow.status) and callable(transfer_flow.Sender)",
+                "assert callable(transfer_flow.Receiver) and callable(transfer_net.public_answers)",
+                "assert 'tkinter' not in sys.modules",
+                "from Hosting import wizard, takeover_ui, transfer_ui",
+                "assert callable(wizard.HostWizard) and callable(transfer_ui.TransferUi)",
+                "assert callable(transfer_ui.TransferBackend)",
+                "for name, module in tuple(sys.modules.items()):",
+                "    if name.split('.')[0] in {'GuildHub', 'VoiceCaptions', 'Hosting'}:",
+                "        assert pathlib.Path(module.__file__).resolve().is_relative_to(root), name",
+                "print('ISOLATED-TRANSFER-IMPORT-OK')",
+            ))
+            result = subprocess.run(
+                [sys.executable, "-I", "-B", "-c", probe, str(extracted)],
+                cwd=temporary, capture_output=True, text=True, timeout=60,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            )
+            self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+            self.assertIn("ISOLATED-TRANSFER-IMPORT-OK", result.stdout)
 
 
 if __name__ == "__main__":

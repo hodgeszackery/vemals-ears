@@ -8,12 +8,49 @@ graphical wizard. Read Hosting/QUICKSTART.txt for the short operator guide.
 The installer includes private Python, Node and Windows service tools. The
 wizard prepares GPU speech recognition and optional Cloudflare Tunnel.
 
-Choose Set up a new host for a new bot, hostname and member pairing. To move
-the original Windows caption worker, choose Export from the current host on
-the original PC, then Import on the replacement PC. The encrypted .vehost
-handoff uses a passphrase of at least 12 characters and preserves the bot,
-publisher identity, public addresses, consent choices and character mappings.
-Members keep their existing connections; they do not pair again.
+Choose Set up a new host for a new bot, hostname and member pairing.
+
+MOVING A HOST TO ANOTHER PC
+
+A standalone Host Setup host can be moved whole to another PC. On the old PC
+choose Move this host to another PC on the dashboard; on the new, empty PC
+choose Receive a host from another PC and type the address and one-time code
+the old PC shows. Everything moves: bot identity, publisher token, relay
+database and pepper, pairings, consent choices, character mappings, settings,
+the tunnel token and the member downloads. Members do not pair again. No
+audio or transcripts are stored, so none are moved.
+
+The copy travels encrypted through the old host's own relay. The old PC
+stops and disables its caption worker before it sends anything secret, and
+the new PC starts only on proof that the old PC has let go, so two workers
+never run with one bot identity. The old PC then keeps a locked archive that
+cannot start, with an Erase archive button. Both PCs need the same Host
+version (the receiving one may be newer). The receiving install must be
+empty. Interrupted moves are resolved from the page each PC opens on; the
+steps are in Hosting/QUICKSTART.txt, and the design is in
+Hosting/ARCHITECTURE.txt.
+
+While a move is unfinished, Hosting/Install-Host.ps1, the Start controls,
+the service launcher and its admin commands refuse to start or change that
+host. The one exception is the relay of a host that is being sent: it may
+restart, frozen for new pairings, so typed chat never waits for the
+operator. After a move they refuse on the old PC until the archive is
+erased. Erase the archive before uninstalling Host Setup from the old PC;
+uninstall keeps private state and does not remove it.
+
+Only the current member installer and its source bundle are mirrored to the
+new PC. Older versioned download and source links that the old PC still
+served are not carried over.
+
+OLDER WORKER-ONLY HANDOFF
+
+This older path moves ONLY the original Windows caption worker and is kept
+unchanged behind the Older worker-only handoff link on the opening screen.
+Choose Export from the current host on the original PC, then Import on the
+replacement PC. The encrypted .vehost handoff uses a passphrase of at least
+12 characters and preserves the bot, publisher identity, public addresses,
+consent choices and character mappings. Members keep their existing
+connections; they do not pair again.
 
 The original PC must stay online for its shared relay, pairing, downloads,
 public hostname/tunnel and Downtime. Export stops and disables only the
@@ -38,7 +75,8 @@ To build the installer from this source package:
   python packaging/build_host_installer.py
 
 The instructions below are the alternative source/ZIP setup for a NEW
-standalone host. Existing-host takeover uses the graphical workflow above.
+standalone host. Moving a host and the older worker-only handoff use the
+graphical workflows above.
 
 Host your own guild's captions and typed chat with the same speech model,
 GPU acceleration and privacy behavior as the original host. This package
@@ -204,7 +242,7 @@ code, but the member must still associate their Discord account.
 
 OPERATING AND SHARING
 
-The encrypted import workflow writes VEMALS_EARS_HOST_MODE=remote-worker.
+The older worker-only import writes VEMALS_EARS_HOST_MODE=remote-worker.
 This uses the existing public WSS relay and matching HTTPS origin without
 local relay/DB/pepper/port/tunnel settings. Service arguments include
 --host-mode remote-worker so an existing standalone service cannot be adopted.
@@ -219,6 +257,8 @@ stopped. It contains device credentials, relay keys, consent and mappings.
 Restore it only for the same host; do not send it to another guild. Keep the
 original publisher token when restoring so viewer associations remain valid.
 Restore file permissions too. Do not rotate the pepper as a routine update.
+A backup is not a way to move a host: restoring it on a second PC while the
+first can still start would run two bots. Use Move this host to another PC.
 
 To update the source, stop these two services, extract a new package into a
 new permanent folder, install dependencies and run prepare against the same
