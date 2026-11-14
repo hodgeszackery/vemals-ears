@@ -40,32 +40,37 @@ class TakeoverUi:
         return widget
 
     def show_choices(self):
-        from Hosting.wizard import FIELD, BORDER, MUTED
         w = self.wizard
         w._clear("choose-host", "CHOOSE YOUR SETUP")
-        w._heading("How will this PC host captions?", "Start a new host or move an existing caption worker.")
-        choices = (
-            ("Set up a new host", "Use your own bot, hostname and pairings.", "Set up", w.show_server, True),
-            ("Export from the current host", "Stop its worker and save an encrypted handoff.", "Export", self.show_source, False),
-            ("Import on the replacement PC", "Keep the existing bot and member connections.", "Import", self.show_import, False),
-        )
-        for title, description, action, command, primary in choices:
-            row = tk.Frame(w.body, bg=FIELD, highlightthickness=1, highlightbackground=BORDER)
-            row.pack(fill="x", pady=(0, 10))
-            w._button(row, action, command, primary=primary,
-                      disabled=not primary and self.backend is None).pack(side="right", padx=(8, 16), pady=16)
-            copy = tk.Frame(row, bg=FIELD)
-            copy.pack(side="left", fill="x", expand=True, padx=(16, 0), pady=16)
-            w._label(copy, title, size=11, bold=True).pack(anchor="w")
-            w._label(copy, description, size=9, color=MUTED).pack(anchor="w", pady=(4, 0))
+        w._heading("How will this PC host captions?", "Start a new host, or receive one from another PC.")
+        w._choice("Set up a new host", "Use your own bot, hostname and pairings.", "Set up", w.show_server,
+                  primary=True)
+        w._choice("Receive a host from another PC",
+                  "Move a whole host here with a one-time code. Members keep their pairing.",
+                  "Receive", w.transfer_ui.show_receive, disabled=w.transfer_ui.backend is None)
+        w._link(w.body, "Older worker-only handoff", "", command=self.show_legacy).pack(anchor="w", pady=(6, 0))
+
+    def show_legacy(self):
+        # The file handoff of the original install's caption worker, kept as it was.
+        w = self.wizard
+        if w.busy:
+            return
+        w._clear("takeover-legacy", "OLDER WORKER-ONLY HANDOFF")
+        w._heading("Older worker-only handoff",
+                   "Move only the caption worker of the original install, with an encrypted file.")
+        w._choice("Export from the current host", "Stop its worker and save an encrypted handoff.", "Export",
+                  self.show_source, disabled=self.backend is None)
+        w._choice("Import on the replacement PC", "Keep the existing bot and member connections.", "Import",
+                  self.show_import, disabled=self.backend is None)
         self.label("When moving a worker, the original PC keeps pairing, public access and Downtime. Keep that PC online.",
                    size=9).pack(anchor="w", pady=(2, 0))
+        w._button(w.navigation, "Back", self.show_choices).pack(side="left")
 
     def show_source(self):
         if self.backend is None or self.wizard.busy:
             return
         w = self.wizard
-        w.error_back = self.show_choices
+        w.error_back = self.show_legacy
         w._show_progress("Checking the original host", "Reading the caption worker registration. No services are changing.")
         w._start_job(lambda progress: self.backend.legacy.inspect(), self.source_ready, retry=self.show_source)
 
@@ -75,7 +80,7 @@ class TakeoverUi:
         self.stop_for_export.set(False)
         w._clear("takeover-export", "ORIGINAL PC  /  ENCRYPTED HANDOFF")
         w._heading("Move the caption worker", "Downtime, member pairing and the public connection stay on this PC.")
-        w._button(w.navigation, "Back", self.show_choices).pack(side="left")
+        w._button(w.navigation, "Back", self.show_legacy).pack(side="left")
         if not status.get("available"):
             self.label(status.get("detail", "No supported original host was found.")).pack(anchor="w")
             self.label("Use Import on the replacement PC, or Set up a new host for a separate guild.").pack(anchor="w", pady=14)
@@ -201,7 +206,7 @@ class TakeoverUi:
         self.label("This PC runs the Discord bot and the " + self.gpu_label() + " GPU caption worker. The original PC keeps pairing, the public relay and Downtime, and must stay online.").pack(anchor="w", pady=(0, 10))
         self.file_field(save=False)
         w._field(w.body, "handoff_password", "Handoff passphrase", secret=True)[0].pack(fill="x", pady=6)
-        w._button(w.navigation, "Back", self.show_choices).pack(side="left")
+        w._button(w.navigation, "Back", self.show_legacy).pack(side="left")
         w._button(w.navigation, "Open handoff", self.open_import, primary=True,
                   disabled=self.backend is None).pack(side="right")
 
