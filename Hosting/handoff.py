@@ -46,6 +46,11 @@ ROLES = frozenset({"damage", "healer", "tank"})
 OPEN_ERROR = "The handoff could not be opened. Check its password and file."
 DATA_ERROR = "The worker handoff data is invalid or unsupported."
 HELPER = Path(__file__).with_name("Handoff-Crypto.ps1")
+# A host-to-host transfer bundle (relay database included) has its own AES
+# operation, size cap and timeout; nothing above changes for a .vehost file.
+MAX_TRANSFER_PAYLOAD_BYTES = 24 * 1_048_576
+TRANSFER_AES_TIMEOUT = 120
+TRANSFER_DATA_ERROR = "The host transfer data is invalid or unsupported."
 
 
 class HandoffError(ValueError):
@@ -187,6 +192,34 @@ def _aes(payload: bytes, key: bytes, iv: bytes, *, decrypt: bool) -> bytes:
     expected = (len(payload) // 16 + 1) * 16
     if result.returncode or (not decrypt and len(result.stdout) != expected) or (decrypt and not 0 <= len(result.stdout) < len(payload)):
         raise HandoffError("Windows could not complete handoff encryption.")
+    return result.stdout
+
+
+def transfer_aes(payload: bytes, key: bytes, iv: bytes, *, decrypt: bool) -> bytes:
+    """Raw-key AES for a host-to-host transfer bundle; .vehost limits are untouched.
+
+    The caller (Hosting.transfer) takes the key straight from the session key
+    schedule and authenticates the ciphertext before asking for decryption.
+    """
+    if os.name != "nt":
+        raise HandoffError("Host transfer encryption requires Windows.")
+    if (type(payload) is not bytes or type(key) is not bytes or type(iv) is not bytes
+            or len(key) != 32 or len(iv) != 16 or len(payload) > MAX_TRANSFER_PAYLOAD_BYTES + 16
+            or (decrypt and (len(payload) < 16 or len(payload) % 16))):
+        raise HandoffError(TRANSFER_DATA_ERROR)
+    powershell = Path(os.environ.get("SystemRoot", "C:/Windows")) / "System32/WindowsPowerShell/v1.0/powershell.exe"
+    request = bytes((1, 4 if decrypt else 3)) + key + iv + struct.pack("<I", len(payload)) + payload
+    try:
+        result = subprocess.run(
+            [str(powershell), "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", str(HELPER)],
+            input=request, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=TRANSFER_AES_TIMEOUT,
+            creationflags=subprocess.CREATE_NO_WINDOW,
+        )
+    except (OSError, subprocess.SubprocessError):
+        raise HandoffError("Windows could not complete transfer encryption.") from None
+    expected = (len(payload) // 16 + 1) * 16
+    if result.returncode or (not decrypt and len(result.stdout) != expected) or (decrypt and not 0 <= len(result.stdout) < len(payload)):
+        raise HandoffError("Windows could not complete transfer encryption.")
     return result.stdout
 
 
