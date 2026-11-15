@@ -1270,8 +1270,15 @@ def snapshot_profile_rows(snapshot: bytes) -> dict:
     try:
         if type(snapshot) is not bytes or not snapshot:
             raise ValueError("empty snapshot")
+        image = snapshot
+        if snapshot[18:20] == b"\x02\x02":
+            # A WAL-mode database's copy keeps the WAL format bytes, which an
+            # in-memory database refuses. The copy is complete (the backup
+            # holds every committed page), so read it as a rollback-journal
+            # image; the bytes that are sent are left as they are.
+            image = snapshot[:18] + b"\x01\x01" + snapshot[20:]
         with closing(sqlite3.connect(":memory:")) as connection:
-            connection.deserialize(snapshot)
+            connection.deserialize(image)
             return _profiles(connection)
     except (sqlite3.Error, OSError, ValueError, OverflowError):
         raise TransferError("The relay database could not be read. Nothing was moved.") from None

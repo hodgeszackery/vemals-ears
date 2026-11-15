@@ -14,6 +14,7 @@ import json
 import os
 from pathlib import Path
 import shutil
+import sqlite3
 import subprocess
 import sys
 import tempfile
@@ -839,6 +840,23 @@ class ProfileDeltaTests(unittest.TestCase):
         for bad in (b"", b"not a database" * 64, None):
             with self.subTest(bad=bad), self.assertRaises(TransferError):
                 transfer.snapshot_profile_rows(bad)
+
+    def test_a_snapshot_of_a_wal_mode_database_can_still_be_read_as_the_baseline(self):
+        # Skeptic round 3 (latent): a backup of a WAL-mode database keeps the
+        # WAL file-format bytes, which deserialize() refuses. The relay does
+        # not use WAL today; if it ever does, moves must still go through.
+        first = self.devices[0].device_id
+        self.store.set_quick_chat_profile(first, "Wal Name", "priest")
+        connection = sqlite3.connect(self.database)
+        try:
+            self.assertEqual("wal", connection.execute("PRAGMA journal_mode=WAL").fetchone()[0])
+        finally:
+            connection.close()
+        snapshot = transfer.snapshot_database(self.database, self.root / "work")
+        self.assertEqual(b"\x02\x02", snapshot[18:20])
+        rows = transfer.snapshot_profile_rows(snapshot)
+        self.assertEqual(("Wal Name", "priest", None), rows[first])
+        self.assertEqual(b"\x02\x02", snapshot[18:20])     # the bytes that are sent are unchanged
 
     def test_a_malformed_delta_changes_nothing(self):
         device = self.devices[0].device_id
