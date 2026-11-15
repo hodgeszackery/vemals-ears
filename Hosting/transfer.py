@@ -874,10 +874,12 @@ class TransferRecords:
                 self.directory.mkdir(parents=True)
             except FileExistsError:
                 # The path is predictable, so another account may have made it
-                # first and kept a grant, or own it. Its DACL is rebuilt and
-                # verified, and a foreign owner or link anywhere is refused,
-                # before the release secret or the receipt is used.
-                setup.protect_tree(self.directory)
+                # first and kept a grant, or own it. A foreign owner or link
+                # anywhere is refused and an outside grant is removed before
+                # the release secret or the receipt is used. Our own private
+                # directory is only verified: rebuilding it on every step
+                # would briefly expose it (see setup.protect_tree).
+                setup.ensure_private_tree(self.directory)
             else:
                 setup.protect_directory(self.directory)
         except (OSError, subprocess.SubprocessError, setup.SetupError):
@@ -911,6 +913,12 @@ class TransferRecords:
         """The current receipt, or {} when this PC has none. A damaged one is an error, never 'none'."""
         if not self.receipt.exists():
             return {}
+        try:
+            # Status views read without locked(); a receipt or release secret
+            # in a directory another account owns or can write is never shown.
+            setup._check_private_tree(self.directory, permissions=os.name == "nt")
+        except (OSError, subprocess.SubprocessError, setup.SetupError):
+            raise TransferError(RECORD_ERROR) from None
         try:
             value = json.loads(_regular(self.receipt, 65_536).decode("ascii"), object_pairs_hook=handoff._pairs)
         except (OSError, ValueError, UnicodeError, RecursionError):

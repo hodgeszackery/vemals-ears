@@ -1404,8 +1404,9 @@ class RecordsTests(unittest.TestCase):
         self.assertTrue(set(acl["sids"]).issubset({acl["currentSid"], "S-1-5-18", "S-1-5-32-544", "S-1-3-4"}))
 
     def test_existing_record_directory_is_validated_not_just_restricted(self):
-        # Astra round 2, finding A: a reused directory goes through protect_tree
-        # (owner, link and full DACL check); only a fresh one gets protect_directory.
+        # Astra round 2, finding A: a reused directory is verified (owner, link
+        # and full DACL check) and repaired by protect_tree only when that
+        # fails; only a fresh one gets protect_directory.
         calls = []
         with mock.patch.object(transfer.setup, "protect_directory", side_effect=lambda path: calls.append(("dir", path))), \
                 mock.patch.object(transfer.setup, "protect_tree", side_effect=lambda path: calls.append(("tree", path))):
@@ -1414,15 +1415,19 @@ class RecordsTests(unittest.TestCase):
             self.assertTrue(all(kind == "tree" for kind, _ in calls[1:]))
             calls.clear()
             self.new.directory.mkdir(parents=True)
-            self.new._prepare()
+            with mock.patch.object(transfer.setup, "_check_private_tree",
+                                   side_effect=transfer.setup.SetupError("grants access to another Windows account")):
+                self.new._prepare()
         self.assertEqual([("tree", self.new.directory)], calls)
 
     def test_record_directory_refused_by_protect_tree_holds_no_secret(self):
         # Astra round 2, finding A: a precreated directory that fails validation
         # (foreign owner, link, outside grant) is never used.
         self.old.directory.mkdir(parents=True)
-        with mock.patch.object(transfer.setup, "protect_tree",
-                               side_effect=transfer.setup.SetupError("belongs to another Windows account")):
+        with mock.patch.object(transfer.setup, "_check_private_tree",
+                               side_effect=transfer.setup.SetupError("belongs to another Windows account")), \
+                mock.patch.object(transfer.setup, "protect_tree",
+                                  side_effect=transfer.setup.SetupError("belongs to another Windows account")):
             with self.assertRaisesRegex(transfer.TransferError, "Could not protect the transfer record directory"):
                 self.old.offer()
         self.assertEqual([], list(self.old.directory.iterdir()))
@@ -1458,6 +1463,118 @@ class RecordsTests(unittest.TestCase):
         for entry in (self.old.directory, self.old.receipt, self.old.directory / "release-secret",
                       self.old.directory / "stale.txt"):
             self.assertTrue(set(inspect_acl(entry)["sids"]).issubset(expected), entry)
+
+    def _sids(self, path):
+        owner, entries = transfer.setup._windows_security(path)
+        return {sid for _, sid in entries or ()}
+
+    def _grant_everyone(self, path, rights):
+        subprocess.run(["icacls.exe", str(path), "/grant", "*S-1-1-0:" + rights],
+                       check=True, capture_output=True, creationflags=subprocess.CREATE_NO_WINDOW)
+
+    @unittest.skipUnless(os.name == "nt", "Windows ACL integration")
+    def test_repairing_the_record_directory_never_lets_it_inherit_from_its_parent(self):
+        # Skeptic review of round 2, finding A: "icacls /reset" on the root made
+        # the live records directory inherit ProgramData's Users grants until
+        # the next icacls step, so release-secret was briefly readable.
+        parent = self.old.directory.parent
+        parent.mkdir(parents=True)
+        self.old.offer()
+        secret = self.old.directory / "release-secret"
+        self._grant_everyone(parent, "(OI)(CI)RX")
+        probe = parent / "probe"
+        probe.mkdir()
+        self.assertIn("S-1-1-0", self._sids(probe))  # an inheriting child would see it
+        stale = self.old.directory / "stale.txt"
+        stale.write_text("XENO", encoding="ascii")
+        self._grant_everyone(stale, "(R)")  # forces the repair path
+        seen = []
+        real_run, real_dacl = subprocess.run, transfer.setup._set_protected_dacl
+
+        def snapshot():
+            seen.append(self._sids(self.old.directory) | self._sids(secret) | self._sids(self.old.receipt))
+
+        def run(*args, **kwargs):
+            result = real_run(*args, **kwargs)
+            snapshot()
+            return result
+
+        def dacl(path):
+            real_dacl(path)
+            snapshot()
+        with mock.patch.object(transfer.setup.subprocess, "run", side_effect=run), \
+                mock.patch.object(transfer.setup, "_set_protected_dacl", side_effect=dacl):
+            self.old._prepare()
+        self.assertTrue(seen)
+        self.assertFalse(any("S-1-1-0" in sids or "S-1-5-32-545" in sids for sids in seen), seen)
+        self.assertNotIn("S-1-1-0", self._sids(stale))
+        self.assertEqual("offered", self.old.read()["state"])
+
+    @unittest.skipUnless(os.name == "nt", "Windows ACL integration")
+    def test_an_already_private_record_directory_is_reused_without_any_acl_change(self):
+        # Skeptic review of round 2, finding A: every step reuses the directory,
+        # so a private one is verified only, never reset.
+        self.old.offer()
+        before = inspect_acl(self.old.directory)["sddl"]
+        commands = []
+        real_run = subprocess.run
+
+        def run(command, *args, **kwargs):
+            commands.append(command[0])
+            return real_run(command, *args, **kwargs)
+        with mock.patch.object(transfer.setup.subprocess, "run", side_effect=run), \
+                mock.patch.object(transfer.setup, "_set_protected_dacl") as dacl:
+            self.old.advance("sending")
+        dacl.assert_not_called()
+        self.assertNotIn("icacls.exe", commands)
+        self.assertEqual(before, inspect_acl(self.old.directory)["sddl"])
+
+    @unittest.skipUnless(os.name == "nt", "Windows ACL integration")
+    def test_a_junction_added_before_the_dacl_is_replaced_is_refused_before_the_recursive_reset(self):
+        # Skeptic review of round 2, finding A: an entry planted through an
+        # outside grant must not be followed by "icacls <dir>/* /reset /T".
+        outside = self.root / "outside"
+        outside.mkdir()
+        (outside / "keep.txt").write_text("XENO outside", encoding="ascii")
+        self._grant_everyone(outside / "keep.txt", "(R)")
+        before = inspect_acl(outside / "keep.txt")["sddl"]
+        self.old.directory.mkdir(parents=True)
+        self._grant_everyone(self.old.directory, "(OI)(CI)F")
+        real_dacl = transfer.setup._set_protected_dacl
+
+        def dacl(path):
+            subprocess.run(["cmd.exe", "/c", "mklink", "/J", str(Path(path) / "planted"), str(outside)],
+                           check=True, capture_output=True, creationflags=subprocess.CREATE_NO_WINDOW)
+            real_dacl(path)
+        with mock.patch.object(transfer.setup, "_set_protected_dacl", side_effect=dacl), \
+                self.assertRaisesRegex(transfer.TransferError, "Could not protect the transfer record directory"):
+            self.old.offer()
+        self.assertEqual(before, inspect_acl(outside / "keep.txt")["sddl"])
+        self.assertFalse((self.old.directory / "release-secret").exists())
+        os.rmdir(self.old.directory / "planted")
+
+    @unittest.skipUnless(os.name == "nt", "Windows ACL integration")
+    def test_a_receipt_in_a_directory_another_account_owns_is_never_read(self):
+        # Skeptic review of round 2, finding A (a): status views read without
+        # locked(), so a forged receipt and "release code" planted by another
+        # account in a precreated directory must not be shown.
+        self.old.offer()
+        self.old.advance("sending")
+        self.old.release()
+        real = transfer.setup._windows_security
+        target = os.path.normcase(str(self.old.directory))
+
+        def security(path):
+            owner, entries = real(path)
+            return ("S-1-5-21-1-2-3-1001" if os.path.normcase(str(path)) == target else owner), entries
+        with mock.patch.object(transfer.setup, "_windows_security", side_effect=security):
+            with self.assertRaisesRegex(transfer.TransferError, "cannot be read"):
+                self.old.read()
+            with self.assertRaisesRegex(transfer.TransferError, "cannot be read"):
+                self.old.release_secret()
+        self._grant_everyone(self.old.receipt, "(R)")
+        with self.assertRaisesRegex(transfer.TransferError, "cannot be read"):
+            self.old.read()
 
 
 if __name__ == "__main__":

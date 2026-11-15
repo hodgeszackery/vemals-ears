@@ -206,25 +206,76 @@ def _check_private_tree(path: Path, *, permissions: bool) -> None:
             pending.extend(entry.iterdir())
 
 
+def _set_protected_dacl(path: Path) -> None:
+    """Replace one directory's DACL, in a single call, with a protected private one.
+
+    The new DACL never inherits, so nothing from the parent (ProgramData's
+    Users grants included) applies at any moment, and every explicit outside
+    grant is gone. SetFileSecurityW changes only this object; descendants are
+    reset separately, after they are checked again for links.
+    """
+    import ctypes
+    from ctypes import wintypes
+    advapi = ctypes.WinDLL("advapi32", use_last_error=True)
+    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+    convert = advapi.ConvertStringSecurityDescriptorToSecurityDescriptorW
+    convert.argtypes = (wintypes.LPCWSTR, wintypes.DWORD, ctypes.POINTER(ctypes.c_void_p),
+                        ctypes.POINTER(wintypes.ULONG))
+    convert.restype = wintypes.BOOL
+    set_security = advapi.SetFileSecurityW
+    set_security.argtypes = (wintypes.LPCWSTR, wintypes.DWORD, ctypes.c_void_p)
+    set_security.restype = wintypes.BOOL
+    local_free = kernel.LocalFree
+    local_free.argtypes, local_free.restype = (ctypes.c_void_p,), ctypes.c_void_p
+    sid = _current_sid()
+    sddl = "D:P" + "".join("(A;OICI;FA;;;%s)" % value for value in ("S-1-5-18", "S-1-5-32-544", sid))
+    descriptor = ctypes.c_void_p()
+    # SDDL_REVISION_1.
+    if not convert(sddl, 1, ctypes.byref(descriptor), None):
+        raise SetupError("Could not restrict the state directory's Windows permissions.")
+    try:
+        # DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION.
+        if not set_security(str(path), 0x4 | 0x80000000, descriptor):
+            raise SetupError("Could not restrict the state directory's Windows permissions.")
+    finally:
+        local_free(descriptor)
+
+
 def protect_tree(path: Path) -> None:
     """Make an existing directory and everything in it private, or refuse it.
 
     Used for a directory this attempt did not just create: it may be left by
     an attempt whose ACL step failed, or precreated by another account. Its
-    DACL is rebuilt from nothing (explicit outside grants included), every
-    descendant then inherits only that, and the result is verified.
+    DACL is replaced from nothing in one step (explicit outside grants
+    included) without ever re-enabling inheritance, every descendant then
+    inherits only that, and the result is verified.
     """
     _check_private_tree(path, permissions=False)
     if os.name == "nt":
-        result = subprocess.run(
-            ["icacls.exe", str(path), "/reset", "/Q"], capture_output=True, text=True,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-        )
-        if result.returncode:
-            raise SetupError("Could not reset the state directory's Windows permissions.")
-    protect_directory(path)
+        # Never "icacls /reset" the root: that makes it inherit its parent's
+        # ACL until the next step, and ProgramData lets every local account
+        # read files and add entries below it.
+        _set_protected_dacl(path)
+        # An entry added through an outside grant before the line above would
+        # be reached by the recursive reset below, which follows junctions.
+        _check_private_tree(path, permissions=False)
+    else:
+        protect_directory(path)
     restrict_descendants(path)
     _check_private_tree(path, permissions=True)
+
+
+def ensure_private_tree(path: Path) -> None:
+    """Use an existing directory only if it is private; repair it only when it is not.
+
+    An already-private directory is verified without changing its ACL at all,
+    so reusing it never opens a window. Anything else goes through
+    protect_tree, which refuses a link or foreign owner.
+    """
+    try:
+        _check_private_tree(path, permissions=True)
+    except SetupError:
+        protect_tree(path)
 
 
 def create_configuration(
