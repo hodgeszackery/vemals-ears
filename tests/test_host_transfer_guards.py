@@ -404,6 +404,44 @@ class ControlGuardTests(GuardCase):
         # A tunnel token on the command line would be a secret in the service record.
         self.assertNotIn("XENO_synthetic_tunnel", json.dumps(calls))
 
+    def test_a_held_tunnel_is_disabled_before_anything_makes_it_runnable(self):
+        # Astra round 3: nssm install creates an automatic-start service. If
+        # the Host app dies while the settings are written, a registration
+        # that already runs cloudflared with the token file must not be left
+        # automatic: on reboot it would join the old host's tunnel.
+        class Died(BaseException):
+            pass
+
+        for staged, before in ((True, "Not installed"), (False, "Stopped")):
+            with self.subTest(staged=staged):
+                if staged:
+                    self.receipt("receiver", "pending")
+                    self.settings(activation="pending")
+                    self.statuses = {name: "Not installed" for name in control.SERVICES}
+                else:
+                    self.records.receipt.unlink(missing_ok=True)
+                    self.settings(activation="", tunnel_enabled=True, tunnel_withheld=True)
+                    self.statuses = {RELAY: "Stopped", WORKER: "Stopped", TUNNEL: before}
+                calls = []
+
+                def nssm(*arguments, check=True):
+                    calls.append(arguments)
+                    if arguments[0] == "install":
+                        self.statuses[arguments[1]] = "Stopped"
+                    if arguments[0] == "set" and arguments[2] in ("Application", "AppParameters"):
+                        raise Died()
+                    return mock.Mock(returncode=0, stdout="")
+
+                with self.owned(), mock.patch.object(self.controller, "_nssm", side_effect=nssm), \
+                     mock.patch.object(self.controller, "_run", return_value=mock.Mock(returncode=0)), \
+                     self.assertRaises(Died):
+                    self.controller.install_services(staged=staged)
+                tunnel = [call for call in calls if call[1:2] == (TUNNEL,)]
+                expected = [("install", TUNNEL, str(self.controller.cloudflared))] if staged else []
+                self.assertEqual(expected + [("set", TUNNEL, "Start", control.DISABLED)], tunnel[:-1])
+                self.assertEqual("set", tunnel[-1][0])
+                self.assertEqual([], [call for call in calls if call[0] == "start"])
+
     def test_staged_install_refuses_a_pc_that_already_has_services_or_an_ordinary_host(self):
         self.receipt("receiver", "pending")
         self.settings(activation="pending")
@@ -633,6 +671,71 @@ Install-RegisteredHostServices @arguments
         self.assertIn("standalone", proof["remote"])
         self.assertEqual(["SERVICE_DELAYED_AUTO_START"] * 2, proof["normalModes"])
         self.assertEqual(["start VemalsEarsHostRelay", "start VemalsEarsHostWorker"], proof["normalEvents"])
+
+    def test_staged_registration_is_disabled_before_it_is_given_anything_to_run(self):
+        # Astra round 3: nssm install creates an automatic-start service. A
+        # staged service is disabled straight after it is created, before its
+        # application and arguments are written, so a crash part way through
+        # never leaves one that Windows starts at the next boot.
+        harness = self.root / "staged-order.ps1"
+        harness.write_text(r'''
+param([string]$Source, [string]$StateDirectory)
+$ErrorActionPreference = 'Stop'
+$tokens = $null; $parseErrors = $null
+$ast = [Management.Automation.Language.Parser]::ParseFile($Source, [ref]$tokens, [ref]$parseErrors)
+if ($parseErrors.Count) { throw 'Installer parse failed.' }
+$definition = $ast.Find({ param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Install-RegisteredHostServices' }, $true)
+Invoke-Expression $definition.Extent.Text
+$script:registry = @{}
+$script:events = [Collections.Generic.List[string]]::new()
+function New-FakeService {
+    param([string]$Name)
+    $value = [pscustomobject]@{ Name=$Name; Status='Stopped'; Settings=@{} }
+    Add-Member -InputObject $value -MemberType ScriptMethod -Name WaitForStatus -Value { param($Expected, $Timeout) }
+    return $value
+}
+function Get-Service { [CmdletBinding()] param([string]$Name) return $script:registry[$Name] }
+function Start-Service { [CmdletBinding()] param([string]$Name) $script:events.Add('start ' + $Name); $script:registry[$Name].Status = 'Running' }
+function Stop-Service { [CmdletBinding()] param([string]$Name) $script:events.Add('stop ' + $Name) }
+function Invoke-Nssm {
+    param([Parameter(ValueFromRemainingArguments=$true)][string[]]$Arguments)
+    $action, $name = $Arguments[0], $Arguments[1]
+    if ($action -eq 'install') { $script:registry[$name] = New-FakeService $name; $script:events.Add('install ' + $name) }
+    elseif ($action -eq 'set') {
+        $script:registry[$name].Settings[$Arguments[2]] = $Arguments[3]
+        $script:events.Add('set ' + $name + ' ' + $Arguments[2] + ' ' + $Arguments[3])
+    }
+}
+function Get-NssmValue { param([string]$Name, [string]$Setting) return $script:registry[$Name].Settings[$Setting] }
+$services = @(
+    @{ Name='VemalsEarsHostRelay'; Role='relay'; Title='Relay'; Parameters='relay parameters' },
+    @{ Name='VemalsEarsHostWorker'; Role='worker'; Title='Worker'; Parameters='worker parameters' }
+)
+$arguments = @{ Services=$services; PythonPath='C:/Program Files/Python/python.exe'; RepoRoot=[IO.Path]::GetFullPath($StateDirectory); StateDirectory=$StateDirectory; NodePath='C:/Program Files/Node/node.exe' }
+Install-RegisteredHostServices @arguments -Staged
+$staged = @($script:events)
+$script:registry = @{}
+$script:events.Clear()
+Install-RegisteredHostServices @arguments
+@{ staged=$staged; normal=@($script:events) } | ConvertTo-Json -Compress
+'''.lstrip(), encoding="ascii")
+        result = subprocess.run(
+            [POWERSHELL, "-NoProfile", "-File", str(harness), str(SCRIPT), str(self.root / "ps state")],
+            cwd=self.root, capture_output=True, text=True, timeout=60,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        proof = json.loads(result.stdout)
+        for name in ("VemalsEarsHostRelay", "VemalsEarsHostWorker"):
+            events = [event for event in proof["staged"] if event.split(" ")[1] == name]
+            self.assertEqual(["install " + name, "set " + name + " Start SERVICE_DISABLED"], events[:2])
+            self.assertNotIn("set " + name + " Start SERVICE_DELAYED_AUTO_START", events)
+        self.assertEqual([], [event for event in proof["staged"] if event.startswith("start ")])
+        # An ordinary install is unchanged: one start type, then started.
+        for name in ("VemalsEarsHostRelay", "VemalsEarsHostWorker"):
+            modes = [event for event in proof["normal"] if event.startswith("set " + name + " Start ")]
+            self.assertEqual(["set " + name + " Start SERVICE_DELAYED_AUTO_START"], modes)
+        self.assertEqual(["start VemalsEarsHostRelay", "start VemalsEarsHostWorker"],
+                         [event for event in proof["normal"] if event.startswith("start ")])
 
 
 class ControlFrameTests(unittest.TestCase):

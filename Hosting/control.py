@@ -428,10 +428,25 @@ class HostController:
         # A withheld tunnel is registered like a staged one: disabled, never
         # started. Only release_tunnel() lets it run.
         held = staged or current["tunnel_withheld"]
-        if statuses[TUNNEL] == "Not installed":
-            self._nssm("install", TUNNEL, str(self.cloudflared))
-        elif statuses[TUNNEL] != "Stopped":
-            self._nssm("stop", TUNNEL)
+        try:
+            if statuses[TUNNEL] == "Not installed":
+                # nssm install always creates an automatic-start service, and
+                # without arguments cloudflared only prints its usage. Nothing
+                # can make it join the tunnel before Start is set below.
+                self._nssm("install", TUNNEL, str(self.cloudflared))
+            elif statuses[TUNNEL] != "Stopped":
+                self._nssm("stop", TUNNEL)
+            if held:
+                # Disabled before the token-file arguments exist, so an app
+                # that dies part way through never leaves a runnable tunnel
+                # that Windows would start at the next boot (it would serve
+                # this host's address beside the old PC's tunnel).
+                self._nssm("set", TUNNEL, "Start", DISABLED)
+        except HostError:
+            if statuses[TUNNEL] == "Not installed":
+                self._nssm("stop", TUNNEL, check=False)
+                self._nssm("remove", TUNNEL, "confirm", check=False)
+            raise
         parameters = subprocess.list2cmdline([
             "tunnel", "--no-autoupdate", "run", "--token-file",
             str(self.state / "secrets/cloudflare-tunnel-token"),

@@ -206,8 +206,13 @@ function Install-RegisteredHostServices {
         foreach ($service in $Services) {
             $existing = Get-Service -Name $service.Name -ErrorAction SilentlyContinue
             if (-not $existing) {
+                # nssm install creates an automatic-start service. A staged one
+                # is disabled before it is given anything to run, so an install
+                # that dies part way through never leaves a service Windows
+                # starts at the next boot beside the old PC's host.
                 Invoke-Nssm install $service.Name $PythonPath
                 $created.Add($service.Name)
+                if ($Staged) { Invoke-Nssm set $service.Name Start SERVICE_DISABLED }
             }
             Invoke-Nssm set $service.Name Application $PythonPath
             Invoke-Nssm set $service.Name AppParameters $service.Parameters
