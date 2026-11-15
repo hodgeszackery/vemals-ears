@@ -199,6 +199,23 @@ class ServiceGuardTests(GuardCase):
                 with self.assertRaises(TransferError):
                     self.records.read()
 
+    def test_duplicated_receipt_key_fails_closed_like_the_record_keeper(self):
+        # A duplicate "state" must not let a later copy override a held state:
+        # Hosting.transfer refuses duplicates, so the start guard must as well.
+        self.receipt("sender", "moved")
+        text = self.records.receipt.read_text(encoding="ascii").rstrip()
+        self.assertTrue(text.endswith("}"))
+        self.records.receipt.write_text(text[:-1] + ', "state": "cancelled"}', encoding="ascii")
+        with self.assertRaises(TransferError):
+            self.records.read()
+        with self.assertRaisesRegex(service.ConfigurationError, "cannot be read"):
+            service.transfer_receipt(self.state)
+        for start in ("relay", "worker", None):
+            with self.assertRaisesRegex(service.ConfigurationError, "cannot be read"):
+                service.validate_activation(self.values(), start)
+        with self.assertRaisesRegex(control.HostError, "cannot be read"):
+            control.HostController(self.root / "app", self.state).transfer_hold()
+
     def test_receipt_state_table_is_shared_with_the_record_keeper(self):
         # Astra round 2, finding B: one source of truth for supported receipts.
         self.assertIs(transfer.SENDER_STATES, service.TRANSFER_STATES[transfer.SENDER])

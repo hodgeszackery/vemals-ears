@@ -77,6 +77,15 @@ def transfer_directory(state_directory: str | Path) -> Path:
     return state.with_name(state.name + "Transfer")
 
 
+def _unique_pairs(pairs):
+    value = {}
+    for key, item in pairs:
+        if key in value:
+            raise ValueError("duplicate key")
+        value[key] = item
+    return value
+
+
 def transfer_receipt(state_directory: str | Path) -> dict:
     """Role and state of this PC's transfer receipt, {} when there is none.
 
@@ -94,9 +103,12 @@ def transfer_receipt(state_directory: str | Path) -> dict:
     except OSError:
         raise ConfigurationError(TRANSFER_RECORD_ERROR) from None
     try:
-        value = json.loads(raw.decode("ascii")) if len(raw) <= 65_536 else None
+        value = (json.loads(raw.decode("ascii"), object_pairs_hook=_unique_pairs)
+                 if len(raw) <= 65_536 else None)
     except (ValueError, UnicodeError, RecursionError):
         value = None
+    # A duplicated key must not let the last copy override a held state that
+    # Hosting.transfer (which refuses duplicates) would never accept.
     if (not isinstance(value, dict) or type(value.get("role")) is not str
             or value["role"] not in TRANSFER_STATES or type(value.get("state")) is not str
             or value["state"] not in TRANSFER_STATES[value["role"]]):
