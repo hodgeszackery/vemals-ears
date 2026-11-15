@@ -368,20 +368,12 @@ class EntryTests(unittest.TestCase):
 
 
 class TransferUiCase(unittest.TestCase):
-    wizard_setup = WizardUiTests.setUp
+    # The shared setUp registers release first, so the finished window is
+    # collected on the Tk thread, never by a leftover background thread.
+    setUp = WizardUiTests.setUp
     close_root = WizardUiTests.close_root
+    release = WizardUiTests.release
     ready = WizardUiTests.ready
-
-    def setUp(self):
-        # Registered first, so it runs last: the finished window is collected
-        # here, on the Tk thread, and never by a leftover background thread.
-        self.addCleanup(self.release)
-        self.wizard_setup()
-
-    def release(self):
-        for name in ("app", "backend", "transfer", "root"):
-            self.__dict__.pop(name, None)
-        gc.collect()
 
     def create_transfer(self, *, configured=False, view=None, withheld=False, status_errors=(), **settings):
         self.backend = FakeController(configured=configured)
