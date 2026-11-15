@@ -1345,7 +1345,8 @@ def profile_delta(before: dict, database: Path) -> list:
             for device, (name, wow_class, revoked, seen) in sorted(profile_rows(database).items())
             if before.get(device) != (name, wow_class, revoked, seen)]
     if len(rows) > MAX_DELTA_ROWS:
-        raise TransferError("Too many typed-chat profiles changed during the move. Start the move again.")
+        raise TransferError("Too many devices changed (typed-chat profiles or activity) during the move. "
+                            "Start the move again.")
     return rows
 
 
@@ -1360,7 +1361,8 @@ def seal_delta(rows: list, keys) -> list:
     _require(type(rows) is list and len(rows) <= MAX_DELTA_ROWS)
     plaintext = handoff._json_bytes(rows)
     if len(plaintext) > MAX_DELTA_BYTES:
-        raise TransferError("Too many typed-chat profiles changed during the move. Start the move again.")
+        raise TransferError("Too many devices changed (typed-chat profiles or activity) during the move. "
+                            "Start the move again.")
     iv = secrets.token_bytes(16)
     try:
         data = iv + handoff.transfer_aes(plaintext, keys.bundle_enc, iv, decrypt=False)

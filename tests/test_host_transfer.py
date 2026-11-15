@@ -1072,6 +1072,23 @@ class WindowsImportTests(unittest.TestCase):
         transfer.import_state(self.state, self.bundle)
         self.assertEqual(POINTER, (self.staging / "downloads" / transfer.POINTER_FILENAME).read_bytes())
 
+    def test_the_relay_pointer_check_reads_the_mirrored_files_themselves(self):
+        # Round 5: the release check must look at the staged files, not only
+        # at the artifact list. If a mirrored installer changes after the
+        # per-artifact comparison (simulated by passing that comparison), the
+        # relay's own file validation still refuses before anything is written.
+        staging = self.stage()
+        installer = staging / "downloads" / ARTIFACTS[0]["name"]
+        installer.write_bytes(bytes(len(RELEASE[ARTIFACTS[0]["name"]])))
+        by_name = {entry["name"]: entry for entry in ARTIFACTS}
+        with mock.patch.object(transfer, "describe_artifact", side_effect=lambda path: by_name[path.name]):
+            with self.assertRaisesRegex(transfer.TransferError, "does not match its downloads"):
+                transfer.import_state(self.state, self.bundle)
+        self.assertFalse((staging / "secrets").exists())
+        self.assertFalse((staging / "relay.env").exists())
+        self.assertFalse((staging / "downloads" / transfer.POINTER_FILENAME).exists())
+        self.assertFalse(self.state.exists())
+
     def test_release_pointer_is_written_last(self):
         self.stage()
         written = []
