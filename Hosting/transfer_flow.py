@@ -648,10 +648,12 @@ class Sender:
                 != [_triple(entry) for entry in self._card["artifacts"]]):
             raise _Stop("The member downloads on this host changed during the move.")
         database = state / transfer.DATABASE
-        before = transfer.profile_rows(database)
         bundle = transfer.collect_state(
             state, transfer_id=self._transfer_id, release_commitment=self._commitment,
             work_directory=self.records.directory, artifacts=[_triple(entry) for entry in self._card["artifacts"]])
+        # The delta's baseline is the very snapshot the new PC receives, so
+        # a profile that changes and changes back around it is never lost.
+        before = transfer.snapshot_profile_rows(bundle.blobs[transfer.DATABASE])
         sealed = transfer.encrypt_bundle(bundle, keys)
         del bundle
         progress("bundle")

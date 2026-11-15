@@ -1253,12 +1253,33 @@ def profile_rows(database: Path) -> dict:
         with closing(_writable(database)) as connection:
             connection.execute("BEGIN IMMEDIATE")
             try:
-                rows = connection.execute(
-                    "SELECT device_id, quick_chat_name, quick_chat_wow_class, revoked_at FROM devices").fetchall()
+                return _profiles(connection)
             finally:
                 connection.execute("ROLLBACK")
     except (sqlite3.Error, OSError):
         raise TransferError("The relay database could not be read. Nothing was moved.") from None
+
+
+def snapshot_profile_rows(snapshot: bytes) -> dict:
+    """profile_rows() of the database snapshot that is sent, read in memory.
+
+    The delta's baseline must be exactly the state the new PC received: a
+    baseline read at any other moment misses a profile that changed and then
+    changed back around the snapshot. The bytes never touch the disk again.
+    """
+    try:
+        if type(snapshot) is not bytes or not snapshot:
+            raise ValueError("empty snapshot")
+        with closing(sqlite3.connect(":memory:")) as connection:
+            connection.deserialize(snapshot)
+            return _profiles(connection)
+    except (sqlite3.Error, OSError, ValueError, OverflowError):
+        raise TransferError("The relay database could not be read. Nothing was moved.") from None
+
+
+def _profiles(connection: sqlite3.Connection) -> dict:
+    rows = connection.execute(
+        "SELECT device_id, quick_chat_name, quick_chat_wow_class, revoked_at FROM devices").fetchall()
     return {str(row[0]): (row[1], str(row[2] or ""), row[3]) for row in rows}
 
 

@@ -828,6 +828,18 @@ class ProfileDeltaTests(unittest.TestCase):
         self.assertEqual(0, transfer.apply_profile_delta(self.copy, [["ghdev_unknown", "X", "", None]]))
         self.assertEqual(3, len(moved.list_devices()))
 
+    def test_the_baseline_is_read_from_the_snapshot_bytes_that_are_sent(self):
+        first = self.devices[0].device_id
+        self.store.set_quick_chat_profile(first, "In The Snapshot", "paladin")
+        snapshot = self.database.read_bytes()
+        self.store.set_quick_chat_name(first, "After It")
+        rows = transfer.snapshot_profile_rows(snapshot)
+        self.assertEqual(("In The Snapshot", "paladin", None), rows[first])
+        self.assertEqual([first], [row[0] for row in transfer.profile_delta(rows, self.database)])
+        for bad in (b"", b"not a database" * 64, None):
+            with self.subTest(bad=bad), self.assertRaises(TransferError):
+                transfer.snapshot_profile_rows(bad)
+
     def test_a_malformed_delta_changes_nothing(self):
         device = self.devices[0].device_id
         self.store.set_quick_chat_name(device, "Kept")
