@@ -61,6 +61,7 @@ class FakeTakeover:
 class TakeoverUiTests(unittest.TestCase):
     setUp = WizardUiTests.setUp
     close_root = WizardUiTests.close_root
+    release = WizardUiTests.release
     ready = WizardUiTests.ready
 
     def create_takeover(self, *, configured=False, fail_prepare=False):

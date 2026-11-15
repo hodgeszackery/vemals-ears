@@ -43,6 +43,10 @@ QUICK_CHAT_PATH = "/v1/quick-chat"
 QUICK_CHAT_PROFILE_PATH = "/v1/quick-chat-profile"
 QUICK_CHAT_WORKER_PATH = "/v1/quick-chat-worker"
 ADMIN_PATH = "/v1/admin"
+# Host-to-Host transfer rendezvous. Both answer 404 unless the relay was
+# started with VEMALS_EARS_TRANSFER_KEY_FILE (standalone Host only).
+TRANSFER_OFFER_PATH = "/v1/transfer-offer"
+TRANSFER_CLAIM_PATH = "/v1/transfer-claim"
 
 MAX_WIRE_BYTES = 16_384
 MAX_DEVICE_NAME = 64

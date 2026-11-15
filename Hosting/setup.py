@@ -9,6 +9,7 @@ import os
 from pathlib import Path
 import re
 import secrets
+import stat
 import subprocess
 import tempfile
 from urllib.parse import urlsplit
@@ -64,27 +65,217 @@ def download_url(value: str) -> str:
     return value
 
 
+def _current_sid() -> str:
+    identity = subprocess.run(
+        ["whoami.exe", "/user", "/fo", "csv", "/nh"],
+        capture_output=True, text=True, check=True,
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    )
+    match = re.search(r"S-1-[0-9-]+", identity.stdout)
+    if match is None:
+        raise SetupError("Could not determine the Windows account for the state directory.")
+    return match.group()
+
+
 def protect_directory(path: Path) -> None:
     """Remove inherited access before any credential is written."""
     if os.name != "nt":
         path.chmod(0o700)
         return
     flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
-    identity = subprocess.run(
-        ["whoami.exe", "/user", "/fo", "csv", "/nh"],
-        capture_output=True, text=True, check=True, creationflags=flags,
-    )
-    match = re.search(r"S-1-[0-9-]+", identity.stdout)
-    if match is None:
-        raise SetupError("Could not determine the Windows account for the state directory.")
     result = subprocess.run(
         ["icacls.exe", str(path), "/inheritance:r", "/grant:r",
-         "*" + match.group() + ":(OI)(CI)F", "*S-1-5-18:(OI)(CI)F",
+         "*" + _current_sid() + ":(OI)(CI)F", "*S-1-5-18:(OI)(CI)F",
          "*S-1-5-32-544:(OI)(CI)F"],
         capture_output=True, text=True, creationflags=flags,
     )
     if result.returncode:
         raise SetupError("Could not restrict the state directory's Windows permissions.")
+
+
+
+def restrict_descendants(path: Path) -> None:
+    """Make everything below a protected directory inherit only its ACL.
+
+    A reused directory may hold entries created before its ACL was applied,
+    or entries with their own explicit grants; both are reset here.
+    """
+    if not any(path.iterdir()):
+        return
+    if os.name != "nt":
+        for root, directories, files in os.walk(path):
+            for name in directories + files:
+                entry = Path(root, name)
+                if not entry.is_symlink():
+                    entry.chmod(entry.stat().st_mode & 0o700)
+        return
+    flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    result = subprocess.run(
+        ["icacls.exe", str(path / "*"), "/reset", "/T", "/Q"],
+        capture_output=True, text=True, creationflags=flags,
+    )
+    if result.returncode:
+        raise SetupError("Could not restrict the Windows permissions inside the state directory.")
+
+
+# SYSTEM and the local Administrators group; the current account is added at use.
+_TRUSTED_SIDS = frozenset({"S-1-5-18", "S-1-5-32-544"})
+# OWNER RIGHTS only ever names the owner, which is itself checked.
+_OWNER_RIGHTS = "S-1-3-4"
+
+
+def _windows_security(path: Path) -> tuple:
+    """Return (owner SID, [(ACE type, SID or None)]) for one path, or (owner, None) for a null DACL."""
+    import ctypes
+    from ctypes import wintypes
+    advapi = ctypes.WinDLL("advapi32", use_last_error=True)
+    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+    get_info = advapi.GetNamedSecurityInfoW
+    get_info.argtypes = (wintypes.LPCWSTR, ctypes.c_int, wintypes.DWORD,
+                         *(ctypes.POINTER(ctypes.c_void_p),) * 5)
+    get_info.restype = wintypes.DWORD
+    to_string = advapi.ConvertSidToStringSidW
+    to_string.argtypes = (ctypes.c_void_p, ctypes.POINTER(wintypes.LPWSTR))
+    to_string.restype = wintypes.BOOL
+    get_ace = advapi.GetAce
+    get_ace.argtypes = (ctypes.c_void_p, wintypes.DWORD, ctypes.POINTER(ctypes.c_void_p))
+    get_ace.restype = wintypes.BOOL
+    local_free = kernel.LocalFree
+    local_free.argtypes, local_free.restype = (ctypes.c_void_p,), ctypes.c_void_p
+
+    def sid_string(sid) -> str:
+        text = wintypes.LPWSTR()
+        if not to_string(sid, ctypes.byref(text)):
+            raise SetupError("Could not read a Windows security identifier.")
+        try:
+            return text.value
+        finally:
+            local_free(text)
+
+    owner, dacl, descriptor = ctypes.c_void_p(), ctypes.c_void_p(), ctypes.c_void_p()
+    # SE_FILE_OBJECT; OWNER_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION.
+    if get_info(str(path), 1, 0x1 | 0x4, ctypes.byref(owner), None,
+                ctypes.byref(dacl), None, ctypes.byref(descriptor)):
+        raise SetupError("Could not read the Windows permissions of the state directory.")
+    try:
+        if not owner.value:
+            raise SetupError("A state directory entry has no Windows owner.")
+        if not dacl.value:
+            return sid_string(owner), None
+        count = ctypes.cast(dacl.value + 4, ctypes.POINTER(ctypes.c_uint16)).contents.value
+        entries = []
+        for index in range(count):
+            ace = ctypes.c_void_p()
+            if not get_ace(dacl, index, ctypes.byref(ace)):
+                raise SetupError("Could not read the Windows permissions of the state directory.")
+            kind = ctypes.cast(ace.value, ctypes.POINTER(ctypes.c_uint8)).contents.value
+            # ACCESS_ALLOWED_ACE and ACCESS_DENIED_ACE: header, mask, then the SID.
+            entries.append((kind, sid_string(ace.value + 8) if kind in (0, 1) else None))
+        return sid_string(owner), entries
+    finally:
+        local_free(descriptor)
+
+
+def _check_private_tree(path: Path, *, permissions: bool) -> None:
+    """Refuse links, foreign owners and (once restricted) any outside grant, root included.
+
+    Nothing below the directory is followed: a junction or symbolic link is
+    refused before icacls, which follows junctions, or a writer can reach it.
+    """
+    windows = os.name == "nt"
+    trusted = _TRUSTED_SIDS | {_current_sid()} if windows else None
+    pending = [path]
+    while pending:
+        entry = pending.pop()
+        info = entry.lstat()
+        if stat.S_ISLNK(info.st_mode) or getattr(info, "st_file_attributes", 0) & 0x400:
+            raise SetupError("The state directory must not contain a link or reparse point.")
+        if windows:
+            owner, entries = _windows_security(entry)
+            if owner not in trusted:
+                raise SetupError("Part of the state directory belongs to another Windows account.")
+            if permissions and (entries is None or any(
+                    kind != 1 and sid not in trusted | {_OWNER_RIGHTS} for kind, sid in entries)):
+                raise SetupError("Part of the state directory grants access to another Windows account.")
+        else:
+            if info.st_uid not in (os.getuid(), 0):
+                raise SetupError("Part of the state directory belongs to another account.")
+            if permissions and info.st_mode & 0o077:
+                raise SetupError("Part of the state directory grants access to another account.")
+        if stat.S_ISDIR(info.st_mode):
+            pending.extend(entry.iterdir())
+
+
+def _set_protected_dacl(path: Path) -> None:
+    """Replace one directory's DACL, in a single call, with a protected private one.
+
+    The new DACL never inherits, so nothing from the parent (ProgramData's
+    Users grants included) applies at any moment, and every explicit outside
+    grant is gone. SetFileSecurityW changes only this object; descendants are
+    reset separately, after they are checked again for links.
+    """
+    import ctypes
+    from ctypes import wintypes
+    advapi = ctypes.WinDLL("advapi32", use_last_error=True)
+    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+    convert = advapi.ConvertStringSecurityDescriptorToSecurityDescriptorW
+    convert.argtypes = (wintypes.LPCWSTR, wintypes.DWORD, ctypes.POINTER(ctypes.c_void_p),
+                        ctypes.POINTER(wintypes.ULONG))
+    convert.restype = wintypes.BOOL
+    set_security = advapi.SetFileSecurityW
+    set_security.argtypes = (wintypes.LPCWSTR, wintypes.DWORD, ctypes.c_void_p)
+    set_security.restype = wintypes.BOOL
+    local_free = kernel.LocalFree
+    local_free.argtypes, local_free.restype = (ctypes.c_void_p,), ctypes.c_void_p
+    sid = _current_sid()
+    sddl = "D:P" + "".join("(A;OICI;FA;;;%s)" % value for value in ("S-1-5-18", "S-1-5-32-544", sid))
+    descriptor = ctypes.c_void_p()
+    # SDDL_REVISION_1.
+    if not convert(sddl, 1, ctypes.byref(descriptor), None):
+        raise SetupError("Could not restrict the state directory's Windows permissions.")
+    try:
+        # DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION.
+        if not set_security(str(path), 0x4 | 0x80000000, descriptor):
+            raise SetupError("Could not restrict the state directory's Windows permissions.")
+    finally:
+        local_free(descriptor)
+
+
+def protect_tree(path: Path) -> None:
+    """Make an existing directory and everything in it private, or refuse it.
+
+    Used for a directory this attempt did not just create: it may be left by
+    an attempt whose ACL step failed, or precreated by another account. Its
+    DACL is replaced from nothing in one step (explicit outside grants
+    included) without ever re-enabling inheritance, every descendant then
+    inherits only that, and the result is verified.
+    """
+    _check_private_tree(path, permissions=False)
+    if os.name == "nt":
+        # Never "icacls /reset" the root: that makes it inherit its parent's
+        # ACL until the next step, and ProgramData lets every local account
+        # read files and add entries below it.
+        _set_protected_dacl(path)
+        # An entry added through an outside grant before the line above would
+        # be reached by the recursive reset below, which follows junctions.
+        _check_private_tree(path, permissions=False)
+    else:
+        protect_directory(path)
+    restrict_descendants(path)
+    _check_private_tree(path, permissions=True)
+
+
+def ensure_private_tree(path: Path) -> None:
+    """Use an existing directory only if it is private; repair it only when it is not.
+
+    An already-private directory is verified without changing its ACL at all,
+    so reusing it never opens a window. Anything else goes through
+    protect_tree, which refuses a link or foreign owner.
+    """
+    try:
+        _check_private_tree(path, permissions=True)
+    except SetupError:
+        protect_tree(path)
 
 
 def create_configuration(

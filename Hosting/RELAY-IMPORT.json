@@ -6,7 +6,7 @@
     {
       "path": "GuildHub/server.py",
       "upstream_sha256": "8a2ee276461888c719b86d0ffb703b7af7c35bbfa1bce10c3fcf282d081eff8d",
-      "imported_sha256": "cff3b80365c5382f319c93d2107e70c79312f6f73652de876c0382cc685f4956"
+      "imported_sha256": "8717f20d9e85e249c3b84c1c605063acfb0971e890ae690a75ba9204e0c8c931"
     },
     {
       "path": "GuildHub/store.py",
@@ -16,7 +16,7 @@
     {
       "path": "GuildHub/release_pointer.py",
       "upstream_sha256": "4b4f59611162c51d9357a1752cdba32c08f1f2f3316c85615ce6ea813bdd8f44",
-      "imported_sha256": "4b4f59611162c51d9357a1752cdba32c08f1f2f3316c85615ce6ea813bdd8f44"
+      "imported_sha256": "de0b39f56c8bf3a74d8198dce7dff8dd27eca21fb7af900dae35f159b2f6b206"
     },
     {
       "path": "GuildHub/tests/test_server.py",
@@ -37,7 +37,9 @@
   "adaptations": [
     "Standalone Vemal's Ears landing/privacy pages and downloads; no Downtime product downloads.",
     "Relay wire protocol, voice membership gate and credential storage retain the upstream implementation.",
-    "Removed hosted-addon job CLI commands; retained upstream credential database schema for compatibility."
+    "Removed hosted-addon job CLI commands; retained upstream credential database schema for compatibility.",
+    "Host transfer rendezvous: /v1/transfer-offer and /v1/transfer-claim, present only with VEMALS_EARS_TRANSFER_KEY_FILE; opaque piping in memory, and a freeze that refuses pairing and viewer-link binds only. The freeze is confirmed only after viewer-link writes admitted before it have landed (bounded wait; an overrun reports not frozen). The offer socket can also ask for the planned-maintenance announcement before the old Host stops.",
+    "Release pointer: release_pointer_from_bytes() holds the pointer validation that load_release_pointer() now calls (unchanged behaviour), so a host transfer can check a received pointer against its mirrored downloads, or only its shape in transit."
   ],
   "hash_normalization": "LF line endings"
 }

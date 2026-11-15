@@ -41,8 +41,12 @@ from ci.test_inventory import PYTHON_TEST_ROOTS  # noqa: E402
 # Measured 2026-09-06: 65 units, 1287 cases, after the one-card-style module.
 # Measured 2026-09-06: 66 units, 1297 cases, after the part-hold and frame-loop module.
 # Measured 2026-09-06: 67 units, 1308 cases, after streamed parts began taking free rows.
-EXPECTED_UNITS = 67
-EXPECTED_TESTS = 1308
+# Measured 2026-11-13: 94 units, 2039 cases, after the host transfer modules
+# (PAKE, bundle, relay rendezvous, sequences, guards, screens, package inventory).
+# Measured 2026-11-13: 94 units, 2064 cases, after the transfer review fixes
+# (three-state public check, withheld tunnel mark, encrypted delta, release code check).
+EXPECTED_UNITS = 94
+EXPECTED_TESTS = 2064
 
 
 def discover_modules(relative: str, prefix: str) -> list[tuple[str, list[str]]]:

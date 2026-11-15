@@ -7,9 +7,11 @@ Host source: https://ears.xenon.solutions/download/vemals-ears-host/source
 SHA256: https://ears.xenon.solutions/download/vemals-ears-host/sha256
 Member installer: https://ears.xenon.solutions/download
 
-The opening screen offers Set up a new host, Export from the current host,
-and Import on the replacement PC. For a new guild, follow the first section.
-For an existing guild, use the worker takeover section below.
+The opening screen offers Set up a new host and Receive a host from another
+PC, plus a small link, Older worker-only handoff. For a new guild, follow the
+first section. To move a host you already run to a different PC, follow MOVE
+THIS HOST TO ANOTHER PC. The older handoff of only the original host's
+caption worker is kept at the end and is labelled as such.
 
 SET UP A NEW HOST
 
@@ -52,7 +54,114 @@ lets you correct a hostname, token, connection or member download without
 replacing your relay keys. Blank token fields preserve saved credentials.
 Start and Stop control this installation's services.
 
-TAKE OVER THE ORIGINAL HOST'S CAPTION WORKER
+MOVE THIS HOST TO ANOTHER PC
+
+This moves a whole Host Setup host to a new PC: the bot, the relay, member
+pairings, consent choices, character mappings, settings, the Cloudflare
+Tunnel token and the member downloads. Members do not pair again, and the
+old PC can be switched off afterwards. No audio or transcripts are kept by a
+host, so none are moved.
+
+You need:
+- Both PCs switched on and online at the same time, with you at both.
+- The same Host Setup version on both. The new PC may be newer, never older.
+- An EMPTY new PC: Host Setup installed, but no host set up on it yet. It
+  needs a supported GPU like any host.
+- A few minutes in which captions are paused. Typed chat keeps working until
+  the old host stops, and again as soon as the new one has started.
+
+1. On the NEW PC, run Vemals-Ears-Host-Setup.exe, open Vemal's Ears Host and
+   choose Receive a host from another PC. It checks that this PC is empty
+   and starts the 1.2 GB speech download while you do step 2.
+
+2. On the OLD PC, open Vemal's Ears Host. On the dashboard choose Move this
+   host to another PC. Check the host name, Discord server ID, Application
+   ID and public address, then choose Show transfer code. The page shows an
+   address and a one-time code. The code works once, for 10 minutes.
+
+3. On the NEW PC, type the address and the code as shown and choose Connect.
+   Check that the card shows your guild, then choose Move it here.
+
+4. Wait and keep both PCs on. Both pages follow the move by themselves. The
+   old PC stops captions, sends its copy, stops for good and shows This host
+   has moved. The new PC starts only after that and opens its dashboard.
+
+5. In Discord, run /vem start once to bring captions back. Test captions and
+   typed chat with another paired member in the voice channel.
+
+6. When the new PC works, go to the old PC, tick the box under Locked
+   archive and choose Erase archive. Until then the old PC keeps a locked
+   copy of the host. That copy cannot start, and a new host cannot be set up
+   on that PC while it exists. If the new PC never confirmed the move to the
+   old PC, a second box asks you to check first that the new PC shows its
+   dashboard: erasing also destroys the release code.
+
+Good to know:
+
+- Nothing but the guild name, IDs and public address is sent before you have
+  checked the card on the new PC and chosen Move it here.
+- Cancel and keep hosting here works on the old PC until the hand-over and
+  puts everything back as it was.
+- Too many wrong codes cancel the code. Nothing was moved; choose Show
+  transfer code again for a new one.
+- If you use your own HTTPS forwarding instead of Cloudflare Tunnel, the new
+  PC ends on a page that tells you where to point your hostname. Members
+  reconnect once your forwarding reaches the new PC.
+- If the new PC shows Waiting for the old PC to disconnect, the old PC still
+  answers at your public address, or the new PC could not check that address.
+  Check that the old PC shows This host has moved and that the new PC is
+  online, wait a minute, then choose Connect members. Until that check has
+  passed, no Start or setup step on the new PC turns its public connection
+  on.
+- Only the current member installer and its source bundle are copied to the
+  new PC. Download links for older versions that the old PC still served
+  stop working after a move.
+- If a member release is published on the old PC while a move is running,
+  the move stops and nothing is moved. Start it again.
+- To move back later, do the same steps in the other direction. Erase the
+  archive on the receiving PC first.
+
+IF A MOVE IS INTERRUPTED
+
+Reopen Vemal's Ears Host on both PCs. Each one shows what it needs. Captions
+stay stopped on the old PC until you choose. Its relay keeps typed chat
+working meanwhile, also after that PC restarts; only new pairings wait.
+
+- The old PC shows Transfer interrupted. Choose Keep hosting here when the
+  new PC is not hosting: the move is cancelled and this host starts again.
+  The old PC first takes itself off your public address for a moment and
+  checks that no other PC answers there, so it must be online. If another PC
+  is hosting, it starts nothing and offers Finish the move instead.
+  Or choose Finish the move: this host stops for good and shows a release
+  code. Finish the move is offered only when the new PC has a full copy.
+  Never use it if the copy on the new PC was discarded: no host would be
+  left.
+
+- The new PC shows Waiting for the old PC. Type the release code shown on
+  the old PC (on This host has moved, or after Finish the move) and choose
+  Start this host. The code is 14 groups of four; the last group is a check,
+  so a typing mistake is caught at once. Wrong codes never lock the copy:
+  read the code again and retype it. If the old PC is hosting again instead,
+  choose Discard and start again. Do NOT discard when the old PC shows This
+  host has moved: the copy on the new PC is then the only working host.
+
+- The old PC is broken, lost or wiped and will never host again. The new PC
+  shows a link, The old PC is gone for good. Its page unlocks ten minutes
+  after the copy arrived, asks you to type a sentence, and refuses while
+  your public address still answers. The new PC must be online for that
+  check: it also refuses when it cannot reach the internet. Never use it for
+  an old PC that is only switched off: if that PC hosted again later, two
+  bots would run at once.
+
+Never copy C:/ProgramData/VemalsEarsHost to another PC by hand. Use the move
+above, so that only one PC can ever run the bot.
+
+OLDER WORKER-ONLY HANDOFF (ORIGINAL HOST'S CAPTION WORKER)
+
+This is the older file handoff. It moves ONLY the caption worker of the
+original install, and the original PC must stay online. To move a whole Host
+Setup host, use MOVE THIS HOST TO ANOTHER PC above instead. Both Export and
+Import are behind the Older worker-only handoff link on the opening screen.
 
 This path recognizes the original Windows VemalsEarsWorker installation.
 It does not export arbitrary standalone Host Setup installations. Use the
@@ -65,7 +174,8 @@ The original PC MUST remain online. Its relay, pairing, member downloads,
 public hostname/tunnel and Downtime stay there. Only the Discord bot worker
 and GPU speech recognition move to the replacement PC.
 
-1. On the original PC, choose Export from the current host. Check the guild
+1. On the original PC, choose Older worker-only handoff, then Export from
+   the current host. Check the guild
    and public address. Select Choose save location for a new .vehost file
    outside public downloads. Enter a passphrase of at least 12 characters
    twice. Keep this file and passphrase private.
@@ -76,10 +186,11 @@ and GPU speech recognition move to the replacement PC.
    encrypted file privately; give the replacement operator its passphrase
    separately. Never publish it with the installer or source package.
 
-3. On the replacement PC, choose Import on the replacement PC, then Choose
-   handoff file. Enter the passphrase and select Open handoff. Verify the
-   guild name, existing public URL, Discord server ID and Application ID.
-   Existing destination host state is never overwritten.
+3. On the replacement PC, choose Older worker-only handoff, then Import on
+   the replacement PC, then Choose handoff file. Enter the passphrase and
+   select Open handoff. Verify the guild name, existing public URL, Discord
+   server ID and Application ID. Existing destination host state is never
+   overwritten.
 
 4. Confirm that the original caption worker is stopped and disabled and
    that this will be the only replacement worker. Select Import and start
@@ -107,7 +218,7 @@ The replacement's Start, Stop and Retry setup controls affect only its
 worker. Imported identity stays fixed. Prepare and start captions asks for
 confirmation that the original worker is stopped before activation.
 
-FOR BOTH SETUP PATHS
+FOR EVERY SETUP PATH
 
 Keep the computer awake while hosting. The human host can leave voice while
 captions continue for paired members who remain. Only consenting speakers
@@ -118,10 +229,16 @@ Private configuration, keys, consent and mappings live in
 C:/ProgramData/VemalsEarsHost. Uninstall removes this host's services and
 application but keeps that private state so it can be restored. Back it up
 privately while the host is stopped. Never share it with another guild.
+After a move, the old PC's locked archive is the folder
+C:/ProgramData/VemalsEarsHost.moved-archive until you erase it, and each PC
+keeps its small transfer record in C:/ProgramData/VemalsEarsHostTransfer.
+Erase the archive before you uninstall Host Setup from the old PC: uninstall
+does not remove it, and it holds the bot token, keys and pairings.
 
 Each NEW host needs its own bot, hostname and optional Cloudflare account.
 New-host setup does not copy another operator's state or register a domain.
-Takeover preserves the existing identity through the explicit encrypted
+Moving a host keeps its identity and stops the old PC. The older worker-only
+handoff preserves the existing identity through the explicit encrypted
 handoff workflow. It changes only the original caption worker; Downtime and
 the original public relay/tunnel stay running.
 

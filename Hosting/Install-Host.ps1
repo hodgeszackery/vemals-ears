@@ -1,11 +1,14 @@
 # Install the standalone relay and GPU caption worker as Windows services.
 # -CheckOnly validates local prerequisites without changing services or files.
+# -Staged registers the services of a host received from another PC while it
+# still waits for its release: every service is DISABLED and none is started.
 [CmdletBinding()]
 param(
     [Parameter(Mandatory=$true)][string]$StateDirectory,
     [Parameter(Mandatory=$true)][string]$PythonPath,
     [string]$NssmPath,
-    [switch]$CheckOnly
+    [switch]$CheckOnly,
+    [switch]$Staged
 )
 
 $ErrorActionPreference = 'Stop'
@@ -31,11 +34,15 @@ $PythonPath = (Resolve-Path -LiteralPath $PythonPath).Path
 $nodePath = (Get-Command node -ErrorAction SilentlyContinue).Source
 if (-not $nodePath) { throw 'Install Node.js 22.12 or newer first.' }
 
-$activation = if ($CheckOnly) { 'check' } else { 'install' }
-$modeOutput = & $PythonPath -I -B -c "import sys; sys.path.insert(0, sys.argv[1]); from GuildHub import host; from Hosting.service import load_configuration, validate_activation; values=load_configuration(sys.argv[2]); validate_activation(values) if sys.argv[3] == 'install' else None; print(values['VEMALS_EARS_HOST_MODE'])" $repoRoot $StateDirectory $activation
-if ($LASTEXITCODE -ne 0) { throw 'Host source, configuration, or takeover confirmation preflight failed.' }
+# An ordinary install must be allowed to start: it refuses a host that is
+# waiting for its release, is being moved, was released or has moved. A staged
+# install is the opposite: it is only for the host that is waiting.
+$activation = if ($CheckOnly) { 'check' } elseif ($Staged) { 'staged' } else { 'install' }
+$modeOutput = & $PythonPath -I -B -c "import sys; sys.path.insert(0, sys.argv[1]); from GuildHub import host; from Hosting.service import load_configuration, validate_activation, validate_staged; values=load_configuration(sys.argv[2]); check={'install': validate_activation, 'staged': validate_staged}.get(sys.argv[3]); check(values) if check else None; print(values['VEMALS_EARS_HOST_MODE'])" $repoRoot $StateDirectory $activation
+if ($LASTEXITCODE -ne 0) { throw 'Host source, configuration, takeover confirmation or transfer state preflight failed.' }
 $hostMode = ($modeOutput | Out-String).Trim()
 if ($hostMode -notin @('standalone', 'remote-worker')) { throw 'Unknown host mode; no services changed.' }
+if ($Staged -and $hostMode -ne 'standalone') { throw 'Only a received standalone host is installed staged; no services changed.' }
 & $PythonPath -I -B -c "import sys; sys.path.insert(0, sys.argv[1]); from Hosting.service import main; sys.exit(main(['--state-directory', sys.argv[2], '--host-mode', sys.argv[3], '--check-only', 'worker']))" $repoRoot $StateDirectory $hostMode
 if ($LASTEXITCODE -ne 0) { throw 'GPU speech runtime preflight failed. Run host setup prepare first.' }
 if ($hostMode -eq 'standalone') {
@@ -162,8 +169,19 @@ function Assert-HostServiceOwnership {
 }
 function Install-RegisteredHostServices {
     param([array]$Services, [string]$PythonPath, [string]$RepoRoot,
-          [string]$StateDirectory, [string]$NodePath, [string]$HostMode = 'standalone')
+          [string]$StateDirectory, [string]$NodePath, [string]$HostMode = 'standalone',
+          [switch]$Staged)
     if ($HostMode -notin @('standalone', 'remote-worker')) { throw 'Unknown host mode.' }
+    if ($Staged) {
+        if ($HostMode -ne 'standalone') { throw 'Only a received standalone host is installed staged.' }
+        # A receiving PC is empty. An existing registration means it is not,
+        # and a staged install never stops or reconfigures a service.
+        foreach ($service in $Services) {
+            if (Get-Service -Name $service.Name -ErrorAction SilentlyContinue) {
+                throw 'This PC already has host services; no services changed.'
+            }
+        }
+    }
     if ($HostMode -eq 'remote-worker' -and
         ($Services.Count -ne 1 -or $Services[0].Name -ne 'VemalsEarsHostWorker')) {
         throw 'Remote-worker installation can manage only its caption worker.'
@@ -188,8 +206,13 @@ function Install-RegisteredHostServices {
         foreach ($service in $Services) {
             $existing = Get-Service -Name $service.Name -ErrorAction SilentlyContinue
             if (-not $existing) {
+                # nssm install creates an automatic-start service. A staged one
+                # is disabled before it is given anything to run, so an install
+                # that dies part way through never leaves a service Windows
+                # starts at the next boot beside the old PC's host.
                 Invoke-Nssm install $service.Name $PythonPath
                 $created.Add($service.Name)
+                if ($Staged) { Invoke-Nssm set $service.Name Start SERVICE_DISABLED }
             }
             Invoke-Nssm set $service.Name Application $PythonPath
             Invoke-Nssm set $service.Name AppParameters $service.Parameters
@@ -202,7 +225,10 @@ function Install-RegisteredHostServices {
             Invoke-Nssm set $service.Name AppExit 3 Exit
             Invoke-Nssm set $service.Name AppRestartDelay 30000
             Invoke-Nssm set $service.Name AppStopMethodConsole 15000
-            Invoke-Nssm set $service.Name Start SERVICE_DELAYED_AUTO_START
+            # Staged: registered but unable to start, by Windows itself, until
+            # the Host app has verified the release and enables it.
+            $startMode = if ($Staged) { 'SERVICE_DISABLED' } else { 'SERVICE_DELAYED_AUTO_START' }
+            Invoke-Nssm set $service.Name Start $startMode
             Invoke-Nssm set $service.Name DisplayName $service.Title
             Invoke-Nssm set $service.Name AppEnvironmentExtra ('PATH=' + (Split-Path $NodePath) + ';' + $env:PATH)
             $actualDirectory = Get-NssmValue $service.Name AppDirectory
@@ -215,9 +241,11 @@ function Install-RegisteredHostServices {
         } else {
             Invoke-Nssm set VemalsEarsHostWorker DependOnService VemalsEarsHostRelay
         }
-        foreach ($service in $Services) {
-            Start-Service -Name $service.Name -ErrorAction Stop
-            (Get-Service -Name $service.Name).WaitForStatus('Running', [TimeSpan]::FromSeconds(30))
+        if (-not $Staged) {
+            foreach ($service in $Services) {
+                Start-Service -Name $service.Name -ErrorAction Stop
+                (Get-Service -Name $service.Name).WaitForStatus('Running', [TimeSpan]::FromSeconds(30))
+            }
         }
     } catch {
         $originalError = $_
@@ -237,5 +265,9 @@ function Install-RegisteredHostServices {
 }
 $services = @(Get-HostServiceDefinitions -HostMode $hostMode -StateDirectory $StateDirectory)
 Assert-HostServiceOwnership -Services $services -PythonPath $PythonPath -RepoRoot $repoRoot
-Install-RegisteredHostServices -Services $services -PythonPath $PythonPath -RepoRoot $repoRoot -StateDirectory $StateDirectory -NodePath $nodePath -HostMode $hostMode
+Install-RegisteredHostServices -Services $services -PythonPath $PythonPath -RepoRoot $repoRoot -StateDirectory $StateDirectory -NodePath $nodePath -HostMode $hostMode -Staged:$Staged
+if ($Staged) {
+    Write-Host 'Host services registered disabled. They start only after the old PC releases this host.'
+    return
+}
 Write-Host 'Host services started. Verify /healthz, Discord pairing, and captions with the guide.'

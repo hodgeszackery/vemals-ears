@@ -99,7 +99,8 @@ def prepare_host(backend, settings: dict, progress, configured, *, configure_exi
 
 
 class HostWizard:
-    def __init__(self, root: tk.Tk, backend, *, open_url=webbrowser.open, takeover_backend=None):
+    def __init__(self, root: tk.Tk, backend, *, open_url=webbrowser.open, takeover_backend=None,
+                 transfer_backend=None):
         self.root = root
         self.backend = backend
         self.open_url = open_url
@@ -113,6 +114,7 @@ class HostWizard:
         self.secrets = set()
         self.retry_action = None
         self.completion = None
+        self.opening = False
         self.current_status = {}
         self.window_chrome = None
         self.header_icons = {}
@@ -130,6 +132,9 @@ class HostWizard:
         }
         from Hosting.takeover_ui import TakeoverUi
         self.takeover_ui = TakeoverUi(self, takeover_backend)
+        from Hosting.transfer_ui import TransferUi
+        self.transfer_ui = TransferUi(self, transfer_backend)
+        self.load_notice = ""
         self.error_back = self.show_connection
         self.notice = tk.StringVar(root)
         self.progress_text = tk.StringVar(root, value="Reading your host settings...")
@@ -171,8 +176,7 @@ class HostWizard:
         self.root.bind("<MouseWheel>", self._mousewheel, add="+")
         self.root.bind("<FocusIn>", self._reveal_focus, add="+")
         self._show_progress("Opening your host", "Reading your saved settings...")
-        self._start_job(lambda progress: self.backend.read_settings(), self._loaded,
-                        retry=lambda: self._load_again())
+        self._start_job(self._read_host, self._loaded, retry=lambda: self._load_again(), opening=True)
         self.poll_id = self.root.after(60, self._drain_events)
         self.chrome_id = self.root.after_idle(self._attach_chrome)
 
@@ -296,8 +300,8 @@ class HostWizard:
             button.configure(state="disabled")
         return button
 
-    def _link(self, parent, label, url):
-        button = tk.Button(parent, text=label, command=lambda: self._open(url), relief="flat",
+    def _link(self, parent, label, url, command=None):
+        button = tk.Button(parent, text=label, command=command or (lambda: self._open(url)), relief="flat",
                            bd=0, padx=0, pady=3, cursor="hand2", fg=GOLD,
                            bg=parent.cget("bg"), activebackground=parent.cget("bg"),
                            activeforeground=TEXT, font=("Segoe UI", 10, "underline"),
@@ -331,10 +335,12 @@ class HostWizard:
         for child in self.navigation.winfo_children():
             child.destroy()
         steps = {"server": "New host / Server details", "connection": "New host / Connection",
-                 "takeover-export": "Transfer host / Original PC",
-                 "takeover-import": "Transfer host / Replacement PC",
-                 "takeover-confirm": "Transfer host / Confirm",
-                 "takeover-activate": "Transfer host / Start"}
+                 "takeover-export": "Worker handoff / Original PC",
+                 "takeover-import": "Worker handoff / Replacement PC",
+                 "takeover-confirm": "Worker handoff / Confirm",
+                 "takeover-activate": "Worker handoff / Start"}
+        from Hosting.transfer_ui import STEPS
+        steps.update(STEPS)
         self.step_label.configure(text=steps.get(page, ""))
         if page in steps:
             self.step_label.pack(anchor="w", padx=self._content_margin(), pady=(0, 6), before=self.content)
@@ -346,18 +352,50 @@ class HostWizard:
         self._label(self.body, title, size=21, bold=True).pack(anchor="w")
         self._label(self.body, description, color=MUTED).pack(anchor="w", pady=(8, 24))
 
-    def _loaded(self, settings):
-        self._accept_settings(settings)
-        if self.configured:
+    def _choice(self, title, description, action, command, *, primary=False, disabled=False):
+        row = tk.Frame(self.body, bg=FIELD, highlightthickness=1, highlightbackground=BORDER)
+        row.pack(fill="x", pady=(0, 10))
+        self._button(row, action, command, primary=primary, disabled=disabled).pack(
+            side="right", padx=(8, 16), pady=16)
+        copy = tk.Frame(row, bg=FIELD)
+        copy.pack(side="left", fill="x", expand=True, padx=(16, 0), pady=16)
+        self._label(copy, title, size=11, bold=True).pack(anchor="w")
+        self._label(copy, description, size=9, color=MUTED).pack(anchor="w", pady=(4, 0))
+        return row
+
+    def _read_host(self, progress):
+        # The transfer receipt is read first: a host that moved away or is half
+        # way through a move must open on that, never on setup or the dashboard.
+        return {"transfer": self.transfer_ui.read_status(), "settings": self.backend.read_settings()}
+
+    def _loaded(self, loaded):
+        self._accept_settings(loaded["settings"])
+        notice, self.load_notice = self.load_notice, ""
+        if self.transfer_ui.open(loaded["transfer"]):
+            pass
+        elif self.configured:
             self.show_dashboard({"detail": "Checking your host..."})
-            self.refresh_status()
+            if notice:
+                # Keep the message on screen instead of replacing it with "Checking services...".
+                self._start_job(lambda progress: self.backend.status(), self._status_checked(notice),
+                                retry=self.refresh_status)
+            else:
+                self.refresh_status()
         else:
             self.takeover_ui.show_choices()
+        if notice:
+            self.notice.set(self._safe(notice))
 
-    def _load_again(self):
+    def _status_checked(self, notice):
+        def show(status):
+            self.show_dashboard(status)
+            self.notice.set(self._safe(notice))
+        return show
+
+    def _load_again(self, notice=""):
+        self.load_notice = notice
         self._show_progress("Opening your host", "Reading your saved settings...")
-        self._start_job(lambda progress: self.backend.read_settings(), self._loaded,
-                        retry=self._load_again)
+        self._start_job(self._read_host, self._loaded, retry=lambda: self._load_again(notice), opening=True)
 
     def _accept_settings(self, settings):
         self.settings = {key: value for key, value in settings.items()
@@ -428,7 +466,7 @@ class HostWizard:
     def collect_settings(self):
         values = {key: variable.get().strip() for key, variable in self.values.items()
                   if key not in {"installer_mode", "tunnel_mode"}
-                  and not key.startswith("handoff_")}
+                  and not key.startswith(("handoff_", "transfer_"))}
         values["tunnel_enabled"] = self.values["tunnel_mode"].get() == "cloudflare"
         if self.values["installer_mode"].get() == "file":
             values["client_download_url"] = ""
@@ -525,6 +563,10 @@ class HostWizard:
             return
         if self.busy:
             return
+        if self.transfer_ui.tunnel_withheld:
+            # Setup would start the public tunnel while the old PC still answers.
+            self.transfer_ui.show_tunnel_wait()
+            return
         settings = self.collect_settings()
         updating = self.editing
         if not self.configured or updating:
@@ -537,8 +579,13 @@ class HostWizard:
             if settings.get(key):
                 self.secrets.add(settings[key])
         self._show_progress("Preparing your host", "Your settings stay private on this computer.")
+        fresh = not self.configured
 
         def work(progress):
+            if fresh:
+                # A speech download the Receive page may have started for a
+                # transfer is stopped and its staging copy removed first.
+                self.transfer_ui.abandon_receive()
             return prepare_host(self.backend, settings, progress,
                                 lambda saved: self.events.put(("configured", saved)),
                                 configure_existing=updating)
@@ -586,6 +633,7 @@ class HostWizard:
                      disabled=not self.settings.get("bot_install_url")).pack(side="left", padx=(0, 12))
         self._button(actions, "Open join page", lambda: self._open(self.settings.get("join_url", "")),
                      primary=True, disabled=not self.settings.get("join_url")).pack(side="left")
+        self.transfer_ui.dashboard(actions)
         remote = self.settings.get("mode") == "remote-worker"
         instruction = ("Existing members keep their connections. Start a new /vem start session and test captions and typed chat.\nKeep the original PC online for the shared relay, pairing and Downtime." if remote else
                        "In Discord: use /vem setup to pair, then /vem start in a voice channel.\nTest with a consenting member. A healthy relay alone does not verify captions.")
@@ -622,6 +670,9 @@ class HostWizard:
         if action == "start" and self.settings.get("mode") == "remote-worker" and not self.settings.get("takeover_confirmed"):
             self.takeover_ui.show_activation()
             return
+        if action == "start" and self.transfer_ui.tunnel_withheld:
+            self.transfer_ui.show_tunnel_wait()
+            return
         self.notice.set("Starting host services..." if action == "start" else "Stopping host services...")
 
         def work(progress):
@@ -633,12 +684,15 @@ class HostWizard:
 
         self._start_job(work, self.show_dashboard, retry=lambda: self.control_services(action))
 
-    def _start_job(self, work, completion, *, retry):
+    def _start_job(self, work, completion, *, retry, opening=False):
         if self.busy:
             return
         self.busy = True
         self.retry_action = retry
         self.completion = completion
+        # Opening the app reads state only: a failure there is not a stopped
+        # setup, and there is no settings page to go back to.
+        self.opening = opening
 
         def run():
             try:
@@ -667,15 +721,19 @@ class HostWizard:
                     self.progress_text.set(self._safe(value))
                 elif kind == "configured":
                     self._accept_settings(value)
+                elif kind == "call":
+                    value()
                 elif kind == "error":
                     self.busy = False
                     self.notice.set(self._safe(value))
                     if self.page == "progress":
                         self.progress_bar.stop()
-                        self.progress_text.set("Setup stopped. Your saved settings and keys are preserved.")
+                        self.progress_text.set("This host could not be opened. Nothing was changed."
+                                               if self.opening else
+                                               "Setup stopped. Your saved settings and keys are preserved.")
                         for child in self.navigation.winfo_children():
                             child.destroy()
-                        if not self.configured:
+                        if not self.configured and not self.opening:
                             self._button(self.navigation, "Back", self.error_back).pack(side="left")
                         self._button(self.navigation, "Retry", self.retry_action, primary=True).pack(side="right")
                 elif kind == "complete":
@@ -751,9 +809,11 @@ class HostWizard:
         self.open_url(url)
 
     def close(self):
-        if self.busy:
-            if not messagebox.askyesno("Close host setup?", "Setup is still working. Closing now interrupts it.\nYou can reopen the app and retry with the same saved settings.", parent=self.root):
+        question = self.transfer_ui.close_question()
+        if question or self.busy:
+            if not messagebox.askyesno("Close host setup?", question or "Setup is still working. Closing now interrupts it.\nYou can reopen the app and retry with the same saved settings.", parent=self.root):
                 return
+        self.transfer_ui.shutdown()
         self.closed = True
         if self.chrome_id is not None:
             self.root.after_cancel(self.chrome_id)

@@ -1,5 +1,6 @@
 """Host setup retries preserve credentials and keep Tk work on its UI thread."""
 
+import gc
 import os
 from pathlib import Path
 import tempfile
@@ -124,12 +125,27 @@ class WizardWorkflowTests(unittest.TestCase):
 
 class WizardUiTests(unittest.TestCase):
     def setUp(self):
+        # Registered first, so it runs last: the finished window is collected
+        # here, on the Tk thread, and never by a leftover background thread.
+        # A collection on a worker would finalize this test's Tk interpreter
+        # off its own thread and can crash a later test inside Tcl.
+        self.addCleanup(self.release)
         try:
             self.root = tk.Tk()
         except tk.TclError as error:
             self.skipTest("A Tk display is required: " + str(error))
         self.root.withdraw()
         self.addCleanup(self.close_root)
+
+    def release(self):
+        # A worker that is still unwinding holds the window through its job;
+        # let it finish so the last reference is dropped here, not there.
+        for thread in threading.enumerate():
+            if thread is not threading.current_thread() and thread.name.startswith("VemalsEars"):
+                thread.join(5)
+        for name in ("app", "backend", "transfer", "root"):
+            self.__dict__.pop(name, None)
+        gc.collect()
 
     def close_root(self):
         try:

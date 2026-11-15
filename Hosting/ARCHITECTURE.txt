@@ -4,7 +4,8 @@ Hosting boundaries
 The Windows host slice adds a VE-owned copy of the relay, credential store
 and release-pointer validator. It does not move or remove the shared relay
 from Downtime. New-host setup does not change existing service registrations;
-the separate takeover flow controls only the recognized original worker.
+the full transfer moves one standalone Host to an empty one, and the older
+worker-only takeover controls only the recognized original worker.
 Hosting/RELAY-IMPORT.json records the original source revision and hashes.
 
 Hosting/setup.py creates a new operator configuration and fresh relay keys.
@@ -13,8 +14,111 @@ to the original host's URLs or interactive Windows profile. The relay stays
 on loopback behind an operator-configured HTTPS edge. The worker connects
 over local WebSocket and runs the existing consent-gated Discord/STT path.
 
-Existing-worker takeover
------------------------
+Full host transfer
+------------------
+
+A standalone Host can move everything to an empty Host install on another
+PC: bot identity, publisher token, relay database, pepper, pairings, consent,
+mappings, settings, tunnel token and the member download artifacts. Either
+direction, repeatedly. remote-worker installs have no relay and cannot be a
+source. Converting the original shared install is not part of this.
+
+Files. Hosting/transfer_pake.py is the key agreement and the release proof.
+Hosting/transfer.py is the bundle, its frames, the staged import, the
+receipts and the locked archive. Hosting/transfer_net.py holds the sockets,
+the mirror downloads and the public health check. Hosting/transfer_flow.py
+is the two sequences and their recovery. Hosting/transfer_ui.py is the
+screens. Receipts live in a protected sibling of the state directory,
+<state>Transfer, so they survive the state being archived.
+
+Rendezvous. The old PC shows its public address and an 8-symbol one-time
+code as two separate fields; the code is never part of a URL and is never
+sent. The new PC connects to the old host's own relay at /v1/transfer-claim
+while the old Host app holds /v1/transfer-offer on loopback, authenticated
+by a key file only the elevated app and the relay can read. Both paths exist
+only on a standalone Host and the claim path answers 404 with no offer
+pending. The relay pipes opaque frames in memory and stores nothing. A
+balanced PAKE over the RFC 3526 3072-bit group turns the code into session
+keys; a wrong code gives one online guess, three wrong confirmations end the
+offer, and it expires after 10 minutes.
+
+Order. The claiming side confirms first. The old host then sends only the
+non-secret identity card. Nothing else leaves it until the new operator has
+checked guild and server ID and the new PC has mirrored and verified the
+member downloads. The old host then records "sending", freezes pairing and
+viewer linking, disables and stops only its caption worker and verifies it,
+checks that the member downloads are still the ones on the card, snapshots
+the database late and sends one encrypted, authenticated bundle
+(AES-256-CBC with HMAC-SHA256 through Handoff-Crypto.ps1, own operation and
+limits). The new PC imports into a protected staging directory, publishes it
+with one rename and registers its services DISABLED (Install-Host.ps1
+-Staged). Typed-chat profile writes that landed after the snapshot follow as
+a delta that is encrypted with the same session key and carried in
+authenticated control frames; they are never refused, because typed chat
+depends only on the relay. The old relay and tunnel keep their start types
+while the host is being sent: after a reboot or a crash the relay comes back
+by itself, frozen by the persisted flag file, and only the worker stays
+down.
+
+Release. At offer time the old host makes a random 32-byte R; the bundle
+carries only a SHA-256 commitment to it. R leaves the old PC, in a RELEASE
+frame or as the typed release code, only after "released" is written through
+to disk, and that happens only after the old worker is stopped and disabled.
+The new PC starts on R alone, so two workers never hold one bot identity.
+The typed release code is R plus one check group, so a typing mistake is
+told apart from a wrong code; wrong codes are counted for display and never
+lock the copy, because that copy may be the only one left.
+The old host then announces maintenance to viewers, stops tunnel and relay,
+removes its services and renames its state to <state>.moved-archive. The
+archive cannot start and is removed only by Erase archive.
+
+Guards. service.validate_activation, the controller's start, install and
+enable paths, Install-Host.ps1 and the installer lifecycle all read the
+receipt first: a pending receiver, or a sender that is sending, released or
+moved, is never started; an unreadable receipt blocks instead of counting as
+none. The one exception is the relay process of a sender that is "sending",
+described above. A received host's tunnel is withheld from the moment it is
+staged: a mark in host-settings.json keeps every start and setup path from
+enabling it, and only a check that the old public address is quiet clears
+the mark (at activation, or later through Connect members).
+
+Public address check. transfer_net.public_state answers "answers", "quiet"
+or "unknown". "quiet" needs positive evidence, on several probes, that the
+address was reached and no relay is behind it: an HTTP reply that is not the
+relay's health answer, or a refused or timed-out connection together with
+proof that this PC is online (any HTTP reply from the Discord API host).
+A DNS failure, a TLS failure or an offline PC is "unknown". The tunnel
+start, the emergency override and Keep hosting here all refuse on "unknown".
+
+Only the member installer and source bundle that the host currently serves
+are mirrored. Older versioned download and source files are not.
+
+Recovery is driven by the persisted receipt, not relay memory. Before
+release the old PC can always restore itself, and does so by itself when
+the new PC goes silent. Keep hosting here, chosen after the app was reopened
+on an interrupted move, first stops this PC's own relay and tunnel and asks
+the public address: if another PC answers there it restores nothing, leaves
+everything disabled and lets the operator archive this copy instead. A host
+behind the operator's own forwarding that still points at the old PC hides
+the other PC from this check; the screen warns about that case. After the
+new PC has confirmed a
+full copy the old PC can Finish the move and show the release code. The new
+PC discards its copy by itself only before it confirmed that copy or on an
+authenticated abort. The typed emergency override on the new PC needs the
+authenticated "sending complete" frame, a wait longer than the old host's
+restore timeout, a typed sentence and a public address that this PC, while
+online, has verified quiet. It cannot detect an old PC that is merely
+switched off; the screens say so. Erase archive asks for a second
+confirmation when the new PC never acknowledged the release.
+
+Captions and typed chat still reach only paired devices in the active voice
+channel. A transfer moves no audio or transcripts, because none are stored,
+and it makes the bot post nothing.
+
+Existing-worker takeover (older, worker only)
+---------------------------------------------
+
+This file handoff predates the full transfer and is kept unchanged.
 
 Hosting/takeover.py recognizes only the original VemalsEarsWorker service.
 Export stops and disables it, records its prior state in a protected local
@@ -62,15 +166,22 @@ device associations stay private and outside the source package.
 
 The shareable archive is an explicit allowlist of application/build source,
 locked dependency metadata and notices. It contains neither operator state
-nor handoff files or downloaded GPU runtime binaries. It can be rebuilt without Git. Members still
-use the existing VE desktop application, obtained separately.
+nor handoff files, transfer receipts or downloaded GPU runtime binaries. It
+can be rebuilt without Git. tests/test_host_archive.py fails when a module the
+packaged Host imports, the transfer modules included, is missing from the
+list. Members still use the existing VE desktop application, obtained
+separately.
 
 The copied relay keeps the existing wire contract and hardcoded active-voice
 authorization. Future fixes to server.py, store.py, release_pointer.py or the
 shared protocol require checking the corresponding copy in Downtime. The
+transfer rendezvous paths are a VE-only addition recorded in
+Hosting/RELAY-IMPORT.json; they are absent unless a transfer key file is
+configured, which only a standalone Host does. The
 credential-store schema retains legacy hosted-job fields for compatibility;
 the VE host does not expose hosted jobs or their administrative CLI.
 
 This extends ADR-001's source ownership decision for optional standalone VE
-hosting and worker takeover. Building the package does not perform a live
-migration, switch the public repository or change the privacy audience.
+hosting, host transfer and worker takeover. Building the package does not
+perform a live migration, switch the public repository or change the privacy
+audience.

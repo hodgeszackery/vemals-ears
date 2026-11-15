@@ -215,6 +215,7 @@ def _artifact(
     document: Any,
     directory: Path,
     expected_filename: str,
+    check_file: bool = True,
 ) -> ReleaseArtifact:
     if not isinstance(document, dict) or set(document) != {
         "filename",
@@ -234,7 +235,8 @@ def _artifact(
     path = directory / filename
     if path.parent != directory:
         raise ReleasePointerError("release artifact is not a local sibling")
-    _regular_file(path, size, digest)
+    if check_file:
+        _regular_file(path, size, digest)
     return ReleaseArtifact(filename, path, size, digest)
 
 
@@ -253,8 +255,28 @@ def load_release_pointer(directory: Path) -> ReleaseSnapshot | None:
         raise ReleasePointerError("release pointer size is invalid")
     try:
         raw = pointer.read_bytes()
-        if len(raw) > MAX_POINTER_BYTES:
-            raise ReleasePointerError("release pointer is too large")
+    except OSError as error:
+        raise ReleasePointerError("release pointer is not valid UTF-8 JSON") from error
+    if len(raw) > MAX_POINTER_BYTES:
+        raise ReleasePointerError("release pointer is too large")
+    return release_pointer_from_bytes(raw, directory)
+
+
+def release_pointer_from_bytes(
+    raw: bytes,
+    directory: Path,
+    *,
+    check_files: bool = True,
+) -> ReleaseSnapshot:
+    """Validate pointer bytes exactly as load_release_pointer does.
+
+    With check_files, both artifacts it names must be regular files in
+    `directory` with the stated size and SHA-256. Without, only the
+    pointer itself is checked (for pointer bytes in transit).
+    """
+    if type(raw) is not bytes or len(raw) <= 0 or len(raw) > MAX_POINTER_BYTES:
+        raise ReleasePointerError("release pointer size is invalid")
+    try:
         document = json.loads(
             raw.decode("utf-8"),
             object_pairs_hook=_object_without_duplicates,
@@ -263,7 +285,7 @@ def load_release_pointer(directory: Path) -> ReleaseSnapshot | None:
         )
     except ReleasePointerError:
         raise
-    except (OSError, UnicodeError, json.JSONDecodeError, ValueError, RecursionError) as error:
+    except (UnicodeError, json.JSONDecodeError, ValueError, RecursionError) as error:
         raise ReleasePointerError("release pointer is not valid UTF-8 JSON") from error
     if not isinstance(document, dict) or set(document) != {
         "schema",
@@ -281,11 +303,13 @@ def load_release_pointer(directory: Path) -> ReleaseSnapshot | None:
         document["installer"],
         directory,
         "Vemals-Ears-Setup-" + version + ".exe",
+        check_files,
     )
     source = _artifact(
         document["source"],
         directory,
         "vemals-ears-member-" + version + ".zip",
+        check_files,
     )
     return ReleaseSnapshot(version, installer, source)
 

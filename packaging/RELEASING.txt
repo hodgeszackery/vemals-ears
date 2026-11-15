@@ -91,3 +91,39 @@ Any retained runtime, including one in an extracted member ZIP, must pass
 matching source/notice validation before refresh writes application files.
 Partial or changed source receipts fail closed. An outdated runtime needs an
 updated runtime-bearing member ZIP or installer.
+
+HOST SETUP RELEASES
+
+Host Setup (Hosting/) is versioned separately in Hosting/version.py
+(HOST_VERSION) and is not offered through the member update pointer. Bump
+HOST_VERSION in the reviewed change, merge it, then build the unsigned
+production installer from master with the manual Host Installer workflow:
+
+    gh workflow run host-installer.yml --ref master
+    gh run download RUN_ID -n vemals-ears-host-installer -D dist
+
+The workflow bundles the pinned AMD/Vulkan speech engine from the
+SPEECH_ENGINE_RUN_ID artifact named in .github/workflows/host-installer.yml.
+GitHub expires that artifact; keep a private copy of
+whisper-vulkan-bin-x64.zip (hash in Hosting/Installer/assets.lock.json) and
+place it in Installer/runtime-cache/ for a local build with
+packaging/build_host_installer.py. A rebuilt engine changes the hash and
+needs a lock update.
+
+Publish on the guild host from an elevated PowerShell. Check first, then
+publish; the publisher keeps backups and a rollback receipt, restarts only
+the Host downloads service and the tunnel, and leaves the member release
+untouched:
+
+    powershell -File Hosting/Publish-HostDownloads.ps1 -ArtifactDirectory dist -CheckOnly
+    powershell -File Hosting/Publish-HostDownloads.ps1 -ArtifactDirectory dist
+
+Afterwards fetch https://ears.xenon.solutions/download/vemals-ears-host/sha256
+and stream the installer to confirm the published size and SHA-256.
+
+Host moves (Hosting/transfer*.py) require the same Host Setup version on both
+PCs, or a newer receiver. A release that changes the transfer protocol or
+the delta format must say so in its notes, because an older sender is
+refused. Update the illustrated guide at /hosting (served by the shared relay
+from downtime-addons GuildHub/hosting_guide.py) together with
+Hosting/QUICKSTART.txt.
