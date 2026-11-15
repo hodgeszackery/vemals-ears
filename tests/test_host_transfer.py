@@ -1403,6 +1403,62 @@ class RecordsTests(unittest.TestCase):
         self.assertTrue(acl["protected"])
         self.assertTrue(set(acl["sids"]).issubset({acl["currentSid"], "S-1-5-18", "S-1-5-32-544", "S-1-3-4"}))
 
+    def test_existing_record_directory_is_validated_not_just_restricted(self):
+        # Astra round 2, finding A: a reused directory goes through protect_tree
+        # (owner, link and full DACL check); only a fresh one gets protect_directory.
+        calls = []
+        with mock.patch.object(transfer.setup, "protect_directory", side_effect=lambda path: calls.append(("dir", path))), \
+                mock.patch.object(transfer.setup, "protect_tree", side_effect=lambda path: calls.append(("tree", path))):
+            self.old.offer()
+            self.assertEqual(("dir", self.old.directory), calls[0])
+            self.assertTrue(all(kind == "tree" for kind, _ in calls[1:]))
+            calls.clear()
+            self.new.directory.mkdir(parents=True)
+            self.new._prepare()
+        self.assertEqual([("tree", self.new.directory)], calls)
+
+    def test_record_directory_refused_by_protect_tree_holds_no_secret(self):
+        # Astra round 2, finding A: a precreated directory that fails validation
+        # (foreign owner, link, outside grant) is never used.
+        self.old.directory.mkdir(parents=True)
+        with mock.patch.object(transfer.setup, "protect_tree",
+                               side_effect=transfer.setup.SetupError("belongs to another Windows account")):
+            with self.assertRaisesRegex(transfer.TransferError, "Could not protect the transfer record directory"):
+                self.old.offer()
+        self.assertEqual([], list(self.old.directory.iterdir()))
+
+    @unittest.skipUnless(os.name == "nt", "Windows ACL integration")
+    def test_precreated_record_directory_owned_by_another_account_is_refused(self):
+        # Astra round 2, finding A: another local account precreated the path.
+        self.old.directory.mkdir(parents=True)
+        real = transfer.setup._windows_security
+        target = os.path.normcase(str(self.old.directory))
+
+        def security(path):
+            owner, entries = real(path)
+            return ("S-1-5-21-1-2-3-1001" if os.path.normcase(str(path)) == target else owner), entries
+
+        with mock.patch.object(transfer.setup, "_windows_security", side_effect=security):
+            with self.assertRaisesRegex(transfer.TransferError, "Could not protect the transfer record directory"):
+                self.old.offer()
+        self.assertFalse((self.old.directory / "release-secret").exists())
+        self.assertFalse(self.old.receipt.exists())
+
+    @unittest.skipUnless(os.name == "nt", "Windows ACL integration")
+    def test_precreated_record_directory_with_an_outside_grant_is_rebuilt_before_the_secret(self):
+        # Astra round 2, finding A: /grant:r keeps explicit grants to other SIDs,
+        # which the release secret and receipt would then inherit.
+        self.old.directory.mkdir(parents=True)
+        (self.old.directory / "stale.txt").write_text("XENO", encoding="ascii")
+        subprocess.run(["icacls.exe", str(self.old.directory), "/grant", "*S-1-1-0:(OI)(CI)F"],
+                       check=True, capture_output=True, creationflags=subprocess.CREATE_NO_WINDOW)
+        self.assertIn("S-1-1-0", inspect_acl(self.old.directory)["sids"])
+        self.old.offer()
+        expected = {inspect_acl(self.old.directory)["currentSid"], "S-1-5-18", "S-1-5-32-544", "S-1-3-4"}
+        for entry in (self.old.directory, self.old.receipt, self.old.directory / "release-secret",
+                      self.old.directory / "stale.txt"):
+            self.assertTrue(set(inspect_acl(entry)["sids"]).issubset(expected), entry)
+
 
 if __name__ == "__main__":
     unittest.main()

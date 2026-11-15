@@ -869,8 +869,16 @@ class TransferRecords:
         if self.directory.is_symlink() or getattr(self.directory, "is_junction", lambda: False)():
             raise TransferError("The transfer record directory must not be linked.")
         try:
-            self.directory.mkdir(parents=True, exist_ok=True)
-            setup.protect_directory(self.directory)
+            try:
+                self.directory.mkdir(parents=True)
+            except FileExistsError:
+                # The path is predictable, so another account may have made it
+                # first and kept a grant, or own it. Its DACL is rebuilt and
+                # verified, and a foreign owner or link anywhere is refused,
+                # before the release secret or the receipt is used.
+                setup.protect_tree(self.directory)
+            else:
+                setup.protect_directory(self.directory)
         except (OSError, subprocess.SubprocessError, setup.SetupError):
             raise TransferError("Could not protect the transfer record directory.") from None
 
