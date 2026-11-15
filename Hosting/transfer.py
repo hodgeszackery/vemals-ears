@@ -437,10 +437,19 @@ def _erase(path: Path) -> None:
     path.unlink()
 
 
+def _is_link(path: Path) -> bool:
+    info = path.lstat()
+    return stat.S_ISLNK(info.st_mode) or bool(getattr(info, "st_file_attributes", 0) & 0x400)
+
+
 def _erase_tree(folder: Path) -> None:
-    for directory, _, files in os.walk(folder):
+    # os.walk descends into junctions even with followlinks=False; a link is
+    # never entered or overwritten, and rmtree removes the link itself.
+    for directory, folders, files in os.walk(folder):
+        folders[:] = [name for name in folders if not _is_link(Path(directory) / name)]
         for name in files:
-            _erase(Path(directory) / name)
+            if not _is_link(Path(directory) / name):
+                _erase(Path(directory) / name)
     shutil.rmtree(folder)
 
 

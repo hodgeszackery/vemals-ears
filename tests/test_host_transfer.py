@@ -854,6 +854,23 @@ class WindowsImportTests(unittest.TestCase):
         self.assertEqual(before, inspect_acl(outside / "keep.txt")["sddl"])
         self.assertEqual(["keep.txt"], sorted(path.name for path in outside.iterdir()))
 
+    def test_discard_removes_a_junction_in_staging_but_never_erases_its_target(self):
+        # Skeptic review of finding 1: a refused staging directory is discarded,
+        # and os.walk descends into junctions even with followlinks=False.
+        outside = self.root / "outside"
+        (outside / "nested").mkdir(parents=True)
+        (outside / "keep.txt").write_text("XENO outside", encoding="ascii")
+        (outside / "nested" / "deep.txt").write_text("XENO deep", encoding="ascii")
+        self.staging.mkdir(parents=True)
+        (self.staging / "secrets").mkdir()
+        (self.staging / "secrets" / "pepper").write_text("XENO pepper", encoding="ascii")
+        subprocess.run(["cmd.exe", "/c", "mklink", "/J", str(self.staging / "secrets" / "linked"), str(outside)],
+                       check=True, capture_output=True, creationflags=subprocess.CREATE_NO_WINDOW)
+        transfer.discard_staging(self.state)
+        self.assertFalse(self.staging.exists())
+        self.assertEqual("XENO outside", (outside / "keep.txt").read_text(encoding="ascii"))
+        self.assertEqual("XENO deep", (outside / "nested" / "deep.txt").read_text(encoding="ascii"))
+
     def test_precreated_staging_owned_by_another_account_is_refused(self):
         # Skeptic review of finding 1: the owner keeps WRITE_DAC whatever the DACL says.
         self.staging.mkdir(parents=True)
