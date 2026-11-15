@@ -180,6 +180,39 @@ class ServiceGuardTests(GuardCase):
             with self.assertRaisesRegex(control.HostError, "cannot be read"):
                 control.HostController(self.root / "app", self.state).transfer_hold()
 
+    def test_unsupported_receipt_state_fails_closed_everywhere(self):
+        # Astra round 2, finding B: a valid role with an unknown state passed the
+        # service check and then matched no blocked pair, so it allowed a start.
+        self.receipt("sender", "released")
+        value = json.loads(self.records.receipt.read_text(encoding="ascii"))
+        for role, state in (("sender", "relesed"), ("sender", "pending"), ("receiver", "moved"),
+                            ("receiver", "Pending"), ("sender", ""), ("sender", 1), ("receiver", None)):
+            self.records.receipt.write_text(json.dumps({**value, "role": role, "state": state}), encoding="ascii")
+            with self.subTest(role=role, state=state):
+                with self.assertRaisesRegex(service.ConfigurationError, "cannot be read"):
+                    service.transfer_receipt(self.state)
+                for start in ("relay", "worker", "admin", None):
+                    with self.assertRaisesRegex(service.ConfigurationError, "cannot be read"):
+                        service.validate_activation(self.values(), start)
+                with self.assertRaisesRegex(control.HostError, "cannot be read"):
+                    control.HostController(self.root / "app", self.state).transfer_hold()
+                with self.assertRaises(TransferError):
+                    self.records.read()
+
+    def test_receipt_state_table_is_shared_with_the_record_keeper(self):
+        # Astra round 2, finding B: one source of truth for supported receipts.
+        self.assertIs(transfer.SENDER_STATES, service.TRANSFER_STATES[transfer.SENDER])
+        self.assertIs(transfer.RECEIVER_STATES, service.TRANSFER_STATES[transfer.RECEIVER])
+        self.assertEqual({transfer.SENDER, transfer.RECEIVER}, set(service.TRANSFER_STATES))
+        for role, states in service.TRANSFER_STATES.items():
+            for state in states:
+                self.records.receipt.parent.mkdir(parents=True, exist_ok=True)
+                self.records.receipt.write_text(json.dumps({"role": role, "state": state}), encoding="ascii")
+                self.assertEqual({"role": role, "state": state}, service.transfer_receipt(self.state))
+        # Every guarded pair names a supported state.
+        for role, state in (*control.TRANSFER_HELD, control.TRANSFER_MOVED, *BLOCKED, *ALLOWED):
+            self.assertIn(state, service.TRANSFER_STATES[role])
+
     def test_host_admin_cli_is_refused_while_a_receipt_is_active(self):
         for role, state in (("sender", "offered"), *BLOCKED):
             self.receipt(role, state)

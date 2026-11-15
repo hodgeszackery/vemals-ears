@@ -98,8 +98,9 @@ NUMERIC_SETTINGS = (
 PORTABLE_SETTINGS = frozenset(REQUIRED_SETTINGS + NUMERIC_SETTINGS + ("VEMALS_EARS_CLIENT_VERSION",))
 
 SENDER, RECEIVER = "sender", "receiver"
-SENDER_STATES = ("offered", "sending", "released", "moved", "cancelled")
-RECEIVER_STATES = ("pending", "active", "discarded")
+# One table, shared with the start guards in Hosting.service.
+SENDER_STATES = service.TRANSFER_STATES[SENDER]
+RECEIVER_STATES = service.TRANSFER_STATES[RECEIVER]
 # A released host never goes back: the only way on from "released" is "moved".
 _TRANSITIONS = {
     SENDER: {"offered": {"sending", "cancelled"}, "sending": {"released", "cancelled"},

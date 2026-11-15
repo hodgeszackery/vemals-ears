@@ -53,6 +53,13 @@ TRANSFER_PENDING_ERROR = ("This host was received from another PC and is waiting
 TRANSFER_ADMIN_ERROR = ("A host transfer is open on this PC. Finish or cancel it in the Host app "
                         "before changing relay records.")
 TRANSFER_RECORD_ERROR = "The transfer record on this PC cannot be read. Nothing was started."
+# Every receipt state each role can be in. Hosting.transfer uses this table
+# too, so a state the record keeper would reject is never read here as "no
+# restriction" (Hosting.transfer imports this module, not the other way).
+TRANSFER_STATES = {
+    "sender": ("offered", "sending", "released", "moved", "cancelled"),
+    "receiver": ("pending", "active", "discarded"),
+}
 
 
 class ConfigurationError(ValueError):
@@ -90,8 +97,10 @@ def transfer_receipt(state_directory: str | Path) -> dict:
         value = json.loads(raw.decode("ascii")) if len(raw) <= 65_536 else None
     except (ValueError, UnicodeError, RecursionError):
         value = None
-    if (not isinstance(value, dict) or value.get("role") not in ("sender", "receiver")
-            or not isinstance(value.get("state"), str)):
+    if (not isinstance(value, dict) or type(value.get("role")) is not str
+            or value["role"] not in TRANSFER_STATES or type(value.get("state")) is not str
+            or value["state"] not in TRANSFER_STATES[value["role"]]):
+        # An unknown or misspelt state is damage, not an unrestricted host.
         raise ConfigurationError(TRANSFER_RECORD_ERROR)
     return {"role": value["role"], "state": value["state"]}
 
