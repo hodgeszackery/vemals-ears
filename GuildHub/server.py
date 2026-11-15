@@ -138,6 +138,11 @@ TRANSFER_OFFER_TTL_SECONDS = 10 * 60
 # confirmation, reported by the offer side, burns one of the three.
 TRANSFER_CLAIM_HELLO_SECONDS = 5.0
 TRANSFER_CLAIM_CONFIRM_SECONDS = 10.0
+# A freeze is confirmed only once the database writes it would have refused,
+# but had already admitted, have landed - so none can commit after the
+# sender's snapshot. Bounded well inside the Host's ten second wait; a write
+# still running at the bound reports the relay as not frozen.
+TRANSFER_FREEZE_DRAIN_SECONDS = 5.0
 TRANSFER_CLAIM_CONNECTION_BUDGET = 20
 TRANSFER_CLAIM_FAILURE_BUDGET = 3
 TRANSFER_FROZEN_CODE = "transfer_in_progress"
@@ -1132,6 +1137,9 @@ class GuildHubServer:
         self._release_validation_lock = asyncio.Lock()
         self._transfer_offer: _TransferOffer | None = None
         self._transfer_freeze_owner: ServerConnection | None = None
+        # Database writes of the kinds a freeze refuses (viewer binds) that
+        # were admitted before it; the freeze waits for them.
+        self._freeze_guarded_writes: set[asyncio.Future[object]] = set()
 
     async def _published_release(self) -> PublishedRelease:
         async with self._release_validation_lock:
@@ -1530,6 +1538,10 @@ class GuildHubServer:
                 request.viewer_token,
             )
         )
+        # Admitted before any freeze (no await since the check above), so a
+        # freeze that arrives now waits for this write before confirming.
+        self._freeze_guarded_writes.add(operation)
+        operation.add_done_callback(self._freeze_guarded_writes.discard)
         try:
             linked = bool(await asyncio.shield(operation))
         except asyncio.CancelledError:
@@ -2508,6 +2520,21 @@ class GuildHubServer:
         if not offer.confirmed:
             await self._drop_transfer_claim(offer, claim, "confirm_timeout")
 
+    async def _drain_freeze_guarded_writes(self) -> bool:
+        pending = set(self._freeze_guarded_writes)
+        if not pending:
+            return True
+        _done, still_running = await asyncio.wait(
+            pending, timeout=TRANSFER_FREEZE_DRAIN_SECONDS
+        )
+        if still_running:
+            LOGGER.warning(
+                "host transfer freeze: %d admitted write(s) still running",
+                len(still_running),
+            )
+            return False
+        return True
+
     async def _transfer_control(
         self, offer: _TransferOffer, payload: dict[str, object]
     ) -> None:
@@ -2516,9 +2543,14 @@ class GuildHubServer:
         if kind in {"transfer_freeze", "transfer_unfreeze"}:
             if set(payload) != {"type"}:
                 raise GuildHubProtocolError("unexpected transfer control field")
+            drained = True
             if kind == "transfer_freeze":
                 self._transfer_freeze_owner = offer.connection
                 self._clear_viewer_links()
+                # New binds are refused from here on; the ones admitted
+                # earlier may still be writing and must land before the
+                # Host is told to snapshot.
+                drained = await self._drain_freeze_guarded_writes()
             elif self._transfer_freeze_owner is offer.connection:
                 self._transfer_freeze_owner = None
             LOGGER.info(
@@ -2526,9 +2558,15 @@ class GuildHubServer:
                 "freeze" if kind == "transfer_freeze" else "unfreeze",
             )
             # Reports the effective state: the flag file can keep the relay
-            # frozen after the socket lets go.
+            # frozen after the socket lets go. A freeze whose admitted
+            # writes did not finish in time is not reported as frozen, so
+            # the Host does not take its snapshot.
             await self._transfer_notice(
-                offer, {"type": "transfer_frozen", "frozen": self.transfer_frozen}
+                offer,
+                {
+                    "type": "transfer_frozen",
+                    "frozen": self.transfer_frozen and drained,
+                },
             )
             return
         if kind in {"transfer_confirmed", "transfer_failed"}:

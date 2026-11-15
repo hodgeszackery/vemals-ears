@@ -11,6 +11,7 @@ relay.
 import asyncio
 import os
 import tempfile
+import threading
 import unittest
 from dataclasses import replace
 from pathlib import Path
@@ -729,6 +730,70 @@ class TransferRelayTests(unittest.IsolatedAsyncioTestCase):
                 paired["device_id"], paired["device_token"]
             ),
         )
+
+    async def start_blocked_bind(self):
+        """A viewer bind admitted before the freeze, its write held mid-way."""
+        paired, _code = await self.pair()
+        link = await self.request_viewer_link(paired)
+        offer = await self.open_offer()
+        publisher, _authentication = await self.open_publisher()
+        self.sockets.append(publisher)
+        entered = threading.Event()
+        release = threading.Event()
+        original = self.store.bind_viewer_token
+
+        def held(*arguments):
+            entered.set()
+            release.wait(30)
+            return original(*arguments)
+
+        patcher = patch.object(self.store, "bind_viewer_token", held)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        self.addCleanup(release.set)
+        await publisher.send(
+            encode_message(
+                {"type": "viewer_link", "code": link["code"], "viewer_token": VIEWER}
+            )
+        )
+        await self.wait_until(entered.is_set)
+        return paired, offer, publisher, release
+
+    async def test_freeze_waits_for_an_admitted_viewer_bind(self):
+        paired, offer, publisher, release = await self.start_blocked_bind()
+        await self.control(offer, "transfer_freeze")
+        # The write is still running: confirming now would let it commit
+        # after the sender's snapshot, outside the delta.
+        with self.assertRaises(TimeoutError):
+            await self.notice(offer, timeout=0.3)
+        release.set()
+        self.assertEqual(
+            {"type": "transfer_frozen", "frozen": True}, await self.notice(offer)
+        )
+        # By the time the freeze is confirmed the binding is on disk.
+        self.assertEqual(
+            VIEWER,
+            CredentialStore(self.database, relay_tests.PEPPER)
+            .authenticate_device_viewer_token(
+                paired["device_id"], paired["device_token"]
+            ),
+        )
+        self.assertTrue(
+            decode_message(await asyncio.wait_for(publisher.recv(), 10))["linked"]
+        )
+
+    async def test_freeze_reports_not_frozen_when_an_admitted_bind_overruns(self):
+        _paired, offer, _publisher, release = await self.start_blocked_bind()
+        self.assertGreater(10.0, server.TRANSFER_FREEZE_DRAIN_SECONDS)
+        with patch.object(server, "TRANSFER_FREEZE_DRAIN_SECONDS", 0.2):
+            await self.control(offer, "transfer_freeze")
+            self.assertEqual(
+                {"type": "transfer_frozen", "frozen": False},
+                await self.notice(offer),
+            )
+        # Still refusing new binds and pairing: the Host decides what next.
+        self.assertTrue(self.application.transfer_frozen)
+        release.set()
 
     async def test_freeze_leaves_profile_writes_and_typed_chat_alone(self):
         paired, _code = await self.pair()
