@@ -232,6 +232,7 @@ class FlowCase(unittest.TestCase):
             # Real ACL calls are exercised by the full-move test; elsewhere they only cost time.
             self.enterContext(mock.patch.object(setup, "protect_directory"))
             self.enterContext(mock.patch.object(setup, "restrict_descendants"))
+            self.enterContext(mock.patch.object(setup, "protect_tree"))
         self.root = Path(self.enterContext(tempfile.TemporaryDirectory())).resolve()
         self.log, self.violations = [], []
         state, self.device = make_state(self.root / "A")
@@ -1083,13 +1084,10 @@ class FailureTests(FlowCase):
         self.assertTrue(staging.is_dir())
         (staging / "profile").mkdir()
         (staging / "profile" / "runtime.txt").write_text("XENO runtime", encoding="ascii")
-        with mock.patch.object(setup, "protect_directory") as protect, \
-                mock.patch.object(setup, "restrict_descendants") as descendants:
+        with mock.patch.object(setup, "protect_tree") as protect:
             self.assertEqual(staging, self.receiver(self.b, self.relay).preflight())
         protect.assert_called_once_with(staging)
-        descendants.assert_called_once_with(staging)
-        with mock.patch.object(setup, "protect_directory"), \
-                mock.patch.object(setup, "restrict_descendants", side_effect=setup.SetupError("XENO acl failed")), \
+        with mock.patch.object(setup, "protect_tree", side_effect=setup.SetupError("XENO acl failed")), \
                 self.assertRaisesRegex(TransferError, "Could not protect the staging directory"):
             self.receiver(self.b, self.relay).preflight()
 

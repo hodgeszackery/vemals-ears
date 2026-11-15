@@ -821,6 +821,56 @@ class WindowsImportTests(unittest.TestCase):
         with self.assertRaisesRegex(transfer.TransferError, "already has a host"):
             transfer.protect_staging(self.state)
 
+    def test_precreated_staging_with_an_explicit_outside_grant_on_itself_is_rebuilt(self):
+        # Skeptic review of finding 1: /inheritance:r and /grant:r keep explicit
+        # ACEs for other SIDs, which every reset descendant would then inherit.
+        self.staging.mkdir(parents=True)
+        (self.staging / "profile").mkdir()
+        (self.staging / "profile" / "runtime.txt").write_text("XENO runtime", encoding="ascii")
+        subprocess.run(["icacls.exe", str(self.staging), "/grant", "*S-1-1-0:(OI)(CI)F"],
+                       check=True, capture_output=True, creationflags=subprocess.CREATE_NO_WINDOW)
+        self.assertIn("S-1-1-0", inspect_acl(self.staging)["sids"])
+        self.assertEqual(self.staging, transfer.protect_staging(self.state))
+        self.assert_private_acl(self.staging)
+        (self.staging / "secrets").mkdir()
+        (self.staging / "secrets" / "pepper").write_text("XENO pepper", encoding="ascii")
+        for entry in ("profile", "profile/runtime.txt", "secrets", "secrets/pepper"):
+            self.assertNotIn("S-1-1-0", inspect_acl(self.staging / entry)["sids"], entry)
+
+    def test_precreated_staging_with_a_junction_inside_is_refused_without_touching_its_target(self):
+        # Skeptic review of finding 1: icacls /reset /T follows a junction, and
+        # import_state would write the bot token through staging/secrets.
+        outside = self.root / "outside"
+        outside.mkdir()
+        (outside / "keep.txt").write_text("XENO outside", encoding="ascii")
+        subprocess.run(["icacls.exe", str(outside / "keep.txt"), "/grant", "*S-1-1-0:(R)"],
+                       check=True, capture_output=True, creationflags=subprocess.CREATE_NO_WINDOW)
+        before = inspect_acl(outside / "keep.txt")["sddl"]
+        self.staging.mkdir(parents=True)
+        subprocess.run(["cmd.exe", "/c", "mklink", "/J", str(self.staging / "secrets"), str(outside)],
+                       check=True, capture_output=True, creationflags=subprocess.CREATE_NO_WINDOW)
+        with self.assertRaisesRegex(transfer.TransferError, "Could not protect the staging directory"):
+            transfer.protect_staging(self.state)
+        self.assertEqual(before, inspect_acl(outside / "keep.txt")["sddl"])
+        self.assertEqual(["keep.txt"], sorted(path.name for path in outside.iterdir()))
+
+    def test_precreated_staging_owned_by_another_account_is_refused(self):
+        # Skeptic review of finding 1: the owner keeps WRITE_DAC whatever the DACL says.
+        self.staging.mkdir(parents=True)
+        (self.staging / "profile").mkdir()
+        real = transfer.setup._windows_security
+        foreign = "S-1-5-21-1000000000-1000000000-1000000000-1999"
+
+        def security(path):
+            owner, entries = real(path)
+            return (foreign if Path(path).name == "profile" else owner), entries
+        with mock.patch.object(transfer.setup, "_windows_security", side_effect=security), \
+                mock.patch.object(transfer.setup, "protect_directory") as protect, \
+                self.assertRaisesRegex(transfer.TransferError, "Could not protect the staging directory"):
+            transfer.protect_staging(self.state)
+        protect.assert_not_called()
+        self.assertEqual(self.staging, transfer.protect_staging(self.state))
+
     def test_import_regenerates_paths_marks_pending_and_publishes_by_one_rename(self):
         staging = self.stage()
         (staging / "profile/WoWVoiceCaptions/runtime").mkdir(parents=True)
