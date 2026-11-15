@@ -231,6 +231,7 @@ class FlowCase(unittest.TestCase):
         if not self.protect:
             # Real ACL calls are exercised by the full-move test; elsewhere they only cost time.
             self.enterContext(mock.patch.object(setup, "protect_directory"))
+            self.enterContext(mock.patch.object(setup, "restrict_descendants"))
         self.root = Path(self.enterContext(tempfile.TemporaryDirectory())).resolve()
         self.log, self.violations = [], []
         state, self.device = make_state(self.root / "A")
@@ -1047,6 +1048,27 @@ class FailureTests(FlowCase):
             self.receiver(self.b, self.relay).preflight()
         del self.b.scm[WORKER]
         self.assertEqual(transfer.staging_path(self.b.state), self.receiver(self.b, self.relay).preflight())
+
+    @WINDOWS
+    def test_reused_or_precreated_staging_is_protected_again_before_any_state_is_written(self):
+        # Astra finding 1: a staging directory whose ACL step failed, or one
+        # something else created, must not be trusted as already private.
+        staging = transfer.staging_path(self.b.state)
+        with mock.patch.object(setup, "protect_directory", side_effect=setup.SetupError("XENO acl failed")), \
+                self.assertRaisesRegex(TransferError, "protected staging directory"):
+            self.receiver(self.b, self.relay).preflight()
+        self.assertTrue(staging.is_dir())
+        (staging / "profile").mkdir()
+        (staging / "profile" / "runtime.txt").write_text("XENO runtime", encoding="ascii")
+        with mock.patch.object(setup, "protect_directory") as protect, \
+                mock.patch.object(setup, "restrict_descendants") as descendants:
+            self.assertEqual(staging, self.receiver(self.b, self.relay).preflight())
+        protect.assert_called_once_with(staging)
+        descendants.assert_called_once_with(staging)
+        with mock.patch.object(setup, "protect_directory"), \
+                mock.patch.object(setup, "restrict_descendants", side_effect=setup.SetupError("XENO acl failed")), \
+                self.assertRaisesRegex(TransferError, "Could not protect the staging directory"):
+            self.receiver(self.b, self.relay).preflight()
 
     def test_old_host_must_be_a_running_standalone_host_without_another_move(self):
         self.a.scm[RELAY]["status"] = "Stopped"

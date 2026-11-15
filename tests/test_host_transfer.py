@@ -800,6 +800,27 @@ class WindowsImportTests(unittest.TestCase):
             transfer.create_staging(self.state)
         self.assertEqual(["acl"], events)
 
+    def test_reused_staging_and_its_descendants_get_the_private_acl_again(self):
+        # Astra finding 1: a precreated directory, with entries holding their
+        # own explicit grants, is restricted before any secret is written.
+        self.staging.mkdir(parents=True)
+        (self.staging / "profile").mkdir()
+        (self.staging / "profile" / "runtime.txt").write_text("XENO runtime", encoding="ascii")
+        (self.staging / "top.txt").write_text("XENO", encoding="ascii")
+        subprocess.run(["icacls.exe", str(self.staging / "profile" / "runtime.txt"), "/grant", "*S-1-1-0:(F)"],
+                       check=True, capture_output=True, creationflags=subprocess.CREATE_NO_WINDOW)
+        self.assertIn("S-1-1-0", inspect_acl(self.staging / "profile" / "runtime.txt")["sids"])
+        self.assertEqual(self.staging, transfer.protect_staging(self.state))
+        self.assert_private_acl(self.staging)
+        expected = {inspect_acl(self.staging)["currentSid"], "S-1-5-18", "S-1-5-32-544", "S-1-3-4"}
+        for entry in ("profile", "profile/runtime.txt", "top.txt"):
+            acl = inspect_acl(self.staging / entry)
+            self.assertFalse(acl["protected"], entry)
+            self.assertTrue(set(acl["sids"]).issubset(expected), entry)
+        self.state.mkdir()
+        with self.assertRaisesRegex(transfer.TransferError, "already has a host"):
+            transfer.protect_staging(self.state)
+
     def test_import_regenerates_paths_marks_pending_and_publishes_by_one_rename(self):
         staging = self.stage()
         (staging / "profile/WoWVoiceCaptions/runtime").mkdir(parents=True)

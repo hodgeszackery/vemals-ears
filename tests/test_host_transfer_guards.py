@@ -43,6 +43,7 @@ ALLOWED = (("sender", "offered"), ("sender", "cancelled"), ("receiver", "active"
 class GuardCase(unittest.TestCase):
     def setUp(self):
         self.enterContext(mock.patch.object(setup, "protect_directory"))
+        self.enterContext(mock.patch.object(setup, "restrict_descendants"))
         self.root = Path(self.enterContext(tempfile.TemporaryDirectory())).resolve()
         self.state, self.device = make_state(self.root)
         self.records = transfer.TransferRecords(service.transfer_directory(self.state))

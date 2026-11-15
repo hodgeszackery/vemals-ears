@@ -659,6 +659,27 @@ def create_staging(state: Path) -> Path:
         raise TransferError("Could not create the protected staging directory. Nothing was imported.") from None
 
 
+
+def protect_staging(state: Path) -> Path:
+    """Restrict an existing staging directory, descendants included, before it holds any secret.
+
+    A directory left by an attempt whose ACL step failed, or one created by
+    something else, is never trusted to already be private.
+    """
+    state = _destination(state)
+    staging = _staging(state)
+    try:
+        if state.exists():
+            raise TransferError("This PC already has a host. A transfer needs an empty Host install.")
+        if not staging.is_dir():
+            raise TransferError("The transfer staging directory is missing. Start the transfer again.")
+        setup.protect_directory(staging)
+        setup.restrict_descendants(staging)
+        return staging
+    except (OSError, subprocess.SubprocessError, setup.SetupError):
+        raise TransferError("Could not protect the staging directory. Nothing was imported.") from None
+
+
 def _state_files() -> list:
     return [*BLOBS, "relay.env", "relay.tmp", "host-settings.json"]
 

@@ -87,6 +87,31 @@ def protect_directory(path: Path) -> None:
         raise SetupError("Could not restrict the state directory's Windows permissions.")
 
 
+
+def restrict_descendants(path: Path) -> None:
+    """Make everything below a protected directory inherit only its ACL.
+
+    A reused directory may hold entries created before its ACL was applied,
+    or entries with their own explicit grants; both are reset here.
+    """
+    if not any(path.iterdir()):
+        return
+    if os.name != "nt":
+        for root, directories, files in os.walk(path):
+            for name in directories + files:
+                entry = Path(root, name)
+                if not entry.is_symlink():
+                    entry.chmod(entry.stat().st_mode & 0o700)
+        return
+    flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    result = subprocess.run(
+        ["icacls.exe", str(path / "*"), "/reset", "/T", "/Q"],
+        capture_output=True, text=True, creationflags=flags,
+    )
+    if result.returncode:
+        raise SetupError("Could not restrict the Windows permissions inside the state directory.")
+
+
 def create_configuration(
     state: Path, *, public_hostname: str, guild_id: str, application_id: str,
     bot_token: str, guild_name: str = "Vemal's Ears", port: int = 8770,

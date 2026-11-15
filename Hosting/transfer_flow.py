@@ -1042,7 +1042,9 @@ class Receiver:
             raise TransferError(transfer.ARCHIVE_ERROR)
         staging = self.staging
         if staging.is_dir() and not any((staging / name).exists() for name in transfer._state_files()):
-            return staging      # an earlier attempt's prepared runtime, holding no host state
+            # An earlier attempt's prepared runtime, holding no host state. Its
+            # ACL is applied again: that attempt may have failed before it was.
+            return transfer.protect_staging(self.host.state)
         return transfer.create_staging(self.host.state)
 
     def prepare(self, progress=lambda message: None) -> None:
