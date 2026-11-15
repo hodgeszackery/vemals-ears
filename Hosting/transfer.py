@@ -39,7 +39,8 @@ import threading
 import time
 
 from GuildHub import relay_env
-from GuildHub.release_pointer import MAX_POINTER_BYTES, POINTER_FILENAME
+from GuildHub.release_pointer import (MAX_POINTER_BYTES, POINTER_FILENAME, ReleasePointerError,
+                                     release_pointer_from_bytes)
 from Hosting import handoff, service, setup, transfer_pake
 from Hosting.version import HOST_VERSION
 
@@ -121,6 +122,7 @@ RECORD_ERROR = "The transfer record cannot be read. Nothing was changed."
 # the copy on this PC may be the only one left.
 WRONG_RELEASE_CODE = ("That release code does not match this transfer. Read it again on the old PC, on "
                       "This host has moved, and type it exactly. Do not discard the copy on this PC.")
+RELEASE_MISMATCH = "The release pointer does not match the member downloads."
 _HEX32 = re.compile(r"[0-9a-f]{32}")
 _HEX64 = re.compile(r"[0-9a-f]{64}")
 _ARTIFACT_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}")
@@ -219,6 +221,10 @@ def _blob(name: str, data: bytes, guild_id: str) -> None:
         _require(data[:16] == b"SQLite format 3\x00")
     elif name == POINTER:
         _require(type(_json(data)) is dict)
+        try:
+            release_pointer_from_bytes(data, Path("."), check_files=False)
+        except ReleasePointerError:
+            raise TransferError(DATA_ERROR) from None
     else:
         _ledger(data, guild_id, mapping=name == "consent/mapping.json")
 
@@ -561,6 +567,29 @@ def describe_artifact(path: Path) -> dict:
     return _artifact({"name": path.name, "size": size, "sha256": digest.hexdigest()})
 
 
+def check_release(pointer, artifacts, folder: Path | None = None) -> None:
+    """The release pointer (bytes or None) must name exactly the listed artifacts.
+
+    A pointer names one installer and one source bundle, and the artifact
+    list must be those two, by name, size and SHA-256. Without a pointer a
+    versioned installer cannot be served, so none may be listed. With
+    `folder`, the relay's own pointer validation also checks the files there.
+    """
+    listed = {(entry["name"], entry["size"], entry["sha256"]) for entry in artifacts}
+    try:
+        if pointer is None:
+            if any(name.startswith("Vemals-Ears-Setup-") for name, _size, _digest in listed):
+                raise TransferError(RELEASE_MISMATCH)
+            return
+        snapshot = release_pointer_from_bytes(pointer, Path(folder) if folder is not None else Path("."),
+                                              check_files=folder is not None)
+    except ReleasePointerError:
+        raise TransferError(RELEASE_MISMATCH) from None
+    named = {(item.filename, item.bytes, item.sha256) for item in (snapshot.installer, snapshot.source)}
+    if named != listed or len(listed) != len(artifacts):
+        raise TransferError(RELEASE_MISMATCH)
+
+
 def collect_state(state: Path, *, transfer_id: str, release_commitment: bytes,
                   work_directory: Path, artifacts=()) -> Bundle:
     """Read everything a transfer moves from a standalone host whose worker is stopped.
@@ -617,6 +646,13 @@ def collect_state(state: Path, *, transfer_id: str, release_commitment: bytes,
             pointer = Path(values["VEMALS_EARS_DOWNLOAD_FILE"]).parent / POINTER_FILENAME
             if pointer.exists():
                 blobs[POINTER] = _regular(pointer, MAX_POINTER_BYTES)
+        # A release published after the caller listed the artifacts would
+        # pair a new pointer with the old files: refuse, nothing is moved.
+        try:
+            check_release(blobs.get(POINTER), artifacts)
+        except TransferError:
+            raise TransferError("The member downloads on this host changed during the move. "
+                                "Nothing was moved.") from None
         # Last, so the copy is as fresh as it can be.
         blobs[DATABASE] = snapshot_database(private("VEMALS_EARS_DATABASE", DATABASE), work_directory)
         return build_bundle(
@@ -711,9 +747,10 @@ def import_state(state: Path, bundle: Bundle) -> dict:
 
     relay.env is regenerated with the destination's own paths and the host is
     marked activation-pending. Every artifact the manifest names must already
-    be mirrored into staging/downloads and match by size and SHA-256; only then
-    is the release pointer written, last. On failure the files written here
-    are erased and the prepared runtime is left alone.
+    be mirrored into staging/downloads and match by size and SHA-256, and the
+    release pointer must name exactly those mirrored files (the relay's own
+    pointer validation); only then is the pointer written, last. On failure
+    the files written here are erased and the prepared runtime is left alone.
     """
     bundle = validate_bundle(bundle)
     state = _destination(state)
@@ -728,6 +765,11 @@ def import_state(state: Path, bundle: Bundle) -> dict:
         for artifact in bundle.manifest["artifacts"]:
             if describe_artifact(staging / "downloads" / artifact["name"]) != artifact:
                 raise TransferError("A member download does not match the one the old host serves. Nothing was imported.")
+        try:
+            check_release(bundle.blobs.get(POINTER), bundle.manifest["artifacts"], staging / "downloads")
+        except TransferError:
+            raise TransferError("The member release from the old host does not match its downloads. "
+                                "Nothing was imported.") from None
     except OSError:
         raise TransferError(failure) from None
     settings = bundle.manifest["settings"]

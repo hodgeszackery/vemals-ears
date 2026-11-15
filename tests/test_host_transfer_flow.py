@@ -26,7 +26,8 @@ from GuildHub.store import CredentialStore
 from Hosting import control, service, setup, transfer, transfer_flow, transfer_net, transfer_pake
 from Hosting.transfer import TransferError
 
-from tests.test_host_transfer import APPLICATION, CONSENT, GUILD, MAPPING, PEPPER, PUBLISHER, make_state
+from tests.test_host_transfer import (APPLICATION, CONSENT, GUILD, MAPPING, PEPPER, PUBLISHER, RELEASE, make_state,
+                                      pointer_bytes)
 
 
 RELAY, WORKER, TUNNEL = control.RELAY, control.WORKER, control.TUNNEL
@@ -239,6 +240,8 @@ class FlowCase(unittest.TestCase):
         self.log, self.violations = [], []
         state, self.device = make_state(self.root / "A")
         (state / "downloads" / transfer.POINTER_FILENAME).unlink()
+        for name in RELEASE:
+            (state / "downloads" / name).unlink()
         (state / "downloads/Vemals-Ears-Setup.exe").write_bytes(INSTALLER)
         (state / "downloads/vemals-ears-member.zip").write_bytes(SOURCE)
         self.a = FakeHost(self.root / "A", state, "A", self.log, self.check)
@@ -1108,6 +1111,54 @@ class FailureTests(FlowCase):
         self.assertNotIn("bundle", self.spy.sent)
         self.assertIn("receiver_error", outcome)
         self.assert_empty(self.b)
+
+    def publish_release(self):
+        """A member release lands on the old host: two versioned files, then the pointer."""
+        for name, data in RELEASE.items():
+            (self.a.state / "downloads" / name).write_bytes(data)
+        (self.a.state / "downloads" / transfer.POINTER_FILENAME).write_bytes(pointer_bytes())
+
+    def test_a_release_published_after_the_artifact_recheck_stops_the_move_on_the_old_host(self):
+        # Astra round 4: published between the recheck and collect_state()
+        # reading the pointer, the bundle would carry the new pointer with
+        # the old file list, and the new relay could not serve downloads.
+        collect = transfer.collect_state
+
+        def collect_state(*arguments, **options):
+            self.publish_release()
+            return collect(*arguments, **options)
+
+        with mock.patch.object(transfer, "collect_state", collect_state):
+            outcome = self.move(self.a, self.b, self.relay)
+        self.assertIn("member downloads on this host changed", str(outcome["sender_error"]))
+        self.assert_restored(outcome)
+        self.assertNotIn("bundle", self.spy.sent)
+        self.assertIn("receiver_error", outcome)
+        self.assert_empty(self.b)
+
+    def test_the_new_pc_refuses_a_pointer_that_does_not_match_the_mirrored_downloads(self):
+        # The receiver's own check, with the sender's bypassed: the move fails
+        # before STAGED, nothing is published there and the old host restores.
+        collect = transfer.collect_state
+
+        def collect_state(*arguments, **options):
+            bundle = collect(*arguments, **options)
+            self.publish_release()
+            return transfer.build_bundle(
+                transfer_id=bundle.manifest["transfer_id"],
+                release_commitment=bytes.fromhex(bundle.manifest["release_commitment"]),
+                settings=bundle.manifest["settings"], tunnel_enabled=bundle.manifest["tunnel_enabled"],
+                blobs={**bundle.blobs, transfer.POINTER: pointer_bytes()}, artifacts=bundle.manifest["artifacts"])
+
+        with mock.patch.object(transfer, "collect_state", collect_state):
+            outcome = self.move(self.a, self.b, self.relay)
+        self.assertIn("does not match its downloads", str(outcome["receiver_error"]))
+        self.assertIn("Nothing was kept on this PC", str(outcome["receiver_error"]))
+        self.assert_restored(outcome)
+        self.assert_empty(self.b)
+        # Only the prepared speech runtime may stay; nothing imported was kept.
+        staging = transfer.staging_path(self.b.state)
+        self.assertEqual([], [name for name in transfer._state_files() if (staging / name).exists()])
 
     def test_close_from_another_thread_only_cancels_once_the_move_runs(self):
         sender = self.sender(self.a, self.relay)

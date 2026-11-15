@@ -997,8 +997,9 @@ class ArtifactTests(GuardCase):
         self.assertEqual(listed, transfer.card_artifacts(json.loads(json.dumps(listed))))
 
     def test_pointer_names_the_installer_and_source_and_a_damaged_pointer_stops_the_move(self):
+        (self.downloads() / transfer.POINTER_FILENAME).write_bytes(b'{"XENO":"damaged pointer"}')
         with self.assertRaisesRegex(TransferError, "damaged"):
-            transfer.served_artifacts(self.state)      # the synthetic pointer is not a valid one
+            transfer.served_artifacts(self.state)
         files = {"Vemals-Ears-Setup-2.0.0.exe": b"XENO pointed installer",
                  "vemals-ears-member-2.0.0.zip": b"XENO pointed source"}
         for name, data in files.items():

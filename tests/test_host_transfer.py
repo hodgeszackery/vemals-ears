@@ -30,7 +30,23 @@ BOT_TOKEN = "XENO_synthetic_discord_bot_token"
 PUBLISHER = "XENO_synthetic_stable_publisher_token"
 PEPPER = "XENO_synthetic_pepper_0123456789_abcdefghijklmnop"
 TUNNEL = "XENO_synthetic_tunnel_token_0123456789abcdef"
-POINTER = b'{"XENO":"synthetic pointer"}\n'
+# A real release: the pointer names these two files by size and SHA-256.
+RELEASE = {"Vemals-Ears-Setup-1.4.0.exe": b"XENO synthetic pointed installer",
+           "vemals-ears-member-1.4.0.zip": b"XENO synthetic pointed source"}
+ARTIFACTS = [{"name": name, "size": len(data), "sha256": hashlib.sha256(data).hexdigest()}
+             for name, data in RELEASE.items()]
+
+
+def pointer_bytes(version="1.4.0", installer=None, source=None):
+    installer, source = installer or ARTIFACTS[0], source or ARTIFACTS[1]
+    return (json.dumps({"schema": 1, "version": version,
+                        "installer": {"filename": installer["name"], "bytes": installer["size"],
+                                      "sha256": installer["sha256"]},
+                        "source": {"filename": source["name"], "bytes": source["size"],
+                                   "sha256": source["sha256"]}}) + "\n").encode("ascii")
+
+
+POINTER = pointer_bytes()
 KEYS = SimpleNamespace(bundle_enc=b"\x11" * 32, bundle_mac=b"\x22" * 32, control_mac=b"\x33" * 32)
 SECRET = b"\x5a" * 32
 COMMITMENT = transfer_pake.release_commitment(TRANSFER, SECRET)
@@ -110,6 +126,8 @@ def make_state(root):
     (state / "consent/mapping.json").write_text(json.dumps(MAPPING, indent=2), encoding="ascii")
     (state / "consent/sessions.json").write_text('{"XENO":"never moved"}', encoding="ascii")
     (state / "logs/worker.log").write_text("XENO log never moved", encoding="ascii")
+    for name, data in RELEASE.items():
+        (state / "downloads" / name).write_bytes(data)
     (state / "downloads" / transfer.POINTER_FILENAME).write_bytes(POINTER)
     device = make_database(state / "relay/guild-hub.sqlite3")
     return state, device
@@ -205,7 +223,8 @@ class BundleTests(unittest.TestCase):
             "secrets/publisher-token": [b"short", b"XENO+invalid/publisher=token+0123456789abcdef"],
             "secrets/pepper": [b"XENO_too_short"],
             transfer.TUNNEL_TOKEN: [b"cloudflared service install XENO_0123456789abcdef0123456789"],
-            transfer.POINTER: [b"[1]", b'{"a":1,"a":2}', b"not json"],
+            transfer.POINTER: [b"[1]", b'{"a":1,"a":2}', b"not json", b'{"XENO":"synthetic pointer"}',
+                               pointer_bytes(version="1.4"), pointer_bytes().replace(b"1.4.0.exe", b"9.9.9.exe")],
         }
         for name, values in cases.items():
             for value in values:
@@ -657,7 +676,8 @@ class CollectTests(unittest.TestCase):
         self.work = self.root / "work"
 
     def collect(self, **changes):
-        arguments = {"transfer_id": TRANSFER, "release_commitment": COMMITMENT, "work_directory": self.work}
+        arguments = {"transfer_id": TRANSFER, "release_commitment": COMMITMENT, "work_directory": self.work,
+                     "artifacts": ARTIFACTS}
         arguments.update(changes)
         return transfer.collect_state(self.state, **arguments)
 
@@ -704,6 +724,22 @@ class CollectTests(unittest.TestCase):
         self.assertFalse(collected.manifest["tunnel_enabled"])
         self.assertEqual({}, json.loads(collected.blobs["consent/consent.json"])["entries"])
         self.assertEqual("Vemals-Ears-Setup.exe", collected.manifest["artifacts"][0]["name"])
+
+    def test_a_pointer_that_does_not_name_the_listed_artifacts_stops_the_collect(self):
+        # Astra round 4: a release published between the artifact recheck
+        # and the pointer read pairs a new pointer with the old file list.
+        rolling = [{"name": "Vemals-Ears-Setup.exe", "size": 4, "sha256": "b" * 64}]
+        newer = [{**ARTIFACTS[0], "sha256": "c" * 64}, ARTIFACTS[1]]
+        for name, artifacts in (("rolling list", rolling), ("other hash", newer), ("one of two", ARTIFACTS[:1]),
+                                ("extra file", ARTIFACTS + rolling), ("nothing listed", [])):
+            with self.subTest(case=name), \
+                    self.assertRaisesRegex(transfer.TransferError, "changed during the move.*Nothing was moved"):
+                self.collect(artifacts=artifacts)
+        # A pointer gone since the listing leaves a versioned installer it alone could serve.
+        (self.state / "downloads" / transfer.POINTER_FILENAME).unlink()
+        with self.assertRaisesRegex(transfer.TransferError, "changed during the move"):
+            self.collect(artifacts=ARTIFACTS)
+        self.assertFalse(self.work.exists())     # refused before any database snapshot
 
     def test_unsynced_consent_damaged_ledgers_and_foreign_paths_abort(self):
         marker = self.state / "consent/consent.json.dirty"
@@ -761,12 +797,9 @@ class WindowsImportTests(unittest.TestCase):
         self.addCleanup(self.folder.cleanup)
         self.root = Path(self.folder.name).resolve()
         source, self.device = make_state(self.root)
-        self.installer = b"XENO synthetic member installer"
-        self.artifact = {"name": "Vemals-Ears-Setup.exe", "size": len(self.installer),
-                         "sha256": hashlib.sha256(self.installer).hexdigest()}
         self.bundle = transfer.collect_state(
             source, transfer_id=TRANSFER, release_commitment=COMMITMENT, work_directory=self.root / "work",
-            artifacts=[self.artifact])
+            artifacts=ARTIFACTS)
         self.state = self.root / "New PC" / "VemalsEarsHost"
         self.staging = self.state.with_name("VemalsEarsHost.transfer-staging")
 
@@ -774,7 +807,8 @@ class WindowsImportTests(unittest.TestCase):
         staging = transfer.create_staging(self.state)
         if mirror:
             (staging / "downloads").mkdir()
-            (staging / "downloads" / self.artifact["name"]).write_bytes(self.installer)
+            for name, data in RELEASE.items():
+                (staging / "downloads" / name).write_bytes(data)
         return staging
 
     def assert_private_acl(self, path):
@@ -924,7 +958,8 @@ class WindowsImportTests(unittest.TestCase):
         self.assertEqual(CONSENT, json.loads((self.state / "consent/consent.json").read_text(encoding="ascii")))
         self.assertEqual(MAPPING, json.loads((self.state / "consent/mapping.json").read_text(encoding="ascii")))
         self.assertEqual(POINTER, (self.state / "downloads" / transfer.POINTER_FILENAME).read_bytes())
-        self.assertEqual(self.installer, (self.state / "downloads/Vemals-Ears-Setup.exe").read_bytes())
+        for name, data in RELEASE.items():
+            self.assertEqual(data, (self.state / "downloads" / name).read_bytes())
         self.assertEqual(b"prepared runtime",
                          (self.state / "profile/WoWVoiceCaptions/runtime/XENO-runtime.bin").read_bytes())
         # Members keep their pairing: old token, moved pepper, moved database.
@@ -940,7 +975,7 @@ class WindowsImportTests(unittest.TestCase):
                           "consent/consent.json", "consent/mapping.json",
                           "secrets/discord-bot-token", "secrets/discord-application-id",
                           "secrets/publisher-token", "secrets/pepper", "secrets/cloudflare-tunnel-token",
-                          "downloads/Vemals-Ears-Setup.exe", "downloads/" + transfer.POINTER_FILENAME,
+                          *("downloads/" + name for name in RELEASE), "downloads/" + transfer.POINTER_FILENAME,
                           "profile/WoWVoiceCaptions/runtime/XENO-runtime.bin"}, files)
         transfer.mark_active(self.state)
         self.assertEqual(transfer.ACTIVATION_ACTIVE, transfer.activation(self.state))
@@ -982,18 +1017,60 @@ class WindowsImportTests(unittest.TestCase):
     def test_artifacts_must_be_mirrored_and_match_before_anything_is_written(self):
         for case in ("missing", "wrong bytes", "wrong size"):
             with self.subTest(case=case):
-                staging = self.stage(mirror=False)
-                (staging / "downloads").mkdir()
-                if case == "wrong bytes":
-                    (staging / "downloads" / self.artifact["name"]).write_bytes(self.installer[:-1] + b"X")
+                staging = self.stage()
+                name, data = next(iter(RELEASE.items()))
+                if case == "missing":
+                    (staging / "downloads" / name).unlink()
+                elif case == "wrong bytes":
+                    (staging / "downloads" / name).write_bytes(data[:-1] + b"X")
                 elif case == "wrong size":
-                    (staging / "downloads" / self.artifact["name"]).write_bytes(self.installer + b"X")
+                    (staging / "downloads" / name).write_bytes(data + b"X")
                 with self.assertRaises(transfer.TransferError):
                     transfer.import_state(self.state, self.bundle)
                 self.assertFalse((staging / "secrets").exists())
                 self.assertFalse((staging / "relay.env").exists())
                 self.assertFalse((staging / "downloads" / transfer.POINTER_FILENAME).exists())
                 transfer.discard_staging(self.state)
+
+    def test_a_pointer_that_does_not_match_the_mirrored_files_is_refused_before_anything_is_written(self):
+        # Astra round 4: the receiver checks the staged pointer against the
+        # mirrored files with the relay's own validation, before it imports.
+        newer = {"Vemals-Ears-Setup-1.5.0.exe": b"XENO newer installer",
+                 "vemals-ears-member-1.5.0.zip": b"XENO newer source"}
+        described = [{"name": name, "size": len(data), "sha256": hashlib.sha256(data).hexdigest()}
+                     for name, data in newer.items()]
+        cases = {
+            # The race: the new release's pointer travels with the old file list.
+            "newer pointer": pointer_bytes("1.5.0", *described),
+            # Names agree, but the pointer's hash is not the mirrored file's.
+            "other hash": pointer_bytes(installer={**ARTIFACTS[0], "sha256": "d" * 64}),
+            # Names agree, but the pointer's size is not the mirrored file's.
+            "other size": pointer_bytes(source={**ARTIFACTS[1], "size": ARTIFACTS[1]["size"] + 1}),
+            # No pointer, but a versioned installer only a pointer can serve.
+            "no pointer": None,
+        }
+        for case, pointer in cases.items():
+            with self.subTest(case=case):
+                staged = {**self.bundle.blobs}
+                if pointer is None:
+                    staged.pop(transfer.POINTER)
+                else:
+                    staged[transfer.POINTER] = pointer
+                raced = transfer.build_bundle(
+                    transfer_id=TRANSFER, release_commitment=COMMITMENT, settings=self.bundle.manifest["settings"],
+                    tunnel_enabled=True, blobs=staged, artifacts=ARTIFACTS)
+                staging = self.stage()
+                with self.assertRaisesRegex(transfer.TransferError, "does not match its downloads"):
+                    transfer.import_state(self.state, raced)
+                self.assertFalse((staging / "secrets").exists())
+                self.assertFalse((staging / "relay.env").exists())
+                self.assertFalse((staging / "downloads" / transfer.POINTER_FILENAME).exists())
+                self.assertFalse(self.state.exists())
+                transfer.discard_staging(self.state)
+        # The consistent copy still imports.
+        self.stage()
+        transfer.import_state(self.state, self.bundle)
+        self.assertEqual(POINTER, (self.staging / "downloads" / transfer.POINTER_FILENAME).read_bytes())
 
     def test_release_pointer_is_written_last(self):
         self.stage()
@@ -1034,7 +1111,7 @@ class WindowsImportTests(unittest.TestCase):
                     transfer.import_state(self.state, self.bundle)
                 self.assertNotIn(str(self.root), str(raised.exception))
                 remaining = {path.relative_to(staging).as_posix() for path in staging.rglob("*") if path.is_file()}
-                self.assertEqual({"profile/XENO-runtime.bin", "downloads/Vemals-Ears-Setup.exe"}, remaining)
+                self.assertEqual({"profile/XENO-runtime.bin", *("downloads/" + name for name in RELEASE)}, remaining)
                 self.assertFalse(self.state.exists())
                 with self.assertRaisesRegex(transfer.TransferError, "incomplete"):
                     transfer.publish_staging(self.state)
