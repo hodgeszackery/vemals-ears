@@ -6,9 +6,11 @@ way Windows and the real service process would.
 """
 
 import asyncio
+from contextlib import closing
 import json
 import os
 from pathlib import Path
+import sqlite3
 import tempfile
 import threading
 from types import SimpleNamespace
@@ -645,6 +647,36 @@ class FailureTests(FlowCase):
         self.assertEqual(("moved", "active"), (outcome["sender"]["state"], outcome["receiver"]["state"]))
         record = self.store(self.b).authenticate_device_record(self.device.device_id, self.device.device_token)
         self.assertEqual("Original", record.quick_chat_name)
+
+    def test_a_device_used_after_the_snapshot_keeps_its_newer_activity_on_the_new_host(self):
+        # Astra round 4: an authentication after the snapshot only changes
+        # last_seen_at. That newer time must reach the new host before it
+        # starts, or its housekeeping may revoke a credential just used.
+        device = self.device.device_id
+        database = self.a.state / "relay/guild-hub.sqlite3"
+        collect = transfer.collect_state
+        later = {}
+
+        def set_seen(value):
+            with closing(sqlite3.connect(database)) as connection, connection:
+                connection.execute("UPDATE devices SET last_seen_at = ? WHERE device_id = ?", (value, device))
+
+        def collect_state(*arguments, **options):
+            set_seen(1_000_000.0)
+            try:
+                return collect(*arguments, **options)
+            finally:
+                later["seen"] = 1_000_000.0 + 86_400.5
+                set_seen(later["seen"])
+
+        with mock.patch.object(transfer, "collect_state", collect_state):
+            outcome = self.move(self.a, self.b, self.relay)
+        self.assertNotIn("sender_error", outcome, outcome.get("sender_error"))
+        self.assertNotIn("receiver_error", outcome, outcome.get("receiver_error"))
+        self.assertEqual(("moved", "active"), (outcome["sender"]["state"], outcome["receiver"]["state"]))
+        record = {entry.device_id: entry for entry in self.store(self.b).list_devices()}[device]
+        self.assertEqual(later["seen"], record.last_seen_at)
+        self.assertIsNone(record.revoked_at)
 
     def test_silent_new_pc_makes_the_old_host_restore_itself(self):
         sender = self.sender(self.a, self.relay)

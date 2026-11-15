@@ -1181,7 +1181,7 @@ class ControlChannel:
     to its sender nor replayed, reordered or moved to another transfer.
     The frames themselves are integrity-protected only. Two things in them
     are private, and each is handled on its own: the DELTA rows (device IDs,
-    typed-chat names, classes, revocations) are AES-encrypted under the
+    typed-chat names, classes, revocations, last activity) are AES-encrypted under the
     session's bundle key before they are put in a frame (seal_delta), and R
     in the RELEASE frame is sent in clear, only after "released" is durable;
     it is useless without local access to the new PC.
@@ -1243,7 +1243,7 @@ def _writable(database: Path) -> sqlite3.Connection:
 
 
 def profile_rows(database: Path) -> dict:
-    """{device_id: (typed-chat name, class, revoked_at)} as one committed state.
+    """{device_id: (typed-chat name, class, revoked_at, last_seen_at)} as one committed state.
 
     Read inside BEGIN IMMEDIATE so no writer is half way through: the lock is
     held for this one query only, never across a network step, because every
@@ -1286,19 +1286,22 @@ def snapshot_profile_rows(snapshot: bytes) -> dict:
 
 def _profiles(connection: sqlite3.Connection) -> dict:
     rows = connection.execute(
-        "SELECT device_id, quick_chat_name, quick_chat_wow_class, revoked_at FROM devices").fetchall()
-    return {str(row[0]): (row[1], str(row[2] or ""), row[3]) for row in rows}
+        "SELECT device_id, quick_chat_name, quick_chat_wow_class, revoked_at, last_seen_at "
+        "FROM devices").fetchall()
+    return {str(row[0]): (row[1], str(row[2] or ""), row[3], row[4]) for row in rows}
 
 
 def profile_delta(before: dict, database: Path) -> list:
-    """Rows whose typed-chat profile or revocation changed since `before`.
+    """Rows whose typed-chat profile, revocation or last activity changed since `before`.
 
     Profile writes are never refused during a move, so the ones that landed
-    after the snapshot follow it in authenticated control frames.
+    after the snapshot follow it in authenticated control frames. A device
+    that only authenticated travels too: without its newer last_seen_at the
+    new host's housekeeping could revoke a credential that was just used.
     """
-    rows = [[device, name, wow_class, revoked]
-            for device, (name, wow_class, revoked) in sorted(profile_rows(database).items())
-            if before.get(device) != (name, wow_class, revoked)]
+    rows = [[device, name, wow_class, revoked, seen]
+            for device, (name, wow_class, revoked, seen) in sorted(profile_rows(database).items())
+            if before.get(device) != (name, wow_class, revoked, seen)]
     if len(rows) > MAX_DELTA_ROWS:
         raise TransferError("Too many typed-chat profiles changed during the move. Start the move again.")
     return rows
@@ -1348,21 +1351,24 @@ def open_delta(data: bytes, keys) -> list:
 
 
 def _delta_row(row) -> tuple:
-    _require(type(row) is list and len(row) == 4)
-    device, name, wow_class, revoked = row
+    _require(type(row) is list and len(row) == 5)
+    device, name, wow_class, revoked, seen = row
     _require(type(device) is str and _DEVICE_ID.fullmatch(device) is not None)
     _require(name is None or (type(name) is str and 1 <= len(name) <= 64
                               and all(ord(char) >= 32 for char in name)))
     _require(type(wow_class) is str and re.fullmatch(r"[a-z-]{0,32}", wow_class) is not None)
     _require(revoked is None or (type(revoked) in (int, float) and 0 <= revoked < 1e11))
-    return device, name, wow_class, revoked
+    _require(seen is None or (type(seen) in (int, float) and 0 <= seen < 1e11))
+    return device, name, wow_class, revoked, seen
 
 
 def apply_profile_delta(database: Path, rows: list) -> int:
     """Apply a received delta to the staged database in one transaction.
 
-    Only the typed-chat profile and a revocation can change, only on devices
-    the snapshot already holds, and a revoked device is never un-revoked.
+    Only the typed-chat profile, a revocation and the last activity can
+    change, only on devices the snapshot already holds. A revoked device is
+    never un-revoked, and last_seen_at only moves forward (the later of the
+    two), so a delta can never make a device look idle sooner.
     """
     _require(type(rows) is list and len(rows) <= MAX_DELTA_ROWS)
     checked = [_delta_row(row) for row in rows]
@@ -1371,11 +1377,13 @@ def apply_profile_delta(database: Path, rows: list) -> int:
             connection.execute("BEGIN IMMEDIATE")
             try:
                 changed = 0
-                for device, name, wow_class, revoked in checked:
+                for device, name, wow_class, revoked, seen in checked:
                     changed += connection.execute(
                         "UPDATE devices SET quick_chat_name = ?, quick_chat_wow_class = ?, "
-                        "revoked_at = COALESCE(revoked_at, ?) WHERE device_id = ?",
-                        (name, wow_class, revoked, device)).rowcount
+                        "revoked_at = COALESCE(revoked_at, ?), "
+                        "last_seen_at = CASE WHEN last_seen_at IS NULL OR last_seen_at < ? "
+                        "THEN COALESCE(?, last_seen_at) ELSE last_seen_at END WHERE device_id = ?",
+                        (name, wow_class, revoked, seen, seen, device)).rowcount
                 connection.execute("COMMIT")
             except BaseException:
                 connection.execute("ROLLBACK")

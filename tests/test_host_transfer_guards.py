@@ -6,6 +6,7 @@ HTTP edges. Synthetic values and temp directories only; no service is touched.
 """
 
 import contextlib
+from contextlib import closing
 import hashlib
 import hmac
 import http.server
@@ -823,10 +824,10 @@ class ProfileDeltaTests(unittest.TestCase):
         self.assertEqual("Early", moved.authenticate_device_record(first, self.devices[0].device_token).quick_chat_name)
         self.assertFalse(moved.authenticate_device(third, self.devices[2].device_token))
         # A delta can revoke; it can never bring a revoked device back.
-        self.assertEqual(1, transfer.apply_profile_delta(self.copy, [[third, None, "", None]]))
+        self.assertEqual(1, transfer.apply_profile_delta(self.copy, [[third, None, "", None, None]]))
         self.assertFalse(moved.authenticate_device(third, self.devices[2].device_token))
         # Unknown devices are not created.
-        self.assertEqual(0, transfer.apply_profile_delta(self.copy, [["ghdev_unknown", "X", "", None]]))
+        self.assertEqual(0, transfer.apply_profile_delta(self.copy, [["ghdev_unknown", "X", "", None, None]]))
         self.assertEqual(3, len(moved.list_devices()))
 
     def test_the_baseline_is_read_from_the_snapshot_bytes_that_are_sent(self):
@@ -835,7 +836,7 @@ class ProfileDeltaTests(unittest.TestCase):
         snapshot = self.database.read_bytes()
         self.store.set_quick_chat_name(first, "After It")
         rows = transfer.snapshot_profile_rows(snapshot)
-        self.assertEqual(("In The Snapshot", "paladin", None), rows[first])
+        self.assertEqual(("In The Snapshot", "paladin", None, None), rows[first])
         self.assertEqual([first], [row[0] for row in transfer.profile_delta(rows, self.database)])
         for bad in (b"", b"not a database" * 64, None):
             with self.subTest(bad=bad), self.assertRaises(TransferError):
@@ -855,16 +856,20 @@ class ProfileDeltaTests(unittest.TestCase):
         snapshot = transfer.snapshot_database(self.database, self.root / "work")
         self.assertEqual(b"\x02\x02", snapshot[18:20])
         rows = transfer.snapshot_profile_rows(snapshot)
-        self.assertEqual(("Wal Name", "priest", None), rows[first])
+        self.assertEqual(("Wal Name", "priest", None, None), rows[first])
         self.assertEqual(b"\x02\x02", snapshot[18:20])     # the bytes that are sent are unchanged
 
     def test_a_malformed_delta_changes_nothing(self):
         device = self.devices[0].device_id
         self.store.set_quick_chat_name(device, "Kept")
-        good = [device, "Changed", "", None]
-        for bad in ("row", [device, "x"], [device, 5, "", None], ["bad id!", "x", "", None],
-                    [device, "x", "DROP TABLE", None], [device, "x", "", "now"], [device, "x\x00", "", None],
-                    [device, "x" * 65, "", None], [device, "x", "", -1.0]):
+        good = [device, "Changed", "", None, None]
+        for bad in ("row", [device, "x"], [device, 5, "", None, None], ["bad id!", "x", "", None, None],
+                    [device, "x", "DROP TABLE", None, None], [device, "x", "", "now", None],
+                    [device, "x\x00", "", None, None], [device, "x" * 65, "", None, None],
+                    [device, "x", "", -1.0, None], [device, "Changed", "", None],
+                    [device, "x", "", None, "now"], [device, "x", "", None, -1.0], [device, "x", "", None, True],
+                    [device, "x", "", None, 1e11], [device, "x", "", None, float("inf")],
+                    [device, "x", "", None, float("nan")], [device, "x", "", None, None, None]):
             with self.subTest(bad=bad), self.assertRaises(TransferError):
                 transfer.apply_profile_delta(self.database, [good, bad])
         with self.assertRaises(TransferError):
@@ -872,6 +877,64 @@ class ProfileDeltaTests(unittest.TestCase):
         with self.assertRaises(TransferError):
             transfer.apply_profile_delta(self.root / "missing.sqlite3", [good])
         self.assertEqual("Kept", transfer.profile_rows(self.database)[device][0])
+
+    def test_an_activity_only_change_travels_and_only_ever_moves_last_seen_forward(self):
+        # Astra round 4: a device that authenticated on the old host after
+        # the snapshot changed nothing but last_seen_at. Without it in the
+        # delta the new host could revoke that just-used credential as idle.
+        first, second, third = (device.device_id for device in self.devices)
+        for device, seen in ((first, 1_000.0), (second, 5_000.0), (third, 1_000.0)):
+            self.set_seen(self.database, device, seen)
+        self.store.revoke_device(third)
+        before = transfer.snapshot_profile_rows(self.database.read_bytes())
+        shutil.copyfile(self.database, self.copy)
+        self.assertEqual([], transfer.profile_delta(before, self.database))
+        self.assertTrue(self.store.authenticate_device(first, self.devices[0].device_token))
+        seen = self.seen(self.database, first)
+        self.assertGreater(seen, 1_000.0)
+        delta = json.loads(json.dumps(transfer.profile_delta(before, self.database)))
+        self.assertEqual([[first, None, "", None, seen]], delta)
+        self.assertEqual(1, transfer.apply_profile_delta(self.copy, delta))
+        self.assertEqual(seen, self.seen(self.copy, first))
+        # Forward only: an older or missing time never moves it back, and an
+        # activity row never brings a revoked device back.
+        self.assertEqual(3, transfer.apply_profile_delta(self.copy, [
+            [first, None, "", None, 10.0], [second, None, "", None, None], [third, None, "", None, 9_000.0]]))
+        self.assertEqual(seen, self.seen(self.copy, first))
+        self.assertEqual(5_000.0, self.seen(self.copy, second))
+        self.assertEqual(9_000.0, self.seen(self.copy, third))
+        moved = CredentialStore(self.copy, PEPPER)
+        self.assertFalse(moved.authenticate_device(third, self.devices[2].device_token))
+        # A device that never connected before the snapshot gets its first time.
+        fresh = self.store.claim_enrollment(self.store.create_enrollment().code, "XENO fresh", "1.0.0")
+        self.set_seen(self.database, fresh.device_id, None)
+        shutil.copyfile(self.database, self.copy)
+        self.assertEqual(1, transfer.apply_profile_delta(self.copy, [[fresh.device_id, None, "", None, 7_000.5]]))
+        self.assertEqual(7_000.5, self.seen(self.copy, fresh.device_id))
+
+    def test_the_new_host_does_not_expire_a_device_that_was_used_during_the_move(self):
+        device = self.devices[0]
+        clock = [100_000.0]
+        store = CredentialStore(self.database, PEPPER, clock=lambda: clock[0])
+        self.assertTrue(store.authenticate_device(device.device_id, device.device_token))
+        before = transfer.snapshot_profile_rows(self.database.read_bytes())
+        shutil.copyfile(self.database, self.copy)
+        clock[0] = 190_000.0          # used again on the old host, after the snapshot
+        self.assertTrue(store.authenticate_device(device.device_id, device.device_token))
+        transfer.apply_profile_delta(self.copy, json.loads(json.dumps(transfer.profile_delta(before, self.database))))
+        moved = CredentialStore(self.copy, PEPPER, clock=lambda: 200_000.0)
+        self.assertEqual((0, 0), moved.revoke_unused_devices(unused_after=0, idle_after=50_000))
+        self.assertTrue(moved.authenticate_device(device.device_id, device.device_token))
+
+    @staticmethod
+    def set_seen(database, device, value):
+        with closing(sqlite3.connect(database)) as connection, connection:
+            connection.execute("UPDATE devices SET last_seen_at = ? WHERE device_id = ?", (value, device))
+
+    @staticmethod
+    def seen(database, device):
+        with closing(sqlite3.connect(database)) as connection:
+            return connection.execute("SELECT last_seen_at FROM devices WHERE device_id = ?", (device,)).fetchone()[0]
 
     @unittest.skipUnless(os.name == "nt", "Windows AES helper")
     def test_deltas_travel_encrypted_and_large_ones_are_split_to_fit_control_frames(self):
