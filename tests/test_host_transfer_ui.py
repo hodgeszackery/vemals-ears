@@ -989,6 +989,29 @@ class NewPcTests(TransferUiCase):
         self.assertEqual(preflights, self.transfer.calls.count("preflight"))
         self.assertTrue(self.app.configured)
 
+    def test_a_speech_preparation_failure_after_connect_closes_the_connection_to_the_old_pc(self):
+        # Astra finding 5: _wait_prepared() fails before accept() runs, so
+        # accept's own cleanup never closes the connected receiver.
+        ui = self.connected()
+        self.transfer.runtime_ready = False
+        self.transfer.prepare_errors = ["Check your internet connection and retry."]
+        self.click("Move it here")
+        self.ready()
+        self.assertEqual("transfer-receive", self.app.page)
+        self.assertIn("Check your internet connection", self.app.notice.get())
+        self.assertNotIn("accept", self.transfer.calls)
+        self.assertEqual(1, self.transfer.calls.count("receiver_cancel"))
+        self.off_ui_thread("receiver_cancel")
+        self.assertIsNone(ui.receiver)
+
+    def test_a_failed_accept_is_not_cancelled_again_by_the_screen(self):
+        self.connected()
+        self.transfer.accept_error = "Port 8770 is in use on this PC. Nothing was kept on this PC."
+        self.click("Move it here")
+        self.ready()
+        self.assertIn("accept", self.transfer.calls)
+        self.assertNotIn("receiver_cancel", self.transfer.calls)
+
     def test_the_move_trusts_the_disk_not_the_screen_about_the_speech_runtime(self):
         ui = self.connected()
         self.assertTrue(ui.prepared)

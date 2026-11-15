@@ -828,7 +828,17 @@ class TransferUi:
         kept = {"copy": False}
 
         def work():
-            self._wait_prepared(stage)
+            try:
+                self._wait_prepared(stage)
+            except BaseException:
+                # accept() never ran, so its own cleanup did not either: the
+                # old PC is told the move is off instead of holding its claim
+                # open for READY.
+                try:
+                    receiver.cancel()
+                except Exception:  # noqa: BLE001 - the preparation error is the one to show
+                    pass
+                raise
             try:
                 return self._outcome(receiver.accept(stage))
             except BaseException:
