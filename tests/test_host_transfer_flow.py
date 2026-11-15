@@ -622,6 +622,30 @@ class FailureTests(FlowCase):
         record = self.store(self.b).authenticate_device_record(self.device.device_id, self.device.device_token)
         self.assertEqual("Original", record.quick_chat_name)
 
+    def test_a_name_changed_back_just_after_the_snapshot_still_arrives_as_it_ends(self):
+        # Skeptic round 3: pins the baseline to the snapshot bytes, not to a
+        # live read after collect_state(). The snapshot holds "Changed"; the
+        # live name is "Original" again before any later read, so only a
+        # snapshot-based baseline emits the row the new PC needs.
+        store = self.store(self.a)
+        self.assertTrue(store.set_quick_chat_name(self.device.device_id, "Original"))
+        collect = transfer.collect_state
+
+        def collect_state(*arguments, **options):
+            self.assertTrue(store.set_quick_chat_name(self.device.device_id, "Changed"))
+            try:
+                return collect(*arguments, **options)
+            finally:
+                self.assertTrue(store.set_quick_chat_name(self.device.device_id, "Original"))
+
+        with mock.patch.object(transfer, "collect_state", collect_state):
+            outcome = self.move(self.a, self.b, self.relay)
+        self.assertNotIn("sender_error", outcome, outcome.get("sender_error"))
+        self.assertNotIn("receiver_error", outcome, outcome.get("receiver_error"))
+        self.assertEqual(("moved", "active"), (outcome["sender"]["state"], outcome["receiver"]["state"]))
+        record = self.store(self.b).authenticate_device_record(self.device.device_id, self.device.device_token)
+        self.assertEqual("Original", record.quick_chat_name)
+
     def test_silent_new_pc_makes_the_old_host_restore_itself(self):
         sender = self.sender(self.a, self.relay)
         sender.silence = 1.5
