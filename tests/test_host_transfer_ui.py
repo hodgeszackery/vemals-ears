@@ -345,6 +345,10 @@ class EntryTests(unittest.TestCase):
         self.assertIs(False, withheld(Host(False)))
         self.assertIs(False, withheld(Host(True, tunnel=False)))
         self.assertIs(False, withheld(Host(True, configured=False)))
+        # Astra round 5 (#K): a release that stopped part way is still offered.
+        releasing = Host(False)
+        releasing.settings["tunnel_releasing"] = True
+        self.assertIs(True, withheld(releasing))
         broken = Host(True)
         broken.read_settings = mock.Mock(side_effect=control.HostError("The saved host settings could not be read."))
         self.assertIs(False, withheld(broken))

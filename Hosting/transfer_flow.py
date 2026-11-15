@@ -924,7 +924,9 @@ def start_tunnel(host, records=None, *, public_state=transfer_net.public_state) 
     """"Connect members": start the withheld tunnel once the old public address is verified quiet.
 
     Works from the durable mark in the host settings, whatever the transfer
-    receipt says by now. The mark is cleared nowhere else.
+    receipt says by now. The mark is cleared nowhere else. A release that
+    stopped part way ("releasing": verified quiet before) is finished
+    without asking again, since this host's own tunnel may answer by now.
     """
     records = _records(host, records)
     with records.locked():
@@ -940,6 +942,8 @@ def start_tunnel(host, records=None, *, public_state=transfer_net.public_state) 
                 state = _checked(public_state(transfer_net.public_origin(settings["public_http_url"])))
                 if state == QUIET:
                     host.release_tunnel()
+            elif tunnel and settings.get("tunnel_releasing"):
+                host.release_tunnel()
         except (control.HostError, service.ConfigurationError, setup.SetupError) as error:
             raise TransferError(str(error)) from None
         return {"state": "active", "tunnel_enabled": tunnel, "tunnel_started": tunnel and state == QUIET,

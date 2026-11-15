@@ -161,12 +161,13 @@ class TransferBackend:
 
         Read from the durable mark in the host settings, which only
         "Connect members" clears. The transfer receipt plays no part, so the
-        answer stays right whatever happens to the receipt afterwards.
+        answer stays right whatever happens to the receipt afterwards. A
+        release that stopped part way still counts until it is finished.
         """
         try:
             settings = self.host.read_settings()
             return bool(settings.get("configured") and settings.get("tunnel_enabled")
-                        and settings.get("tunnel_withheld"))
+                        and (settings.get("tunnel_withheld") or settings.get("tunnel_releasing")))
         except (HostError, ValueError, KeyError):
             # Not knowing is not a reason to keep the app from opening; the
             # controller itself never starts a withheld tunnel.

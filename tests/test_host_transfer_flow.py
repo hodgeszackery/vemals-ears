@@ -1078,6 +1078,91 @@ class FailureTests(FlowCase):
         self.assert_hosting(self.b)
         self.assertEqual(("B", "start", TUNNEL), self.log[-1])
 
+    def withheld_after_move(self):
+        """A received, active host whose tunnel was withheld: the old address still answered."""
+        receiver = self.receiver(self.b, self.relay, public_state=lambda origin: "answers")
+        receiver.quiet_wait = 0.2
+        outcome = self.move(self.a, self.b, self.relay, receiver=receiver)
+        self.assertEqual("moved", outcome["sender"]["state"])
+        self.assertTrue(self.b.read_settings()["tunnel_withheld"])
+        self.assertEqual(("Stopped", control.DISABLED), (self.b.statuses()[TUNNEL], self.b.start_modes()[TUNNEL]))
+
+    def crash_at(self, action, start_mode=None):
+        """Make the fake service manager die once at one tunnel command."""
+        real = self.b._nssm
+
+        def nssm(*arguments, check=True):
+            if arguments[:2] == (action, TUNNEL) and (start_mode is None or arguments[2:] == ("Start", start_mode)):
+                self.b._nssm = real
+                if action == "start":
+                    real(*arguments, check=check)     # Windows started it; the app died right after
+                raise Crash()
+            return real(*arguments, check=check)
+
+        self.b._nssm = nssm
+
+    def test_a_tunnel_release_that_dies_before_the_tunnel_is_enabled_is_finished_by_connect_members(self):
+        self.release_dies_before_enable("connect")
+
+    def test_a_tunnel_release_that_dies_before_the_tunnel_is_enabled_is_finished_by_start(self):
+        self.release_dies_before_enable("start")
+
+    def release_dies_before_enable(self, retry):
+        # Astra round 5 (#K): the old address was verified quiet and Connect
+        # members began the release, but the app died before the tunnel's
+        # start type was set. The tunnel stays off (nothing unverified runs),
+        # and every way back must still finish the release: Connect members,
+        # ordinary Start, and the dashboard must keep offering it.
+        from Hosting import transfer_ui
+        self.withheld_after_move()
+        self.crash_at("set", control.AUTOMATIC)
+        with self.assertRaises(Crash):
+            transfer_flow.start_tunnel(self.b, public_state=lambda origin: "quiet")
+        self.assertEqual(("Stopped", control.DISABLED),
+                         (self.b.statuses()[TUNNEL], self.b.start_modes()[TUNNEL]))
+        self.assertTrue(transfer_ui.TransferBackend(self.b).tunnel_withheld())
+        if retry == "connect":
+            # The old address is asked no more: it was verified quiet
+            # before the release began.
+            result = transfer_flow.start_tunnel(
+                self.b, public_state=lambda origin: self.fail("asked the old address again"))
+            self.assertTrue(result["tunnel_started"])
+        else:
+            self.b.start_services()
+        self.assertFalse(self.b.read_settings()["tunnel_withheld"])
+        self.assertFalse(transfer_ui.TransferBackend(self.b).tunnel_withheld())
+        self.assert_hosting(self.b)
+
+    def test_a_tunnel_release_that_dies_after_the_start_is_finished_by_the_next_start(self):
+        # Astra round 5 (#K): the tunnel runs (its own answer now makes the
+        # old address look busy), but the app died before the release was
+        # recorded as done. Connect members finishes it without asking.
+        from Hosting import transfer_ui
+        self.withheld_after_move()
+        self.crash_at("start")
+        with self.assertRaises(Crash):
+            transfer_flow.start_tunnel(self.b, public_state=lambda origin: "quiet")
+        self.assertEqual(("Running", control.AUTOMATIC), (self.b.statuses()[TUNNEL], self.b.start_modes()[TUNNEL]))
+        self.assertTrue(transfer_ui.TransferBackend(self.b).tunnel_withheld())
+        result = transfer_flow.start_tunnel(self.b, public_state=lambda origin: "answers")
+        self.assertEqual((True, False), (result["tunnel_started"], result["public_still_answering"]))
+        self.assertFalse(transfer_ui.TransferBackend(self.b).tunnel_withheld())
+        self.assertNotIn("tunnel_withheld", json.loads((self.b.state / "host-settings.json").read_text()))
+        self.assert_hosting(self.b)
+
+    def test_a_tunnel_still_withheld_is_never_enabled_by_a_retry_path(self):
+        # The release mark is written only after the old address was verified
+        # quiet. A tunnel that is still withheld (here: the check never ran)
+        # is never enabled by any retry.
+        self.withheld_after_move()
+        for state in ("answers", "unknown"):
+            transfer_flow.start_tunnel(self.b, public_state=lambda origin: state)
+        self.b.start_services()
+        self.b._install_tunnel()
+        self.b.enable_services()
+        self.assertEqual(("Stopped", control.DISABLED), (self.b.statuses()[TUNNEL], self.b.start_modes()[TUNNEL]))
+        self.assertIs(True, self.b.read_settings()["tunnel_withheld"])
+
     def test_a_new_pc_that_cannot_check_the_old_address_keeps_its_tunnel_withheld(self):
         receiver = self.receiver(self.b, self.relay, public_state=lambda origin: "unknown")
         receiver.quiet_wait = 0.2

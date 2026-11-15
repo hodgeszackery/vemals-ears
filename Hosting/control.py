@@ -30,6 +30,8 @@ NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 DISABLED = "SERVICE_DISABLED"
 AUTOMATIC = "SERVICE_DELAYED_AUTO_START"
 START_MODES = ("SERVICE_AUTO_START", AUTOMATIC, "SERVICE_DEMAND_START", DISABLED)
+# host-settings.json "tunnel_withheld" while release_tunnel is part way: verified quiet, not running yet.
+TUNNEL_RELEASING = "releasing"
 # A transfer state in which this PC's host may not be started by any route.
 TRANSFER_HELD = (("sender", "sending"), ("sender", "released"), ("receiver", "pending"))
 TRANSFER_MOVED = ("sender", "moved")
@@ -194,7 +196,7 @@ class HostController:
                     "client_download_url": "", "tunnel_enabled": True,
                     "bot_install_url": "", "join_url": "", "identity_locked": False,
                     "mode": service.STANDALONE, "takeover_confirmed": False, "activation": "",
-                    "tunnel_withheld": False}
+                    "tunnel_withheld": False, "tunnel_releasing": False}
         values = service.load_configuration(self.state)
         remote = values["VEMALS_EARS_HOST_MODE"] == service.REMOTE_WORKER
         metadata = _read_json(self.state / "host-settings.json")
@@ -225,6 +227,9 @@ class HostController:
             # A received host whose public tunnel must stay off until the old
             # public address is verified quiet (transfer_flow.start_tunnel).
             "tunnel_withheld": not remote and metadata.get("tunnel_withheld") is True,
+            # Verified quiet and being let run, not confirmed running yet
+            # (release_tunnel). Any start path finishes the job.
+            "tunnel_releasing": not remote and metadata.get("tunnel_withheld") == TUNNEL_RELEASING,
         }
 
     def _identity_locked(self, values: dict) -> bool:
@@ -485,9 +490,14 @@ class HostController:
                     ((RELAY, WORKER, TUNNEL) if tunnel else (RELAY, WORKER)))
         if any(statuses[name] == "Not installed" for name in selected):
             raise HostError("Finish setup before starting the host.")
+        # A release that stopped part way left its tunnel disabled, which a
+        # plain start cannot run; release_tunnel enables it and finishes.
+        releasing = TUNNEL in selected and settings["tunnel_releasing"]
         for name in selected:
-            if statuses[name] != "Running":
+            if statuses[name] != "Running" and not (releasing and name == TUNNEL):
                 self._nssm("start", name)
+        if releasing:
+            self.release_tunnel()
 
     # Narrow service operations for a host move. Each one checks ownership
     # first and none of them can touch a service outside this installation.
@@ -550,23 +560,32 @@ class HostController:
         """Let a received host's withheld public tunnel run.
 
         Only for transfer_flow, and only after it verified that the old
-        public address is quiet. The mark is cleared first, so the ordinary
-        Start and setup paths can finish the job if the start below fails.
+        public address is quiet (or, for a release already marked as
+        releasing, that it was verified before). The withheld mark becomes
+        "releasing" first and is removed only once the tunnel is enabled and
+        started, so an app that dies in between leaves a mark that Connect
+        members and the ordinary Start finish without checking again (the
+        tunnel's own answer would look like the old PC). Safe to repeat.
         """
         self._validate_activation()
         statuses = self._owned_services()
         settings = self.read_settings()
         if settings["mode"] == service.REMOTE_WORKER or not settings["tunnel_enabled"]:
             return
-        metadata = _read_json(self.state / "host-settings.json")
-        if metadata.pop("tunnel_withheld", None) is not None:
-            _write_json(self.state / "host-settings.json", metadata)
+        path = self.state / "host-settings.json"
+        metadata = _read_json(path)
+        if metadata.get("tunnel_withheld", None) not in (None, TUNNEL_RELEASING):
+            metadata["tunnel_withheld"] = TUNNEL_RELEASING
+            _write_json(path, metadata)
         if statuses[TUNNEL] == "Not installed":
-            self._install_tunnel()
-            return
-        self._nssm("set", TUNNEL, "Start", AUTOMATIC)
-        if statuses[TUNNEL] != "Running":
-            self._nssm("start", TUNNEL)
+            self._install_tunnel()      # "releasing" is not held: registered automatic and started
+        else:
+            self._nssm("set", TUNNEL, "Start", AUTOMATIC)
+            if statuses[TUNNEL] != "Running":
+                self._nssm("start", TUNNEL)
+        metadata = _read_json(path)
+        if metadata.pop("tunnel_withheld", None) is not None:
+            _write_json(path, metadata)
 
     def staged_runtime_ready(self, staging: Path) -> bool:
         """Whether a transfer's staging directory holds a complete GPU speech runtime."""
