@@ -217,15 +217,26 @@ def _online(timeout: float) -> bool:
         return False
 
 
+# HTTP statuses that positively mean nothing is connected behind the
+# address: Cloudflare 530 (error 1033 and friends: the tunnel has no
+# connector at all) and 521/522/523 (a proxied origin refused, timed out or
+# is unreachable). Every other error status is not evidence that the old
+# host is gone. 502 from a tunnel means a connector is still live and only
+# its relay is down, so a second connector would split members; 401, 403,
+# 407, 429, 451 and 503 are a proxy, a WAF or a rate limit that may sit in
+# front of a relay that is still running; a 404 or a redirect is something
+# else answering, which can be the old connector's catch-all rule.
+_NO_ORIGIN_STATUSES = frozenset({521, 522, 523, 530})
+
+
 def _probe(origin: str, timeout: float, online) -> str:
     try:
         with _opener().open(origin.rstrip("/") + "/healthz", timeout=timeout) as response:
             body = response.read(4096)
     except urllib.error.HTTPError as error:
-        # The edge answered and no relay is behind it (Cloudflare 530 or 502
-        # for a stopped tunnel, a 404, a redirect to somewhere else).
+        status = error.code
         error.close()
-        return QUIET
+        return QUIET if status in _NO_ORIGIN_STATUSES else UNKNOWN
     except (OSError, ValueError) as error:
         reason = getattr(error, "reason", error)
         if isinstance(reason, (socket.gaierror, ssl.SSLError)) or not isinstance(reason, OSError):

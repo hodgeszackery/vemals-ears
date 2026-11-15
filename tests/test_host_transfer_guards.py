@@ -880,10 +880,11 @@ class NetworkEdgeTests(unittest.TestCase):
         self.pauses, self.asked = [], []
         health = b'{"status": "ok", "service": "vemals-ears"}'
         self.assertEqual("answers", self.state(self.serve({"/healthz": [(200, health)]})))
-        # The address was reached and no relay is behind it: an error status
-        # from the edge, another site's page, a redirect elsewhere.
-        for reply in ((530, b"origin unreachable"), (502, b"bad gateway"), (404, b"none"),
-                      (200, b"<html>parked</html>"), (200, b'{"status": "ok"}'), (200, b"")):
+        # The address was reached and nothing is connected behind it: the
+        # edge says the tunnel or origin is gone, or another site's page.
+        for reply in ((530, b"origin unreachable"), (521, b"web server is down"), (522, b"timed out"),
+                      (523, b"origin unreachable"), (200, b"<html>parked</html>"), (200, b'{"status": "ok"}'),
+                      (200, b"")):
             with self.subTest(reply=reply):
                 self.assertEqual("quiet", self.state(self.serve({"/healthz": [reply]})))
         self.assertEqual([], self.asked)      # an HTTP answer needs no second opinion
@@ -894,6 +895,18 @@ class NetworkEdgeTests(unittest.TestCase):
         self.assertEqual("quiet", self.state("http://127.0.0.1:1", online=True))
         self.assertEqual("unknown", self.state("http://127.0.0.1:1", online=False))
         self.assertEqual(2, len(self.asked))
+
+    def test_public_state_never_takes_an_access_denied_or_ambiguous_status_as_quiet(self):
+        # Astra finding 2: a proxy or WAF in front of a still-running relay,
+        # a rate limit, or a tunnel connector that is live while its relay is
+        # down says nothing about the old host being gone.
+        self.pauses, self.asked = [], []
+        for status in (401, 403, 404, 407, 429, 451, 500, 502, 503, 504, 520, 524):
+            with self.subTest(status=status):
+                self.assertEqual("unknown", self.state(self.serve({"/healthz": [(status, b"XENO denied")]})))
+                self.assertEqual("unknown", self.state(self.serve({"/healthz": [(status, b"XENO denied")] * 2}),
+                                                       probes=2))
+        self.assertEqual([], self.asked)      # being online does not rescue these
 
     def test_public_state_never_takes_a_dns_or_tls_failure_as_quiet(self):
         import socket
