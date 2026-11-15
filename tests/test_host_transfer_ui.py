@@ -858,6 +858,46 @@ class NewPcTests(TransferUiCase):
         self.assertEqual("dashboard", self.app.page)
         self.assertEqual(1, self.transfer.calls.count("prepare"))
 
+    def test_cancel_while_the_move_waits_for_speech_keeps_the_one_running_download(self):
+        # Astra round 3: cancelling on the waiting page returned to Receive,
+        # which started a second preparation against the same staging
+        # directory while the first was still downloading.
+        ui = self.create_transfer()
+        self.transfer.prepare_gate.clear()
+        self.click("Receive")
+        self.settle(lambda: ui.prepare_state == "preparing")
+        thread = ui.prepare_thread
+        self.app.values["transfer_address"].set("ears.example.org " + CODE)
+        self.click("Connect")
+        self.ready()
+        self.click("Move it here")
+        self.settle(lambda: self.app.page == "transfer-receiving")
+        self.click("Cancel")
+        self.ready()
+        self.assertEqual("transfer-receive", self.app.page)
+        self.assertIn("Nothing was kept on this PC", self.app.notice.get())
+        self.assertNotIn("accept", self.transfer.calls)
+        self.assertIn("receiver_cancel", self.transfer.calls)
+        time.sleep(0.1)
+        self.root.update()
+        # Still the first download, and only it.
+        self.assertIs(thread, ui.prepare_thread)
+        self.assertTrue(thread.is_alive())
+        self.assertEqual(1, self.transfer.calls.count("prepare"))
+        self.assertEqual("preparing", ui.prepare_state)
+        self.assertIn("Preparing", ui.prepare_text.get())
+        self.transfer.prepare_gate.set()
+        self.settle(lambda: ui.prepare_state == "ready")
+        thread.join(5)
+        self.assertEqual(1, self.transfer.calls.count("prepare"))
+        self.app.values["transfer_address"].set("ears.example.org " + CODE)
+        self.click("Connect")
+        self.ready()
+        self.click("Move it here")
+        self.ready()
+        self.assertEqual("dashboard", self.app.page)
+        self.assertEqual(1, self.transfer.calls.count("prepare"))
+
     def test_a_failed_speech_download_is_tried_again_before_the_move(self):
         ui = self.create_transfer()
         self.transfer.prepare_errors = ["Check your internet connection and retry."]

@@ -667,6 +667,11 @@ class TransferUi:
         if self.backend is None or self.prepare_state in ("checking", "preparing", "ready"):
             self._prepare_shown()
             return
+        if self.prepare_thread is not None and self.prepare_thread.is_alive():
+            # One preparation per staging directory: the running one reports
+            # its own result; another would download and publish beside it.
+            self._prepare_shown()
+            return
         self.prepare_state = "checking"
         self._prepare_shown()
         run = self.prepare_run = {"abandoned": False}
@@ -848,8 +853,15 @@ class TransferUi:
         def failed(text):
             self.receiver = self.card = None
             self.prepared = False
-            self.prepare_state = ""
-            self.prepare_thread = self.prepare_run = None
+            if self.prepare_thread is not None and self.prepare_thread.is_alive():
+                # Cancelled while the speech download still ran: Receive
+                # reuses that download, never a second one into the same
+                # staging directory. Its own state reaches the page when it
+                # ends.
+                pass
+            else:
+                self.prepare_state = ""
+                self.prepare_thread = self.prepare_run = None
             if kept["copy"]:
                 # The move failed but this PC still holds the host, for example
                 # released and not started: the receipt and the saved settings
