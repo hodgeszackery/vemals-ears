@@ -949,6 +949,46 @@ class NewPcTests(TransferUiCase):
         self.ready()
         self.assertEqual("dashboard", self.app.page)
 
+    def fail_keeping(self, view, error):
+        """The connected move fails after this PC already holds the host in `view`."""
+        receiver = self.app.transfer_ui.receiver
+        failing = receiver.accept
+
+        def accept(progress):
+            self.backend.settings["configured"] = True
+            self.transfer.view = view
+            return failing(progress)
+        receiver.accept = accept
+        self.transfer.accept_error = error
+
+    def test_a_failure_that_keeps_the_released_copy_reopens_on_its_recovery_step_not_on_receive(self):
+        # Astra finding 3: starting services failed after RELEASE. The copy is
+        # still here, released and not started; Receive would call it an old
+        # host to uninstall.
+        self.connected()
+        self.fail_keeping({"view": "activating", "role": "receiver", "state": "active"},
+                          "Synthetic service start failure.")
+        preflights = self.transfer.calls.count("preflight")
+        self.click("Move it here")
+        self.ready()
+        self.assertEqual("transfer-activating", self.app.page)
+        self.assertIn("Synthetic service start failure.", self.app.notice.get())
+        self.assertEqual(preflights, self.transfer.calls.count("preflight"))
+        self.transfer.accept_error = ""
+        self.click("Start this host")
+        self.ready()
+        self.assertEqual("dashboard", self.app.page)
+
+    def test_a_failure_that_kept_a_started_host_reopens_on_the_dashboard(self):
+        self.connected()
+        self.fail_keeping({"view": "", "role": "receiver", "state": "active"}, "Synthetic tunnel start failure.")
+        preflights = self.transfer.calls.count("preflight")
+        self.click("Move it here")
+        self.ready()
+        self.assertEqual("dashboard", self.app.page)
+        self.assertEqual(preflights, self.transfer.calls.count("preflight"))
+        self.assertTrue(self.app.configured)
+
     def test_the_move_trusts_the_disk_not_the_screen_about_the_speech_runtime(self):
         ui = self.connected()
         self.assertTrue(ui.prepared)

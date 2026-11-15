@@ -825,17 +825,30 @@ class TransferUi:
         def stage(name):
             self._post(lambda: self._receiver_stage(name))
 
+        kept = {"copy": False}
+
         def work():
             self._wait_prepared(stage)
-            return self._outcome(receiver.accept(stage))
+            try:
+                return self._outcome(receiver.accept(stage))
+            except BaseException:
+                kept["copy"] = self._holds_copy()
+                raise
 
         def failed(text):
-            # A failure after the copy was published erased the speech runtime
-            # with it, so this PC is checked and prepared again from scratch.
             self.receiver = self.card = None
             self.prepared = False
             self.prepare_state = ""
             self.prepare_thread = self.prepare_run = None
+            if kept["copy"]:
+                # The move failed but this PC still holds the host, for example
+                # released and not started: the receipt and the saved settings
+                # decide the screen, never Receive, whose check would call the
+                # only usable copy an old host to uninstall.
+                self._reopen(text)
+                return
+            # A failure after the copy was published erased the speech runtime
+            # with it, so this PC is checked and prepared again from scratch.
             self.show_receive()
             self._notice(text)
 
@@ -848,6 +861,13 @@ class TransferUi:
                             "Nothing starts on this PC until the old PC has stopped and let go.")
         self.progress.set(RECEIVER_STAGES["downloads" if self.prepared else "preparing"])
         w._button(w.navigation, "Cancel", self.cancel_receive).pack(side="left")
+
+    def _holds_copy(self) -> bool:
+        """On the job thread, after a failed move: whether this PC still holds the received host."""
+        try:
+            return bool(self.backend.status().get("view") or self.wizard.backend.read_settings().get("configured"))
+        except Exception:  # noqa: BLE001 - a receipt that cannot be read is never taken as erased
+            return True
 
     def _wait_prepared(self, stage) -> None:
         """The speech runtime must be complete before the copy is published beside it."""
