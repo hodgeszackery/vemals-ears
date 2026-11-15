@@ -713,6 +713,79 @@ class FailureTests(FlowCase):
         self.assertIn("receiver_error", outcome)
         self.assert_empty(self.b)
 
+    def test_a_cancel_that_dies_before_the_freeze_is_lifted_reopens_on_restore(self):
+        # Astra round 5 (#J): the move is cancelled while the relay confirms
+        # its freeze, so every service still has its original start type. The
+        # app dies after "cancelled" reached the disk but before the freeze
+        # flag was removed. That flag keeps refusing pairings across relay
+        # restarts, so the reopened app must not show the plain dashboard.
+        sender = self.sender(self.a, self.relay)
+        flag = self.a.state / "transfer-frozen"
+        real_remove = transfer_flow._remove
+        removals = []
+
+        def remove(path):
+            if Path(path) == flag:
+                removals.append(path)
+                if len(removals) == 2:      # the first one only clears the way for writing it
+                    raise Crash()
+            real_remove(path)
+
+        def cancel(name):
+            if name == "sending":
+                sender.cancel()
+
+        with mock.patch.object(transfer_flow, "_remove", side_effect=remove):
+            outcome = self.move(self.a, self.b, self.relay, sender=sender, sender_progress=cancel)
+        self.assertIsInstance(outcome["sender_error"], Crash)
+        self.assertEqual("cancelled", self.receipt(self.a)["state"])
+        self.assertTrue(flag.exists())
+        self.assertEqual({control.AUTOMATIC}, set(self.a.start_modes().values()))
+        self.assertEqual("restore", transfer_flow.status(self.a)["view"])
+        # A new offer must not overwrite the receipt that the restore needs.
+        with self.assertRaisesRegex(TransferError, "Keep hosting here"):
+            self.sender(self.a, self.relay).open_offer()
+        self.assertEqual("cancelled", self.receipt(self.a)["state"])
+        self.relay.stop()
+        self.a.hooks[("start", RELAY)] = lambda: None
+        self.assertEqual("", transfer_flow.keep_hosting(
+            self.a, public_state=lambda origin: "quiet", sleep=lambda seconds: None)["view"])
+        self.assertFalse(flag.exists())
+        self.assert_hosting(self.a)
+        # Repeating it is harmless.
+        self.assertEqual("", transfer_flow.keep_hosting(
+            self.a, public_state=lambda origin: "quiet", sleep=lambda seconds: None)["view"])
+        self.assert_hosting(self.a)
+
+    def test_any_leftover_of_a_cancelled_move_reopens_on_restore(self):
+        # Astra round 5 (#J): a plaintext snapshot or the offer key left by a
+        # cancel that died half way is unfinished cleanup too.
+        sender = self.sender(self.a, self.relay)
+
+        def cancel(name):
+            if name == "importing":
+                sender.cancel()
+
+        outcome = self.move(self.a, self.b, self.relay, sender=sender, receiver_progress=cancel)
+        self.assert_restored(outcome)
+        records = transfer.records_directory(self.a.state)
+        leftovers = {
+            "snapshot": lambda: (records / (transfer.SNAPSHOT_PREFIX + "left")).mkdir(),
+            "key": lambda: (self.a.state / "secrets/transfer-key").write_bytes(b"XENO_synthetic_key"),
+            "flag": lambda: (self.a.state / "transfer-frozen").write_bytes(b"1"),
+        }
+        self.a.hooks[("start", RELAY)] = lambda: None
+        for name, make in leftovers.items():
+            with self.subTest(leftover=name):
+                make()
+                self.assertEqual("restore", transfer_flow.status(self.a)["view"])
+                self.assertEqual("", transfer_flow.keep_hosting(
+                    self.a, public_state=lambda origin: "quiet", sleep=lambda seconds: None)["view"])
+                self.assertEqual([], list(records.glob(transfer.SNAPSHOT_PREFIX + "*")))
+                self.assertFalse((self.a.state / "secrets/transfer-key").exists())
+                self.assertFalse((self.a.state / "transfer-frozen").exists())
+                self.assert_hosting(self.a)
+
     def test_a_download_that_does_not_match_stops_the_move_before_anything_is_stopped(self):
         receiver = self.receiver(self.b, self.relay)
         receiver._fetch = lambda url, target, size: Path(target).write_bytes(b"X" * size)

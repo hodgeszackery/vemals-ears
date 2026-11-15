@@ -338,6 +338,10 @@ class Sender:
             # A plaintext database copy never outlives the move that made it.
             transfer.erase_leftover_snapshots(self.records.directory)
             stale = self.records.read()
+            if (stale and stale["role"] == transfer.SENDER and stale["state"] == "cancelled"
+                    and _restore_unfinished(self.host, self.records, stale)):
+                raise TransferError("The last move was cancelled but this host was not fully put back. "
+                                    "Reopen this app and choose Keep hosting here first.")
             if stale and stale["role"] == transfer.SENDER and stale["state"] == "offered":
                 # A code that was shown and never used (the app was closed).
                 self.records.advance("cancelled", reason="replaced by a new offer")
@@ -1333,7 +1337,7 @@ def status(host, records=None, *, wall=time.time) -> dict:
 
     "view" is one of: "" (nothing), "interrupted" (sending stopped half way:
     finish or keep), "released" (must finish stopping), "moved" (locked
-    archive), "restore" (a cancelled move whose services are still disabled),
+    archive), "restore" (a cancelled move not fully put back: see _restore_unfinished),
     "waiting" (received, not released), "activating" (released, not started
     yet). A damaged receipt raises TransferError; it is never "nothing".
     """
@@ -1353,14 +1357,8 @@ def status(host, records=None, *, wall=time.time) -> dict:
             result.update(view=current["state"], archive=str(transfer.archive_path(host.state)),
                           release_code=transfer_pake.release_code(records.release_secret()),
                           acknowledged=details.get("acknowledged") is True)
-        elif current["state"] == "cancelled" and type(details.get("services")) is dict and host.state.exists():
-            try:
-                states = host.service_states()
-            except control.HostError:
-                states = {}
-            if any(states.get(name, {}).get("start") == control.DISABLED and saved.get("start") != control.DISABLED
-                   for name, saved in details["services"].items() if type(saved) is dict):
-                result["view"] = "restore"
+        elif current["state"] == "cancelled" and _restore_unfinished(host, records, current):
+            result["view"] = "restore"
     elif current["state"] == "pending":
         result.update(view="waiting", code_failures=current["code_failures"],
                       staged=transfer.activation(host.state) == transfer.ACTIVATION_PENDING,
@@ -1369,6 +1367,35 @@ def status(host, records=None, *, wall=time.time) -> dict:
                                            or _services_still_disabled(host)):
         result["view"] = "activating"
     return result
+
+
+def _restore_unfinished(host, records, current) -> bool:
+    """A cancelled move whose putting back stopped part way.
+
+    "cancelled" reaches the disk before anything is put back, so an app that
+    died (or a step that failed) after it can leave any of these behind: a
+    service still disabled, the freeze flag (it keeps a restarted relay
+    refusing pairings), the offer key, or a plaintext snapshot. Each one is
+    cleared again by _restore_sender, which is safe to repeat.
+    """
+    try:
+        if any(Path(records.directory).glob(transfer.SNAPSHOT_PREFIX + "*")):
+            return True
+    except OSError:
+        return True
+    if not host.state.exists():
+        return False
+    if _freeze_flag(host).exists() or _freeze_flag(host).is_symlink() or _key_file(host).exists():
+        return True
+    services = current["details"].get("services")
+    if type(services) is not dict:
+        return False
+    try:
+        states = host.service_states()
+    except control.HostError:
+        states = {}
+    return any(states.get(name, {}).get("start") == control.DISABLED and saved.get("start") != control.DISABLED
+               for name, saved in services.items() if type(saved) is dict)
 
 
 def _services_still_disabled(host) -> bool:
