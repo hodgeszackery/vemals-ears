@@ -812,6 +812,9 @@ def _settle(origin: str, public_state, *, wait: float, clock, sleep) -> str:
 def _finish_activation(host, records, *, public_state, clock, sleep, quiet_wait: float, known: str = "") -> dict:
     """The receipt says "active": mark the state, then relay, worker and the tunnel last.
 
+    Safe to repeat from any point: until the relay and the worker are enabled,
+    status() keeps offering "Start this host", which calls this again.
+
     One tunnel token on two PCs would split members between them, so the
     tunnel stays withheld (control.release_tunnel is not called) unless the
     old public address is verified quiet. Not being able to check is not
@@ -1360,6 +1363,26 @@ def status(host, records=None, *, wall=time.time) -> dict:
         result.update(view="waiting", code_failures=current["code_failures"],
                       staged=transfer.activation(host.state) == transfer.ACTIVATION_PENDING,
                       override=override_state(host, records, wall=wall))
-    elif current["state"] == "active" and transfer.activation(host.state) == transfer.ACTIVATION_PENDING:
+    elif current["state"] == "active" and (transfer.activation(host.state) == transfer.ACTIVATION_PENDING
+                                           or _services_still_disabled(host)):
         result["view"] = "activating"
     return result
+
+
+def _services_still_disabled(host) -> bool:
+    """A released copy whose activation stopped after mark_active, before its services were enabled.
+
+    Both activation marks then say active while the relay or the worker is
+    still registered disabled, and the ordinary Start does not enable a
+    disabled service. Only a move disables them (the tunnel may stay off on
+    purpose while it is withheld), so this reopens on "Start this host",
+    which repeats _finish_activation safely.
+    """
+    if transfer.activation(host.state) != transfer.ACTIVATION_ACTIVE:
+        return False
+    try:
+        states = host.service_states()
+    except control.HostError:
+        return False
+    return any(states.get(name, {}).get("status", "Not installed") != "Not installed"
+               and states[name].get("start") == control.DISABLED for name in (RELAY, WORKER))

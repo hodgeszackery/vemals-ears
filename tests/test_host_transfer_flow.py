@@ -750,6 +750,29 @@ class FailureTests(FlowCase):
         self.assertEqual("active", activated["state"])
         self.assert_hosting(self.b)
 
+    def test_activation_that_stops_before_services_are_enabled_reopens_on_start_this_host(self):
+        # Astra finding 4: both activation marks say active while the relay
+        # and the worker are still registered disabled. That must reopen on
+        # the activation step, never on the ordinary dashboard.
+        self.crashed_after_staged()
+        code = transfer_flow.finish_move(self.a)["release_code"]
+        for failure in (control.HostError("XENO synthetic enable failure"), Crash()):
+            with self.subTest(failure=type(failure).__name__), \
+                    mock.patch.object(self.b, "enable_services", side_effect=failure), \
+                    self.assertRaises((TransferError, Crash)):
+                transfer_flow.activate(self.b, release_code=code, public_state=lambda origin: "quiet")
+            self.assertEqual("active", self.receipt(self.b)["state"])
+            self.assertEqual("active", transfer.activation(self.b.state))
+            self.assertEqual({WORKER: control.DISABLED, RELAY: control.DISABLED},
+                             {name: mode for name, mode in self.b.start_modes().items() if name != TUNNEL})
+            self.assertEqual("activating", transfer_flow.status(self.b)["view"])
+        result = transfer_flow.activate(self.b, public_state=lambda origin: "quiet")
+        self.assertEqual(("active", True), (result["state"], result["tunnel_started"]))
+        self.assert_hosting(self.b)
+        self.assertEqual("", transfer_flow.status(self.b)["view"])
+        self.assertEqual(result["state"], transfer_flow.activate(self.b, public_state=lambda origin: "quiet")["state"])
+        self.assertEqual("", transfer_flow.status(self.b)["view"])
+
     def test_old_app_dies_after_staged_and_the_operator_keeps_hosting(self):
         self.crashed_after_staged()
         relay = self.start_relay(self.a)
